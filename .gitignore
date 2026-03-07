@@ -1,0 +1,56 @@
+# ============================================================
+# AURA v4 — .gitignore
+# Rust + Android + AURA-specific
+# ============================================================
+
+# ---- Rust / Cargo ----
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# ---- Android / Gradle ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Build artifacts & debug logs ----
+*.txt
+nul
+*.log
+
+# ---- AURA runtime data ----
+*.db
+*.db-wal
+*.db-shm
+aura_checkpoint.bin
+aura_state/
+
+# ---- Secrets ----
+.env
+.env.*
+config/secrets/
+*.pem
+*.key
+
+# ---- OS ----
+.DS_Store
+Desktop.ini
+ehthumbs.db
+
+# ---- Docs build artifacts ----
+docs/_build/

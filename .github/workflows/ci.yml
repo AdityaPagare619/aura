@@ -1,0 +1,148 @@
+# ============================================================
+# AURA v4 — CI Pipeline
+# Runs on every push and PR to main
+# ============================================================
+
+name: AURA CI
+
+on:
+  push:
+    branches: [main, develop, 'feature/**']
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # --------------------------------------------------------
+  # Job 1: Check compilation (fast feedback)
+  # --------------------------------------------------------
+  check:
+    name: Cargo Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-01
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config
+
+      - name: Cargo check (all crates)
+        run: cargo check --workspace --all-targets
+
+  # --------------------------------------------------------
+  # Job 2: Run tests
+  # --------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-01
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config
+
+      - name: Run unit tests
+        run: cargo test --workspace -- --nocapture
+        env:
+          RUST_LOG: debug
+
+      - name: Run integration tests
+        run: cargo test --workspace --test '*' -- --nocapture
+        continue-on-error: true  # Integration tests may need device context
+
+  # --------------------------------------------------------
+  # Job 3: Lint (clippy + fmt)
+  # --------------------------------------------------------
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-01
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config
+
+      - name: Clippy (all warnings as errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: true  # Allow clippy to report without blocking initially
+
+      - name: Rustfmt check
+        run: cargo fmt --all -- --check
+        continue-on-error: true  # Allow fmt to report without blocking initially
+
+  # --------------------------------------------------------
+  # Job 4: Security audit
+  # --------------------------------------------------------
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run audit
+        run: cargo audit
+        continue-on-error: true  # Advisory — don't block on known issues

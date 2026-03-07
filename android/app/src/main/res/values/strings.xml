@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AURA</string>
+    <string name="accessibility_service_description">AURA uses accessibility to read screen content and perform actions on your behalf. This service observes UI elements, taps, swipes, and types text as directed by the AI agent. No data is sent without your consent.</string>
+    <string name="notification_channel_foreground">Daemon Service</string>
+    <string name="notification_channel_status">Agent Status</string>
+</resources>

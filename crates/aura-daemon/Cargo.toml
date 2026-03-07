@@ -1,0 +1,30 @@
+[package]
+name = "aura-daemon"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+aura-types = { path = "../aura-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util"] }
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+async-trait = "0.1"
+lz4 = { workspace = true }
+zstd = { workspace = true }
+reqwest = { version = "0.12", features = ["multipart", "json"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "test-util"] }
+tempfile = "3"

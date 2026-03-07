@@ -1,0 +1,86 @@
+# =============================================================================
+# AURA v4 — Power Management Configuration
+# =============================================================================
+#
+# Defines the 5-tier power management system with hysteresis boundaries.
+# This file is loaded as an overlay on top of default.toml.
+
+# =============================================================================
+#  § Power Tier Policies
+# =============================================================================
+#
+# Each tier defines operational limits for a battery/charging state.
+# Fields:
+#   - max_inference_calls_per_hour:  LLM call budget.
+#   - model_tier:                    "Brainstem1_5B" | "Standard4B" | "Full8B"
+#   - background_scan_interval_s:    Seconds between background event scans.
+#   - proactive_enabled:             Whether proactive suggestions are active.
+#   - max_concurrent_goals:          Goal scheduler parallelism limit.
+
+[power_tiers.charging]
+max_inference_calls_per_hour = 120
+model_tier                   = "Full8B"
+background_scan_interval_s   = 30
+proactive_enabled            = true
+max_concurrent_goals         = 8
+
+[power_tiers.normal]
+max_inference_calls_per_hour = 60
+model_tier                   = "Standard4B"
+background_scan_interval_s   = 120
+proactive_enabled            = true
+max_concurrent_goals         = 5
+
+[power_tiers.conserve]
+max_inference_calls_per_hour = 20
+model_tier                   = "Brainstem1_5B"
+background_scan_interval_s   = 600
+proactive_enabled            = false
+max_concurrent_goals         = 2
+
+[power_tiers.critical]
+max_inference_calls_per_hour = 5
+model_tier                   = "Brainstem1_5B"
+background_scan_interval_s   = 1800
+proactive_enabled            = false
+max_concurrent_goals         = 1
+
+[power_tiers.emergency]
+max_inference_calls_per_hour = 0
+model_tier                   = "Brainstem1_5B"
+background_scan_interval_s   = 3600
+proactive_enabled            = false
+max_concurrent_goals         = 0
+
+# =============================================================================
+#  § Power Hysteresis Boundaries
+# =============================================================================
+#
+# Asymmetric thresholds prevent oscillation near tier boundaries.
+# - degrade_at:  Battery % at or below which we drop to the worse tier.
+# - recover_at:  Battery % above which we return to the better tier.
+# - The gap (recover_at - degrade_at) is the hysteresis band.
+
+[power_hysteresis]
+min_transition_interval_s = 30
+hysteresis_pct            = 3
+
+[[power_hysteresis.boundaries]]
+transition = "Charging <-> Normal"
+degrade_at = 80
+recover_at = 83
+
+[[power_hysteresis.boundaries]]
+transition = "Normal <-> Conserve"
+degrade_at = 40
+recover_at = 43
+
+[[power_hysteresis.boundaries]]
+transition = "Conserve <-> Critical"
+degrade_at = 20
+recover_at = 23
+
+[[power_hysteresis.boundaries]]
+transition = "Critical <-> Emergency"
+degrade_at = 10
+recover_at = 13

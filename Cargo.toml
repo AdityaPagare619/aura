@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aura-types",
+    "crates/aura-daemon",
+    "crates/aura-neocortex",
+    "crates/aura-llama-sys",
+]
+
+[workspace.package]
+version = "4.0.0-alpha.1"
+edition = "2021"
+license = "Proprietary"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+thiserror = "2"
+toml = "0.8"
+lz4 = "1"
+zstd = "0.13"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

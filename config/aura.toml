@@ -1,0 +1,401 @@
+# =============================================================================
+# AURA v4 — Master Configuration File
+# =============================================================================
+#
+# All fields shown with their compiled-in defaults.
+# Omitted fields fall back to the Rust `Default::default()` value.
+# Paths use Unix-style separators (Android target).
+#
+# Load order:
+#   1. Compiled-in defaults (Rust Default impls)
+#   2. This file (deep-merged over defaults)
+#   3. Environment variable overrides (AURA_<SECTION>_<FIELD>)
+#
+# Validation is performed at startup. Invalid values cause startup failure.
+
+# =============================================================================
+#  § Core AuraConfig — 7 primary subsystems
+# =============================================================================
+
+# ─── Daemon Process ─────────────────────────────────────────────────────────
+
+[daemon]
+# Seconds between state checkpoint writes.
+checkpoint_interval_s = 300
+# RSS memory warning threshold (MB). Triggers load-shedding advisory.
+rss_warning_mb = 28
+# RSS memory hard ceiling (MB). Daemon will shed load above this.
+rss_ceiling_mb = 30
+
+# ─── Amygdala (Event Scoring / Gating) ──────────────────────────────────────
+
+[amygdala]
+# Score threshold for InstantWake gate decision.
+instant_threshold = 0.65
+
+# Scoring weights — MUST sum to 1.0 (±0.01 tolerance).
+weight_lex  = 0.40   # Lexical keyword scoring
+weight_src  = 0.25   # Source-based scoring
+weight_time = 0.20   # Temporal relevance scoring
+weight_anom = 0.15   # Anomaly scoring
+
+# Notification storm protection
+storm_dedup_size    = 50       # Deduplication ring buffer size
+storm_rate_limit_ms = 30000    # Min interval between same-source events (ms)
+
+# Cold start learning period
+cold_start_events = 200   # Events needed before normal gating
+cold_start_hours  = 72    # Duration of cold start period (hours)
+
+# ─── Neocortex (LLM) ────────────────────────────────────────────────────────
+
+[neocortex]
+# Default context window size (tokens).
+default_n_ctx = 4096
+# Number of CPU threads for inference.
+n_threads = 4
+# Max memory for model loading (MB).
+max_memory_mb = 2048
+# Timeout for a single inference call (ms).
+inference_timeout_ms = 60000
+# Path to model files directory.
+model_dir = "/data/local/tmp/aura/models"
+
+# ─── Execution Engine ────────────────────────────────────────────────────────
+
+[execution]
+# Max steps per safety mode.
+max_steps_normal = 200
+max_steps_safety = 50
+max_steps_power  = 500
+# Max actions per minute rate limit.
+rate_limit_actions_per_min = 60
+# Human-like pacing delays (ms).
+delay_min_ms = 150
+delay_max_ms = 500
+
+# ─── Power Management ───────────────────────────────────────────────────────
+
+[power]
+# Daily token budget for LLM inference.
+daily_token_budget = 50000
+# Battery level thresholds for power tiers (percentage).
+conservative_threshold = 50
+low_power_threshold    = 30
+critical_threshold     = 15
+emergency_threshold    = 5
+
+# ─── Identity / Personality ──────────────────────────────────────────────────
+
+[identity]
+# Minimum time between mood updates (ms).
+mood_cooldown_ms = 60000
+# Maximum mood shift per update (clamped to [-delta, +delta]).
+max_mood_delta = 0.2
+# Trust hysteresis gap for relationship stage transitions.
+trust_hysteresis = 0.05
+
+# ─── SQLite Storage ──────────────────────────────────────────────────────────
+
+[sqlite]
+# Path to the SQLite database file.
+db_path = "/data/data/com.aura/databases/aura.db"
+# WAL mode journal size limit (bytes). Default 4 MB.
+wal_size_limit = 4194304
+# Max number of episodic memories before consolidation.
+max_episodes = 10000
+# Max number of semantic entries.
+max_semantic_entries = 5000
+
+# =============================================================================
+#  § Extended Configuration — Secondary Subsystems
+# =============================================================================
+
+# ─── Thermal Management ─────────────────────────────────────────────────────
+
+[thermal]
+# Temperature thresholds for thermal state transitions (°C).
+warm_c     = 40.0    # Normal → Warm
+hot_c      = 45.0    # Warm → Hot (inference paused)
+critical_c = 50.0    # Hot → Critical (emergency checkpoint)
+# Hysteresis band (°C): recovery requires temp to drop this far below threshold.
+hysteresis_c = 2.0
+# Minimum dwell time before allowing another transition (seconds).
+min_transition_interval_s = 10
+
+# ─── Retry Policy (Exponential Backoff) ──────────────────────────────────────
+
+[retry]
+# Maximum number of retry attempts (not counting the initial attempt).
+max_retries = 3
+# Base delay before first retry (ms).
+base_delay_ms = 200
+# Multiplicative factor per retry (typically 2).
+backoff_factor = 2
+# Maximum delay cap (ms).
+max_delay_ms = 10000
+# Jitter range (ms). Actual jitter is ±jitter_ms.
+jitter_ms = 50
+
+# ─── Contextor (Memory Enrichment) ──────────────────────────────────────────
+
+[contextor]
+# Whether to query episodic memory during enrichment.
+enable_episodic = true
+# Whether to query semantic memory during enrichment.
+enable_semantic = true
+# Override token budget (null = auto-scale from importance).
+# Uncomment to force a specific budget:
+# token_budget_override = 500
+
+# Token budgets by importance tier.
+token_budget_low       = 200
+token_budget_medium    = 500
+token_budget_high      = 1000
+token_budget_emergency = 2000
+
+# Max memory results per tier by importance.
+max_results_low       = 2
+max_results_medium    = 4
+max_results_high      = 6
+max_results_emergency = 10
+
+# Minimum relevance threshold for memory retrieval.
+min_relevance = 0.15
+# Maximum number of conversation turns to include.
+max_conversation_turns = 10
+
+# Recall scoring weights — MUST sum to 1.0.
+weight_similarity  = 0.40
+weight_recency     = 0.20
+weight_importance  = 0.20
+weight_activation  = 0.20
+
+# Recency normalization window (ms). 1 hour = 3,600,000.
+recency_window_ms = 3600000
+# Approximate characters per token for budget estimation.
+chars_per_token = 4
+
+# ─── Ethics / Safety (Policy Gate) ──────────────────────────────────────────
+
+[ethics]
+# Patterns that trigger action blocking (case-insensitive substring match).
+blocked_patterns = [
+    "delete all",
+    "factory reset",
+    "format storage",
+    "uninstall system",
+    "disable security",
+    "root device",
+    "bypass lock",
+]
+
+# Keywords that trigger audit logging (case-insensitive).
+audit_keywords = [
+    "password",
+    "credential",
+    "payment",
+    "bank",
+]
+
+# Blocked packages (empty by default — add at runtime or here).
+blocked_packages = []
+
+# ─── Anti-Sycophancy Guard ──────────────────────────────────────────────────
+
+[anti_sycophancy]
+# Sliding window size for response pattern analysis.
+ring_size = 20
+# Composite score above which responses are blocked and regenerated.
+block_threshold = 0.40
+# Composite score above which a warning is issued.
+warn_threshold = 0.25
+# Max regeneration attempts per conversation turn before force-allowing.
+max_regenerations = 3
+
+# ─── Power Tier Policies ────────────────────────────────────────────────────
+#
+# Each tier defines operational limits when the battery is in that range.
+# `background_scan_interval_s` is in seconds.
+# `model_tier` is one of: "Brainstem1_5B", "Standard4B", "Full8B".
+
+[power_tiers.charging]
+max_inference_calls_per_hour = 120
+model_tier = "Full8B"
+background_scan_interval_s = 30
+proactive_enabled = true
+max_concurrent_goals = 8
+
+[power_tiers.normal]
+max_inference_calls_per_hour = 60
+model_tier = "Standard4B"
+background_scan_interval_s = 120
+proactive_enabled = true
+max_concurrent_goals = 5
+
+[power_tiers.conserve]
+max_inference_calls_per_hour = 20
+model_tier = "Brainstem1_5B"
+background_scan_interval_s = 600
+proactive_enabled = false
+max_concurrent_goals = 2
+
+[power_tiers.critical]
+max_inference_calls_per_hour = 5
+model_tier = "Brainstem1_5B"
+background_scan_interval_s = 1800
+proactive_enabled = false
+max_concurrent_goals = 1
+
+[power_tiers.emergency]
+max_inference_calls_per_hour = 0
+model_tier = "Brainstem1_5B"
+background_scan_interval_s = 3600
+proactive_enabled = false
+max_concurrent_goals = 0
+
+# ─── Power Hysteresis Boundaries ────────────────────────────────────────────
+#
+# Asymmetric thresholds prevent oscillation near tier boundaries.
+# `degrade_at` = battery% at or below which we drop to the worse tier.
+# `recover_at` = battery% above which we return to the better tier.
+# The gap (recover - degrade) is the hysteresis band.
+# min_transition_interval_s is the minimum dwell time between changes.
+
+[power_hysteresis]
+min_transition_interval_s = 30
+hysteresis_pct = 3
+
+[[power_hysteresis.boundaries]]
+transition = "Charging <-> Normal"
+degrade_at = 80
+recover_at = 83
+
+[[power_hysteresis.boundaries]]
+transition = "Normal <-> Conserve"
+degrade_at = 40
+recover_at = 43
+
+[[power_hysteresis.boundaries]]
+transition = "Conserve <-> Critical"
+degrade_at = 20
+recover_at = 23
+
+[[power_hysteresis.boundaries]]
+transition = "Critical <-> Emergency"
+degrade_at = 10
+recover_at = 13
+
+# ─── LLM Parameters (llama.cpp) ─────────────────────────────────────────────
+
+[llama.model]
+# Number of GPU layers to offload (0 = CPU only).
+n_gpu_layers = 0
+# Use mmap for model loading (recommended for large models).
+use_mmap = true
+# Use mlock to pin model in RAM (requires elevated privileges).
+use_mlock = false
+
+[llama.context]
+# Context window size (tokens).
+n_ctx = 2048
+# Batch size for prompt processing.
+n_batch = 512
+# Number of CPU threads.
+n_threads = 4
+# Random seed (0xA0BA = AURA's signature seed).
+seed = 41146   # 0xA0BA in decimal
+
+[llama.sampling]
+# Default sampling parameters for token generation.
+temperature = 0.6
+top_p = 0.9
+top_k = 40
+repeat_penalty = 1.1
+max_tokens = 512
+
+# ─── Inference Mode Configs ──────────────────────────────────────────────────
+#
+# Per-mode overrides for temperature, top_p, top_k, repeat_penalty,
+# max_tokens, context_budget, and stop_sequences.
+# These are used by the Neocortex prompt builder.
+
+[inference_modes.planner]
+temperature    = 0.1
+top_p          = 0.9
+top_k          = 40
+repeat_penalty = 1.1
+max_tokens     = 2048
+context_budget = 1200
+stop_sequences = ["</plan>", "[END]"]
+
+[inference_modes.strategist]
+temperature    = 0.4
+top_p          = 0.95
+top_k          = 30
+repeat_penalty = 1.05
+max_tokens     = 4096
+context_budget = 800
+stop_sequences = ["</strategy>", "[END]"]
+
+[inference_modes.composer]
+temperature    = 0.2
+top_p          = 0.9
+top_k          = 50
+repeat_penalty = 1.15
+max_tokens     = 1024
+context_budget = 400
+stop_sequences = ["</dsl>", "[END]"]
+
+[inference_modes.conversational]
+temperature    = 0.7
+top_p          = 0.95
+top_k          = 40
+repeat_penalty = 1.1
+max_tokens     = 512
+context_budget = 1500
+stop_sequences = ["</reply>", "[END]"]
+
+# ─── Identity Defaults (OCEAN Personality) ───────────────────────────────────
+#
+# Base OCEAN traits for AURA's personality. Clamped to [0.1, 0.9].
+
+[identity.ocean]
+openness          = 0.85
+conscientiousness = 0.75
+extraversion      = 0.50
+agreeableness     = 0.70
+neuroticism       = 0.25
+
+# ─── Mood (Valence-Arousal-Dominance) Neutral Baseline ──────────────────────
+
+[identity.mood_neutral]
+valence  = 0.0
+arousal  = 0.0
+dominance = 0.5
+
+# ─── Relationship Stage Thresholds ──────────────────────────────────────────
+#
+# Trust thresholds for relationship stage transitions.
+# Hysteresis of `trust_hysteresis` (see [identity]) applies at each boundary.
+
+[identity.relationship_thresholds]
+stranger_max     = 0.15
+acquaintance_max = 0.35
+friend_max       = 0.60
+close_friend_max = 0.85
+# soulmate = trust >= 0.85
+
+# ─── Checkpoint ──────────────────────────────────────────────────────────────
+
+[checkpoint]
+# Checkpoint format version. Must match CHECKPOINT_VERSION in code.
+version = 1
+# Maximum checkpoint file size (bytes). Default 64 KB.
+max_bytes = 65536
+
+# ─── Context Package ────────────────────────────────────────────────────────
+
+[context_package]
+# Maximum serialized context package size (bytes). Default 64 KB.
+max_size = 65536

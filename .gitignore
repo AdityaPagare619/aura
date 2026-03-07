@@ -7,7 +7,6 @@
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
 
 # ---- Android / Gradle ----
 android/.gradle/

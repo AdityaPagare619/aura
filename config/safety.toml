@@ -1,0 +1,193 @@
+# =============================================================================
+# AURA v4 — Safety Configuration
+# =============================================================================
+#
+# PolicyGate rules, ethical boundaries, and safety constraints.
+# This file is loaded as an overlay on top of default.toml.
+#
+# Rule evaluation is ORDER-DEPENDENT: first matching rule wins.
+# Action patterns support glob syntax: "*" matches any sequence,
+# "?" matches a single character.
+
+# =============================================================================
+#  § Ethics / Blocked Patterns
+# =============================================================================
+
+[ethics]
+# Substrings that trigger immediate action blocking (case-insensitive).
+blocked_patterns = [
+    "delete all",
+    "factory reset",
+    "format storage",
+    "uninstall system",
+    "disable security",
+    "root device",
+    "bypass lock",
+    "wipe data",
+    "brick device",
+    "disable firewall",
+]
+
+# Keywords that trigger mandatory audit logging (case-insensitive).
+audit_keywords = [
+    "password",
+    "credential",
+    "payment",
+    "bank",
+    "credit card",
+    "social security",
+    "private key",
+    "api key",
+    "auth token",
+]
+
+# Packages whose events are silently dropped.
+blocked_packages = []
+
+# =============================================================================
+#  § PolicyGate Rules
+# =============================================================================
+#
+# Each rule has:
+#   - name:     Human-readable identifier.
+#   - action:   Glob pattern matching the action string.
+#   - effect:   "allow" | "deny" | "audit" | "confirm"
+#   - reason:   Explanation surfaced to user on deny/confirm.
+#   - priority: Lower number = evaluated first (0 = highest priority).
+#
+# First matching rule wins. If no rule matches, the default effect applies.
+
+[policy]
+# Default effect when no rule matches.
+default_effect = "allow"
+# Whether to log all policy decisions (verbose mode).
+log_all_decisions = false
+# Maximum rules evaluated per event (safety cap).
+max_rules_per_event = 100
+
+# --- Critical safety rules (priority 0-9) ---
+
+[[policy.rules]]
+name     = "block-factory-reset"
+action   = "*factory*reset*"
+effect   = "deny"
+reason   = "Factory reset is a destructive, irreversible operation."
+priority = 0
+
+[[policy.rules]]
+name     = "block-device-wipe"
+action   = "*wipe*data*"
+effect   = "deny"
+reason   = "Data wipe is irreversible and could cause total data loss."
+priority = 0
+
+[[policy.rules]]
+name     = "block-system-uninstall"
+action   = "*uninstall*system*"
+effect   = "deny"
+reason   = "Uninstalling system packages can brick the device."
+priority = 1
+
+[[policy.rules]]
+name     = "block-root-access"
+action   = "*root*device*"
+effect   = "deny"
+reason   = "Root access attempts are prohibited by safety policy."
+priority = 1
+
+[[policy.rules]]
+name     = "block-security-disable"
+action   = "*disable*security*"
+effect   = "deny"
+reason   = "Disabling security features is not allowed."
+priority = 2
+
+[[policy.rules]]
+name     = "block-lock-bypass"
+action   = "*bypass*lock*"
+effect   = "deny"
+reason   = "Lock screen bypass attempts are prohibited."
+priority = 2
+
+# --- Sensitive operations requiring confirmation (priority 10-19) ---
+
+[[policy.rules]]
+name     = "confirm-app-install"
+action   = "*install*app*"
+effect   = "confirm"
+reason   = "App installation requires user confirmation."
+priority = 10
+
+[[policy.rules]]
+name     = "confirm-app-uninstall"
+action   = "*uninstall*"
+effect   = "confirm"
+reason   = "App removal requires user confirmation."
+priority = 10
+
+[[policy.rules]]
+name     = "confirm-permission-grant"
+action   = "*grant*permission*"
+effect   = "confirm"
+reason   = "Granting permissions requires user approval."
+priority = 11
+
+[[policy.rules]]
+name     = "confirm-payment"
+action   = "*payment*"
+effect   = "confirm"
+reason   = "Payment actions require explicit user confirmation."
+priority = 12
+
+[[policy.rules]]
+name     = "confirm-send-message"
+action   = "*send*message*"
+effect   = "confirm"
+reason   = "Sending messages requires user confirmation to prevent accidental sends."
+priority = 15
+
+# --- Audit-only rules (priority 20-29) ---
+
+[[policy.rules]]
+name     = "audit-credential-access"
+action   = "*credential*"
+effect   = "audit"
+reason   = "Credential access is logged for security review."
+priority = 20
+
+[[policy.rules]]
+name     = "audit-financial"
+action   = "*bank*"
+effect   = "audit"
+reason   = "Financial operations are logged for security review."
+priority = 20
+
+[[policy.rules]]
+name     = "audit-settings-change"
+action   = "*change*setting*"
+effect   = "audit"
+reason   = "Settings changes are logged for review."
+priority = 25
+
+# --- Permissive rules (priority 50+) ---
+
+[[policy.rules]]
+name     = "allow-navigation"
+action   = "navigate*"
+effect   = "allow"
+reason   = "Navigation is always allowed."
+priority = 50
+
+[[policy.rules]]
+name     = "allow-read-operations"
+action   = "read*"
+effect   = "allow"
+reason   = "Read-only operations are safe."
+priority = 50
+
+[[policy.rules]]
+name     = "allow-search"
+action   = "search*"
+effect   = "allow"
+reason   = "Search operations are safe."
+priority = 50

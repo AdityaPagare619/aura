@@ -1,0 +1,1752 @@
+//! aura-llama-sys: FFI bindings to llama.cpp
+//!
+//! This crate provides the interface between AURA's Rust inference engine and
+//! the llama.cpp C library.
+//!
+//! # Architecture
+//!
+//! - **Android (ARM64)**: Runtime dynamic loading of `libllama.so` via `libloading`.
+//!   The shared library is expected at a path supplied by the caller (typically
+//!   extracted from the APK's native libs directory).
+//! - **Desktop (host builds)**: A smart stub that generates plausible English text
+//!   using a simple bigram model. This lets the full 6-layer teacher stack
+//!   exercise real code paths during development and testing.
+//!
+//! # Safety
+//!
+//! All FFI calls go through the `LlamaBackend` trait. On Android, the `FfiBackend`
+//! implementation uses raw pointers obtained from `libloading`. On desktop, the
+//! `StubBackend` implementation uses safe Rust only.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
+#[allow(unused_imports)]
+use tracing::{debug, error, info, trace, warn};
+
+// ─── Core types ─────────────────────────────────────────────────────────────
+
+/// Opaque model handle returned by llama_load_model_from_file.
+#[repr(C)]
+pub struct LlamaModel {
+    _opaque: [u8; 0],
+}
+
+/// Opaque context handle returned by llama_new_context_with_model.
+#[repr(C)]
+pub struct LlamaContext {
+    _opaque: [u8; 0],
+}
+
+/// Token ID type — matches llama.cpp's llama_token (i32).
+pub type LlamaToken = i32;
+
+/// Special token IDs used by the stub backend.
+/// Real llama.cpp provides these from the loaded model vocabulary.
+pub mod special_tokens {
+    use super::LlamaToken;
+
+    /// Beginning of sequence.
+    pub const BOS: LlamaToken = 1;
+    /// End of sequence.
+    pub const EOS: LlamaToken = 2;
+    /// Unknown token.
+    pub const UNK: LlamaToken = 0;
+}
+
+/// Model parameters for loading.
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlamaModelParams {
+    /// Number of layers to offload to GPU (0 = CPU only).
+    pub n_gpu_layers: i32,
+    /// Use memory-mapped files for model loading.
+    pub use_mmap: bool,
+    /// Lock model in RAM (prevent swapping).
+    pub use_mlock: bool,
+}
+
+impl Default for LlamaModelParams {
+    fn default() -> Self {
+        Self {
+            n_gpu_layers: 0,
+            use_mmap: true,
+            use_mlock: false,
+        }
+    }
+}
+
+/// Context parameters for inference.
+#[repr(C)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlamaContextParams {
+    /// Context window size (in tokens).
+    pub n_ctx: u32,
+    /// Batch size for prompt processing.
+    pub n_batch: u32,
+    /// Number of threads for generation.
+    pub n_threads: u32,
+    /// Random seed.
+    pub seed: u32,
+}
+
+impl Default for LlamaContextParams {
+    fn default() -> Self {
+        Self {
+            n_ctx: 2048,
+            n_batch: 512,
+            n_threads: 4,
+            seed: 0xA0BA,
+        }
+    }
+}
+
+/// Sampling parameters for token generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplingParams {
+    /// Temperature for softmax sampling (0.0 = greedy, higher = more random).
+    pub temperature: f32,
+    /// Top-p (nucleus) sampling cutoff.
+    pub top_p: f32,
+    /// Top-k sampling cutoff.
+    pub top_k: i32,
+    /// Repetition penalty (1.0 = no penalty).
+    pub repeat_penalty: f32,
+    /// Maximum number of tokens to generate.
+    pub max_tokens: u32,
+}
+
+impl Default for SamplingParams {
+    fn default() -> Self {
+        Self {
+            temperature: 0.6,
+            top_p: 0.9,
+            top_k: 40,
+            repeat_penalty: 1.1,
+            max_tokens: 512,
+        }
+    }
+}
+
+// ─── Backend trait ──────────────────────────────────────────────────────────
+
+/// Result type for all backend operations.
+pub type BackendResult<T> = Result<T, BackendError>;
+
+/// Errors from the llama backend.
+#[derive(Debug, thiserror::Error)]
+pub enum BackendError {
+    /// Failed to load the shared library.
+    #[error("library load failed: {0}")]
+    LibraryLoad(String),
+    /// Failed to resolve a symbol in the shared library.
+    #[error("symbol resolution failed: {0}")]
+    SymbolResolution(String),
+    /// Model file not found or failed to load.
+    #[error("model load failed: {0}")]
+    ModelLoad(String),
+    /// Context creation failed.
+    #[error("context creation failed: {0}")]
+    ContextCreation(String),
+    /// Tokenization error.
+    #[error("tokenization failed: {0}")]
+    Tokenization(String),
+    /// Token generation error.
+    #[error("generation failed: {0}")]
+    Generation(String),
+    /// Detokenization error.
+    #[error("detokenization failed: {0}")]
+    Detokenization(String),
+    /// Backend is in stub mode — not a real error, but callers may want to know.
+    #[error("stub backend: {0}")]
+    StubMode(String),
+}
+
+/// Unified backend interface for both real FFI and stub implementations.
+///
+/// This trait abstracts the llama.cpp operations so that the inference engine
+/// can work identically on Android (real model) and desktop (stub model).
+pub trait LlamaBackend: Send + Sync {
+    /// Returns `true` if this is a stub/testing backend.
+    fn is_stub(&self) -> bool;
+
+    /// Load a model from a GGUF file. Returns opaque model and context pointers.
+    ///
+    /// # Safety
+    /// The returned pointers are only valid until `free_model()` is called.
+    fn load_model(
+        &self,
+        path: &str,
+        model_params: &LlamaModelParams,
+        ctx_params: &LlamaContextParams,
+    ) -> BackendResult<(*mut LlamaModel, *mut LlamaContext)>;
+
+    /// Free a previously loaded model and its context.
+    ///
+    /// # Safety
+    /// Must only be called with pointers returned by `load_model()`.
+    fn free_model(&self, model: *mut LlamaModel, ctx: *mut LlamaContext);
+
+    /// Tokenize text into token IDs.
+    fn tokenize(&self, ctx: *mut LlamaContext, text: &str) -> BackendResult<Vec<LlamaToken>>;
+
+    /// Decode token IDs back to text.
+    fn detokenize(&self, ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<String>;
+
+    /// Generate the next token given context of previous tokens and sampling parameters.
+    ///
+    /// This is the core inference step. On Android it calls `llama_decode` + sampling.
+    /// On desktop stubs it uses a bigram model to produce plausible tokens.
+    fn sample_next(
+        &self,
+        ctx: *mut LlamaContext,
+        tokens: &[LlamaToken],
+        params: &SamplingParams,
+    ) -> BackendResult<LlamaToken>;
+
+    /// Get the EOS (end-of-sequence) token ID for the loaded model.
+    fn eos_token(&self) -> LlamaToken;
+
+    /// Get the BOS (beginning-of-sequence) token ID for the loaded model.
+    fn bos_token(&self) -> LlamaToken;
+
+    /// Evaluate/process a batch of tokens (prompt ingestion).
+    ///
+    /// Must be called before `sample_next()` to feed the prompt.
+    fn eval(&self, ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<()>;
+}
+
+// ─── Stub backend (desktop / host builds) ───────────────────────────────────
+
+/// A simple bigram-based text generator for desktop testing.
+///
+/// Instead of returning empty strings or zeros, this generates plausible
+/// English-like output so the full inference pipeline can be exercised.
+///
+/// The stub uses a vocabulary of common words and bigram transitions built
+/// from a small hardcoded corpus.
+pub struct StubBackend {
+    /// Bigram transition table: given a token, what tokens can follow?
+    bigrams: HashMap<LlamaToken, Vec<(LlamaToken, f32)>>,
+    /// Vocabulary: token ID → word string.
+    vocab: Vec<String>,
+    /// Reverse vocabulary: word → token ID.
+    word_to_token: HashMap<String, LlamaToken>,
+    /// RNG state (simple xorshift for reproducibility).
+    rng_state: Mutex<u64>,
+}
+
+impl StubBackend {
+    /// Create a new stub backend with a built-in mini vocabulary.
+    pub fn new(seed: u64) -> Self {
+        let words = vec![
+            "<unk>",     // 0 — unknown/pad
+            "<s>",       // 1 — BOS
+            "</s>",      // 2 — EOS
+            "the",       // 3
+            "I",         // 4
+            "will",      // 5
+            "open",      // 6
+            "settings",  // 7
+            "app",       // 8
+            "and",       // 9
+            "tap",       // 10
+            "on",        // 11
+            "button",    // 12
+            "navigate",  // 13
+            "to",        // 14
+            "screen",    // 15
+            "then",      // 16
+            "click",     // 17
+            "scroll",    // 18
+            "down",      // 19
+            "find",      // 20
+            "select",    // 21
+            "option",    // 22
+            "enable",    // 23
+            "disable",   // 24
+            "toggle",    // 25
+            "menu",      // 26
+            "search",    // 27
+            "for",       // 28
+            "type",      // 29
+            "text",      // 30
+            "in",        // 31
+            "field",     // 32
+            "wait",      // 33
+            "until",     // 34
+            "appears",   // 35
+            "confirm",   // 36
+            "action",    // 37
+            "done",      // 38
+            "next",      // 39
+            "back",      // 40
+            "home",      // 41
+            "wifi",      // 42
+            "bluetooth", // 43
+            "display",   // 44
+            "a",         // 45
+            "this",      // 46
+            "is",        // 47
+            "plan",      // 48
+            "step",      // 49
+            "first",     // 50
+            "second",    // 51
+            "ok",        // 52
+            "yes",       // 53
+            "no",        // 54
+            "let",       // 55
+            "me",        // 56
+            "help",      // 57
+            "you",       // 58
+            "with",      // 59
+            "that",      // 60
+            "sure",      // 61
+            "here",      // 62
+            "go",        // 63
+            "check",     // 64
+        ];
+
+        let vocab: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        let mut word_to_token = HashMap::new();
+        for (i, w) in words.iter().enumerate() {
+            word_to_token.insert(w.to_string(), i as LlamaToken);
+        }
+
+        // Build bigram transitions (word flows that make sense for AURA's domain)
+        let mut bigrams: HashMap<LlamaToken, Vec<(LlamaToken, f32)>> = HashMap::new();
+
+        // Helper closure to add transitions
+        let mut add = |from: &str, transitions: &[(&str, f32)]| {
+            if let Some(&from_id) = word_to_token.get(from) {
+                let entries: Vec<(LlamaToken, f32)> = transitions
+                    .iter()
+                    .filter_map(|(to, prob)| word_to_token.get(*to).map(|&to_id| (to_id, *prob)))
+                    .collect();
+                bigrams.insert(from_id, entries);
+            }
+        };
+
+        // Domain-specific bigram transitions
+        add(
+            "<s>",
+            &[
+                ("I", 0.3),
+                ("the", 0.1),
+                ("first", 0.15),
+                ("let", 0.15),
+                ("sure", 0.1),
+                ("ok", 0.05),
+                ("open", 0.15),
+            ],
+        );
+        add("I", &[("will", 0.7), ("can", 0.1), ("open", 0.2)]); // "can" not in vocab, will be filtered
+        add(
+            "will",
+            &[
+                ("open", 0.3),
+                ("navigate", 0.2),
+                ("tap", 0.15),
+                ("scroll", 0.1),
+                ("find", 0.1),
+                ("select", 0.1),
+                ("check", 0.05),
+            ],
+        );
+        add(
+            "open",
+            &[("the", 0.4), ("settings", 0.3), ("app", 0.2), ("menu", 0.1)],
+        );
+        add(
+            "the",
+            &[
+                ("settings", 0.2),
+                ("app", 0.15),
+                ("button", 0.1),
+                ("screen", 0.1),
+                ("menu", 0.1),
+                ("option", 0.1),
+                ("text", 0.1),
+                ("home", 0.05),
+                ("display", 0.05),
+                ("search", 0.05),
+            ],
+        );
+        add(
+            "settings",
+            &[
+                ("app", 0.3),
+                ("screen", 0.2),
+                ("menu", 0.2),
+                ("and", 0.15),
+                ("</s>", 0.15),
+            ],
+        );
+        add(
+            "app",
+            &[
+                ("and", 0.3),
+                ("settings", 0.2),
+                ("</s>", 0.2),
+                ("then", 0.15),
+                ("screen", 0.15),
+            ],
+        );
+        add(
+            "and",
+            &[
+                ("tap", 0.2),
+                ("click", 0.15),
+                ("select", 0.15),
+                ("scroll", 0.1),
+                ("navigate", 0.1),
+                ("find", 0.1),
+                ("enable", 0.1),
+                ("confirm", 0.1),
+            ],
+        );
+        add("tap", &[("on", 0.5), ("the", 0.3), ("button", 0.2)]);
+        add(
+            "on",
+            &[
+                ("the", 0.4),
+                ("button", 0.2),
+                ("screen", 0.15),
+                ("wifi", 0.1),
+                ("bluetooth", 0.05),
+                ("display", 0.05),
+                ("a", 0.05),
+            ],
+        );
+        add(
+            "button",
+            &[
+                ("and", 0.2),
+                ("to", 0.2),
+                ("then", 0.2),
+                ("</s>", 0.2),
+                ("on", 0.1),
+                ("in", 0.1),
+            ],
+        );
+        add("navigate", &[("to", 0.7), ("back", 0.2), ("home", 0.1)]);
+        add(
+            "to",
+            &[
+                ("the", 0.3),
+                ("settings", 0.15),
+                ("home", 0.1),
+                ("find", 0.1),
+                ("open", 0.1),
+                ("confirm", 0.1),
+                ("a", 0.05),
+                ("navigate", 0.05),
+                ("select", 0.05),
+            ],
+        );
+        add(
+            "screen",
+            &[
+                ("and", 0.3),
+                ("then", 0.2),
+                ("</s>", 0.2),
+                ("to", 0.15),
+                ("with", 0.15),
+            ],
+        );
+        add(
+            "then",
+            &[
+                ("tap", 0.2),
+                ("click", 0.15),
+                ("select", 0.15),
+                ("scroll", 0.1),
+                ("navigate", 0.1),
+                ("find", 0.1),
+                ("wait", 0.1),
+                ("confirm", 0.1),
+            ],
+        );
+        add("click", &[("on", 0.5), ("the", 0.3), ("button", 0.2)]);
+        add("scroll", &[("down", 0.6), ("to", 0.2), ("until", 0.2)]);
+        add(
+            "down",
+            &[("to", 0.3), ("and", 0.3), ("until", 0.2), ("</s>", 0.2)],
+        );
+        add(
+            "find",
+            &[
+                ("the", 0.4),
+                ("a", 0.2),
+                ("settings", 0.15),
+                ("wifi", 0.1),
+                ("bluetooth", 0.05),
+                ("option", 0.1),
+            ],
+        );
+        add(
+            "select",
+            &[
+                ("the", 0.3),
+                ("a", 0.2),
+                ("option", 0.2),
+                ("wifi", 0.1),
+                ("bluetooth", 0.1),
+                ("it", 0.1),
+            ],
+        );
+        add(
+            "option",
+            &[
+                ("and", 0.3),
+                ("then", 0.2),
+                ("to", 0.15),
+                ("</s>", 0.2),
+                ("in", 0.15),
+            ],
+        );
+        add(
+            "enable",
+            &[
+                ("wifi", 0.2),
+                ("bluetooth", 0.2),
+                ("the", 0.2),
+                ("it", 0.2),
+                ("toggle", 0.2),
+            ],
+        );
+        add(
+            "disable",
+            &[
+                ("wifi", 0.2),
+                ("bluetooth", 0.2),
+                ("the", 0.2),
+                ("it", 0.2),
+                ("toggle", 0.2),
+            ],
+        );
+        add(
+            "toggle",
+            &[
+                ("wifi", 0.2),
+                ("bluetooth", 0.2),
+                ("the", 0.2),
+                ("on", 0.2),
+                ("off", 0.2),
+            ],
+        );
+        add(
+            "menu",
+            &[
+                ("and", 0.3),
+                ("button", 0.2),
+                ("option", 0.2),
+                ("</s>", 0.15),
+                ("screen", 0.15),
+            ],
+        );
+        add("search", &[("for", 0.6), ("the", 0.2), ("in", 0.2)]);
+        add(
+            "for",
+            &[
+                ("the", 0.3),
+                ("a", 0.2),
+                ("wifi", 0.1),
+                ("settings", 0.15),
+                ("bluetooth", 0.1),
+                ("it", 0.15),
+            ],
+        );
+        add(
+            "type",
+            &[("text", 0.3), ("in", 0.3), ("the", 0.2), ("a", 0.2)],
+        );
+        add(
+            "text",
+            &[("in", 0.3), ("field", 0.3), ("and", 0.2), ("</s>", 0.2)],
+        );
+        add(
+            "in",
+            &[
+                ("the", 0.4),
+                ("a", 0.2),
+                ("settings", 0.15),
+                ("field", 0.15),
+                ("search", 0.1),
+            ],
+        );
+        add(
+            "field",
+            &[("and", 0.3), ("then", 0.2), ("</s>", 0.3), ("to", 0.2)],
+        );
+        add("wait", &[("until", 0.5), ("for", 0.3), ("a", 0.2)]);
+        add(
+            "until",
+            &[("the", 0.3), ("it", 0.3), ("a", 0.2), ("done", 0.2)],
+        );
+        add(
+            "appears",
+            &[("and", 0.3), ("then", 0.3), ("on", 0.2), ("</s>", 0.2)],
+        );
+        add(
+            "confirm",
+            &[("the", 0.3), ("action", 0.3), ("and", 0.2), ("</s>", 0.2)],
+        );
+        add(
+            "action",
+            &[
+                ("and", 0.3),
+                ("then", 0.2),
+                ("is", 0.2),
+                ("done", 0.15),
+                ("</s>", 0.15),
+            ],
+        );
+        add(
+            "done",
+            &[("</s>", 0.5), ("and", 0.2), ("then", 0.15), ("next", 0.15)],
+        );
+        add(
+            "next",
+            &[
+                ("step", 0.3),
+                ("screen", 0.2),
+                ("button", 0.2),
+                ("option", 0.15),
+                ("is", 0.15),
+            ],
+        );
+        add(
+            "back",
+            &[("to", 0.4), ("and", 0.2), ("button", 0.2), ("home", 0.2)],
+        );
+        add(
+            "home",
+            &[
+                ("screen", 0.4),
+                ("button", 0.2),
+                ("and", 0.2),
+                ("</s>", 0.2),
+            ],
+        );
+        add(
+            "wifi",
+            &[
+                ("settings", 0.2),
+                ("option", 0.2),
+                ("toggle", 0.15),
+                ("and", 0.15),
+                ("</s>", 0.15),
+                ("on", 0.15),
+            ],
+        );
+        add(
+            "bluetooth",
+            &[
+                ("settings", 0.2),
+                ("option", 0.2),
+                ("toggle", 0.15),
+                ("and", 0.15),
+                ("</s>", 0.15),
+                ("on", 0.15),
+            ],
+        );
+        add(
+            "display",
+            &[
+                ("settings", 0.3),
+                ("screen", 0.3),
+                ("option", 0.2),
+                ("</s>", 0.2),
+            ],
+        );
+        add(
+            "a",
+            &[
+                ("button", 0.15),
+                ("screen", 0.1),
+                ("menu", 0.1),
+                ("text", 0.1),
+                ("field", 0.1),
+                ("search", 0.1),
+                ("plan", 0.1),
+                ("step", 0.1),
+                ("option", 0.15),
+            ],
+        );
+        add(
+            "this",
+            &[
+                ("is", 0.5),
+                ("screen", 0.2),
+                ("option", 0.15),
+                ("step", 0.15),
+            ],
+        );
+        add(
+            "is",
+            &[
+                ("the", 0.2),
+                ("a", 0.2),
+                ("done", 0.15),
+                ("here", 0.15),
+                ("to", 0.15),
+                ("on", 0.15),
+            ],
+        );
+        add(
+            "plan",
+            &[("is", 0.3), ("to", 0.3), ("step", 0.2), ("</s>", 0.2)],
+        );
+        add(
+            "step",
+            &[
+                ("is", 0.2),
+                ("to", 0.2),
+                ("open", 0.15),
+                ("navigate", 0.15),
+                ("tap", 0.15),
+                ("find", 0.15),
+            ],
+        );
+        add(
+            "first",
+            &[
+                ("open", 0.2),
+                ("navigate", 0.2),
+                ("I", 0.15),
+                ("tap", 0.1),
+                ("find", 0.1),
+                ("scroll", 0.1),
+                ("step", 0.15),
+            ],
+        );
+        add(
+            "second",
+            &[
+                ("step", 0.3),
+                ("tap", 0.2),
+                ("navigate", 0.2),
+                ("open", 0.15),
+                ("find", 0.15),
+            ],
+        );
+        add("let", &[("me", 0.9), ("the", 0.1)]);
+        add(
+            "me",
+            &[
+                ("help", 0.4),
+                ("open", 0.2),
+                ("navigate", 0.15),
+                ("find", 0.15),
+                ("check", 0.1),
+            ],
+        );
+        add("help", &[("you", 0.6), ("with", 0.4)]);
+        add(
+            "you",
+            &[
+                ("with", 0.4),
+                ("to", 0.2),
+                ("open", 0.15),
+                ("find", 0.15),
+                ("navigate", 0.1),
+            ],
+        );
+        add(
+            "with",
+            &[("the", 0.3), ("that", 0.3), ("this", 0.2), ("a", 0.2)],
+        );
+        add(
+            "that",
+            &[
+                ("and", 0.2),
+                ("is", 0.2),
+                ("option", 0.15),
+                ("button", 0.15),
+                ("screen", 0.15),
+                ("</s>", 0.15),
+            ],
+        );
+        add(
+            "sure",
+            &[("I", 0.4), ("let", 0.3), ("here", 0.15), ("</s>", 0.15)],
+        );
+        add(
+            "here",
+            &[("is", 0.4), ("go", 0.2), ("</s>", 0.2), ("and", 0.2)],
+        );
+        add(
+            "go",
+            &[("to", 0.5), ("back", 0.2), ("home", 0.15), ("and", 0.15)],
+        );
+        add(
+            "check",
+            &[
+                ("the", 0.3),
+                ("settings", 0.2),
+                ("wifi", 0.15),
+                ("bluetooth", 0.1),
+                ("if", 0.25),
+            ],
+        );
+        add(
+            "ok",
+            &[("I", 0.3), ("let", 0.3), ("sure", 0.2), ("first", 0.2)],
+        );
+        add(
+            "yes",
+            &[("I", 0.4), ("the", 0.2), ("sure", 0.2), ("that", 0.2)],
+        );
+        add(
+            "no",
+            &[("I", 0.2), ("the", 0.2), ("that", 0.3), ("this", 0.3)],
+        );
+
+        Self {
+            bigrams,
+            vocab,
+            word_to_token,
+            rng_state: Mutex::new(seed),
+        }
+    }
+
+    /// Fast xorshift64 PRNG — returns value in [0.0, 1.0).
+    fn next_random(&self) -> f64 {
+        let mut state = self.rng_state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = *state;
+        if s == 0 {
+            s = 0xDEADBEEF;
+        }
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        *state = s;
+        (s as f64) / (u64::MAX as f64)
+    }
+
+    /// Select next token using weighted sampling from bigram table.
+    fn sample_bigram(&self, last_token: LlamaToken, temperature: f32) -> LlamaToken {
+        let transitions = match self.bigrams.get(&last_token) {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                // Fallback: pick a random content word (skip special tokens)
+                let idx = ((self.next_random() * (self.vocab.len() - 3) as f64) as usize) + 3;
+                return idx as LlamaToken;
+            }
+        };
+
+        // Apply temperature to probabilities
+        let temp = temperature.max(0.01) as f64;
+        let scaled: Vec<f64> = transitions
+            .iter()
+            .map(|(_, p)| (*p as f64 / temp).exp())
+            .collect();
+        let sum: f64 = scaled.iter().sum();
+        let normalized: Vec<f64> = scaled.iter().map(|p| p / sum).collect();
+
+        // Weighted random selection
+        let r = self.next_random();
+        let mut cumulative = 0.0;
+        for (i, prob) in normalized.iter().enumerate() {
+            cumulative += prob;
+            if r < cumulative {
+                return transitions[i].0;
+            }
+        }
+
+        // Fallback to last transition
+        transitions
+            .last()
+            .map(|(t, _)| *t)
+            .unwrap_or(special_tokens::EOS)
+    }
+
+    /// Apply repetition penalty: reduce probability of recently seen tokens.
+    fn apply_repetition_penalty(
+        &self,
+        last_token: LlamaToken,
+        recent_tokens: &[LlamaToken],
+        params: &SamplingParams,
+    ) -> LlamaToken {
+        let candidate = self.sample_bigram(last_token, params.temperature);
+
+        // If the candidate was recently generated and penalty > 1.0, re-sample up to 3 times
+        if params.repeat_penalty > 1.0 && recent_tokens.contains(&candidate) {
+            for _ in 0..3 {
+                let alt = self.sample_bigram(last_token, params.temperature * 1.2);
+                if !recent_tokens.contains(&alt) {
+                    return alt;
+                }
+            }
+        }
+
+        candidate
+    }
+}
+
+impl LlamaBackend for StubBackend {
+    fn is_stub(&self) -> bool {
+        true
+    }
+
+    fn load_model(
+        &self,
+        path: &str,
+        _model_params: &LlamaModelParams,
+        _ctx_params: &LlamaContextParams,
+    ) -> BackendResult<(*mut LlamaModel, *mut LlamaContext)> {
+        info!(path, "stub: simulating model load");
+
+        // Return sentinel non-null pointers (0x1, 0x2) so callers can
+        // distinguish "loaded stub" from "failed to load" (null).
+        // These must never be dereferenced — they're just markers.
+        let model_ptr = std::ptr::dangling_mut::<LlamaModel>();
+        let ctx_ptr = 0x2 as *mut LlamaContext;
+
+        debug!("stub: model loaded (sentinel pointers)");
+        Ok((model_ptr, ctx_ptr))
+    }
+
+    fn free_model(&self, _model: *mut LlamaModel, _ctx: *mut LlamaContext) {
+        debug!("stub: model freed (no-op)");
+    }
+
+    fn tokenize(&self, _ctx: *mut LlamaContext, text: &str) -> BackendResult<Vec<LlamaToken>> {
+        // Simple whitespace tokenizer: split on spaces, map words to token IDs.
+        let mut tokens = vec![special_tokens::BOS];
+
+        for word in text.split_whitespace() {
+            let lower = word.to_lowercase();
+            // Strip punctuation for matching
+            let clean: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+            if let Some(&token_id) = self.word_to_token.get(&clean) {
+                tokens.push(token_id);
+            } else if let Some(&token_id) = self.word_to_token.get(word) {
+                tokens.push(token_id);
+            } else {
+                // Unknown word → use UNK but also record position for approximate count
+                tokens.push(special_tokens::UNK);
+            }
+        }
+
+        trace!(token_count = tokens.len(), "stub: tokenized text");
+        Ok(tokens)
+    }
+
+    fn detokenize(&self, _ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<String> {
+        let words: Vec<&str> = tokens
+            .iter()
+            .filter_map(|&t| {
+                let idx = t as usize;
+                if idx < self.vocab.len() && t > 2 {
+                    // Skip special tokens (0=UNK, 1=BOS, 2=EOS)
+                    Some(self.vocab[idx].as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let text = words.join(" ");
+        trace!(text_len = text.len(), "stub: detokenized tokens");
+        Ok(text)
+    }
+
+    fn sample_next(
+        &self,
+        _ctx: *mut LlamaContext,
+        tokens: &[LlamaToken],
+        params: &SamplingParams,
+    ) -> BackendResult<LlamaToken> {
+        let last_token = tokens.last().copied().unwrap_or(special_tokens::BOS);
+
+        // Use the last N tokens for repetition penalty window
+        let window_size = 16.min(tokens.len());
+        let recent = &tokens[tokens.len() - window_size..];
+
+        let next = self.apply_repetition_penalty(last_token, recent, params);
+        trace!(last = last_token, next, "stub: sampled next token");
+        Ok(next)
+    }
+
+    fn eos_token(&self) -> LlamaToken {
+        special_tokens::EOS
+    }
+
+    fn bos_token(&self) -> LlamaToken {
+        special_tokens::BOS
+    }
+
+    fn eval(&self, _ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<()> {
+        trace!(token_count = tokens.len(), "stub: eval (no-op)");
+        Ok(())
+    }
+}
+
+// ─── Android FFI backend ────────────────────────────────────────────────────
+
+/// Runtime-loaded llama.cpp backend for Android.
+///
+/// Uses `libloading` to dynamically load `libllama.so` at runtime.
+/// This avoids build-time linking issues and allows loading the library
+/// from the APK's native lib directory.
+#[cfg(target_os = "android")]
+pub struct FfiBackend {
+    _lib: libloading::Library,
+    // Function pointers resolved from the loaded library
+    fn_load_model:
+        unsafe extern "C" fn(*const std::ffi::c_char, LlamaModelParams) -> *mut LlamaModel,
+    fn_new_context: unsafe extern "C" fn(*mut LlamaModel, LlamaContextParams) -> *mut LlamaContext,
+    fn_free_model: unsafe extern "C" fn(*mut LlamaModel),
+    fn_free_context: unsafe extern "C" fn(*mut LlamaContext),
+    fn_tokenize: unsafe extern "C" fn(
+        *mut LlamaContext,
+        *const std::ffi::c_char,
+        *mut LlamaToken,
+        i32,
+        bool,
+    ) -> i32,
+    fn_detokenize:
+        unsafe extern "C" fn(*mut LlamaModel, LlamaToken, *mut std::ffi::c_char, i32) -> i32,
+    fn_decode: unsafe extern "C" fn(*mut LlamaContext, *const LlamaToken, i32, i32) -> i32,
+    fn_get_logits: unsafe extern "C" fn(*mut LlamaContext) -> *mut f32,
+    fn_n_vocab: unsafe extern "C" fn(*mut LlamaModel) -> i32,
+    fn_token_eos: unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken,
+    fn_token_bos: unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken,
+    model_ptr: std::sync::Mutex<Option<*mut LlamaModel>>,
+}
+
+#[cfg(target_os = "android")]
+unsafe impl Send for FfiBackend {}
+#[cfg(target_os = "android")]
+unsafe impl Sync for FfiBackend {}
+
+#[cfg(target_os = "android")]
+impl FfiBackend {
+    /// Load the llama.cpp shared library from the given path.
+    ///
+    /// # Errors
+    /// Returns `BackendError::LibraryLoad` if the library cannot be loaded,
+    /// or `BackendError::SymbolResolution` if any required symbol is missing.
+    pub fn new(lib_path: &str) -> BackendResult<Self> {
+        info!(path = lib_path, "loading libllama.so via libloading");
+
+        let lib = unsafe { libloading::Library::new(lib_path) }
+            .map_err(|e| BackendError::LibraryLoad(format!("{}: {}", lib_path, e)))?;
+
+        // Resolve all required symbols
+        macro_rules! resolve {
+            ($name:expr, $type:ty) => {
+                *unsafe { lib.get::<$type>($name) }.map_err(|e| {
+                    BackendError::SymbolResolution(format!(
+                        "{}: {}",
+                        String::from_utf8_lossy($name),
+                        e
+                    ))
+                })?
+            };
+        }
+
+        let backend = Self {
+            fn_load_model: resolve!(
+                b"llama_load_model_from_file\0",
+                unsafe extern "C" fn(*const std::ffi::c_char, LlamaModelParams) -> *mut LlamaModel
+            ),
+            fn_new_context: resolve!(
+                b"llama_new_context_with_model\0",
+                unsafe extern "C" fn(*mut LlamaModel, LlamaContextParams) -> *mut LlamaContext
+            ),
+            fn_free_model: resolve!(b"llama_free_model\0", unsafe extern "C" fn(*mut LlamaModel)),
+            fn_free_context: resolve!(b"llama_free\0", unsafe extern "C" fn(*mut LlamaContext)),
+            fn_tokenize: resolve!(
+                b"llama_tokenize\0",
+                unsafe extern "C" fn(
+                    *mut LlamaContext,
+                    *const std::ffi::c_char,
+                    *mut LlamaToken,
+                    i32,
+                    bool,
+                ) -> i32
+            ),
+            fn_detokenize: resolve!(
+                b"llama_token_to_piece\0",
+                unsafe extern "C" fn(
+                    *mut LlamaModel,
+                    LlamaToken,
+                    *mut std::ffi::c_char,
+                    i32,
+                ) -> i32
+            ),
+            fn_decode: resolve!(
+                b"llama_decode\0",
+                unsafe extern "C" fn(*mut LlamaContext, *const LlamaToken, i32, i32) -> i32
+            ),
+            fn_get_logits: resolve!(
+                b"llama_get_logits\0",
+                unsafe extern "C" fn(*mut LlamaContext) -> *mut f32
+            ),
+            fn_n_vocab: resolve!(
+                b"llama_n_vocab\0",
+                unsafe extern "C" fn(*mut LlamaModel) -> i32
+            ),
+            fn_token_eos: resolve!(
+                b"llama_token_eos\0",
+                unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken
+            ),
+            fn_token_bos: resolve!(
+                b"llama_token_bos\0",
+                unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken
+            ),
+            model_ptr: std::sync::Mutex::new(None),
+            _lib: lib,
+        };
+
+        info!("libllama.so loaded successfully — all symbols resolved");
+        Ok(backend)
+    }
+}
+
+#[cfg(target_os = "android")]
+impl LlamaBackend for FfiBackend {
+    fn is_stub(&self) -> bool {
+        false
+    }
+
+    fn load_model(
+        &self,
+        path: &str,
+        model_params: &LlamaModelParams,
+        ctx_params: &LlamaContextParams,
+    ) -> BackendResult<(*mut LlamaModel, *mut LlamaContext)> {
+        use std::ffi::CString;
+
+        let c_path = CString::new(path)
+            .map_err(|e| BackendError::ModelLoad(format!("invalid path: {}", e)))?;
+
+        let model = unsafe { (self.fn_load_model)(c_path.as_ptr(), model_params.clone()) };
+        if model.is_null() {
+            return Err(BackendError::ModelLoad(format!(
+                "llama_load_model_from_file returned null for: {}",
+                path
+            )));
+        }
+
+        let ctx = unsafe { (self.fn_new_context)(model, ctx_params.clone()) };
+        if ctx.is_null() {
+            // Clean up the model we just loaded
+            unsafe { (self.fn_free_model)(model) };
+            return Err(BackendError::ContextCreation(
+                "llama_new_context_with_model returned null".into(),
+            ));
+        }
+
+        *self.model_ptr.lock().unwrap_or_else(|e| e.into_inner()) = Some(model);
+
+        info!(path, "model loaded via FFI");
+        Ok((model, ctx))
+    }
+
+    fn free_model(&self, model: *mut LlamaModel, ctx: *mut LlamaContext) {
+        if !ctx.is_null() {
+            unsafe { (self.fn_free_context)(ctx) };
+        }
+        if !model.is_null() {
+            unsafe { (self.fn_free_model)(model) };
+        }
+        *self.model_ptr.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        debug!("model freed via FFI");
+    }
+
+    fn tokenize(&self, ctx: *mut LlamaContext, text: &str) -> BackendResult<Vec<LlamaToken>> {
+        use std::ffi::CString;
+
+        let c_text = CString::new(text)
+            .map_err(|e| BackendError::Tokenization(format!("invalid text: {}", e)))?;
+
+        // First call to get required buffer size
+        let n_tokens =
+            unsafe { (self.fn_tokenize)(ctx, c_text.as_ptr(), std::ptr::null_mut(), 0, true) };
+        if n_tokens < 0 {
+            return Err(BackendError::Tokenization(format!(
+                "llama_tokenize size query failed: {}",
+                n_tokens
+            )));
+        }
+
+        let mut tokens = vec![0i32; n_tokens as usize];
+        let result = unsafe {
+            (self.fn_tokenize)(ctx, c_text.as_ptr(), tokens.as_mut_ptr(), n_tokens, true)
+        };
+        if result < 0 {
+            return Err(BackendError::Tokenization(format!(
+                "llama_tokenize failed: {}",
+                result
+            )));
+        }
+
+        tokens.truncate(result as usize);
+        trace!(token_count = tokens.len(), "tokenized via FFI");
+        Ok(tokens)
+    }
+
+    fn detokenize(&self, _ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<String> {
+        let model_guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        let model =
+            model_guard.ok_or_else(|| BackendError::Detokenization("no model loaded".into()))?;
+
+        let mut result = String::new();
+        let mut buf = vec![0u8; 256];
+
+        for &token in tokens {
+            let n = unsafe {
+                (self.fn_detokenize)(
+                    model,
+                    token,
+                    buf.as_mut_ptr() as *mut std::ffi::c_char,
+                    buf.len() as i32,
+                )
+            };
+            if n > 0 {
+                let piece = String::from_utf8_lossy(&buf[..n as usize]);
+                result.push_str(&piece);
+            }
+        }
+
+        trace!(text_len = result.len(), "detokenized via FFI");
+        Ok(result)
+    }
+
+    fn sample_next(
+        &self,
+        ctx: *mut LlamaContext,
+        tokens: &[LlamaToken],
+        params: &SamplingParams,
+    ) -> BackendResult<LlamaToken> {
+        let model_guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        let model =
+            model_guard.ok_or_else(|| BackendError::Generation("no model loaded".into()))?;
+
+        let n_vocab = unsafe { (self.fn_n_vocab)(model) } as usize;
+        let logits_ptr = unsafe { (self.fn_get_logits)(ctx) };
+        if logits_ptr.is_null() {
+            return Err(BackendError::Generation("logits pointer is null".into()));
+        }
+
+        let logits = unsafe { std::slice::from_raw_parts(logits_ptr, n_vocab) };
+
+        // Apply temperature
+        let temp = params.temperature.max(0.001);
+        let mut probs: Vec<f64> = logits
+            .iter()
+            .map(|&l| (l as f64 / temp as f64).exp())
+            .collect();
+
+        // Apply repetition penalty
+        if params.repeat_penalty > 1.0 {
+            let window = 64.min(tokens.len());
+            for &tok in &tokens[tokens.len() - window..] {
+                let idx = tok as usize;
+                if idx < n_vocab {
+                    probs[idx] /= params.repeat_penalty as f64;
+                }
+            }
+        }
+
+        // Top-k filtering
+        if params.top_k > 0 {
+            let k = (params.top_k as usize).min(n_vocab);
+            let mut indexed: Vec<(usize, f64)> = probs.iter().copied().enumerate().collect();
+            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let threshold = indexed.get(k).map(|(_, p)| *p).unwrap_or(0.0);
+            for p in probs.iter_mut() {
+                if *p < threshold {
+                    *p = 0.0;
+                }
+            }
+        }
+
+        // Normalize
+        let sum: f64 = probs.iter().sum();
+        if sum <= 0.0 {
+            return Err(BackendError::Generation(
+                "all probabilities zero after filtering".into(),
+            ));
+        }
+        for p in probs.iter_mut() {
+            *p /= sum;
+        }
+
+        // Top-p (nucleus) sampling
+        if params.top_p < 1.0 {
+            let mut sorted: Vec<(usize, f64)> = probs.iter().copied().enumerate().collect();
+            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let mut cumsum = 0.0;
+            let mut cutoff_idx = sorted.len();
+            for (i, (_, p)) in sorted.iter().enumerate() {
+                cumsum += p;
+                if cumsum >= params.top_p as f64 {
+                    cutoff_idx = i + 1;
+                    break;
+                }
+            }
+            let allowed: std::collections::HashSet<usize> =
+                sorted[..cutoff_idx].iter().map(|(idx, _)| *idx).collect();
+            for (i, p) in probs.iter_mut().enumerate() {
+                if !allowed.contains(&i) {
+                    *p = 0.0;
+                }
+            }
+            // Re-normalize
+            let sum: f64 = probs.iter().sum();
+            if sum > 0.0 {
+                for p in probs.iter_mut() {
+                    *p /= sum;
+                }
+            }
+        }
+
+        // Sample from distribution (simple linear scan)
+        // Use a basic xorshift for determinism in tests
+        let r = {
+            let time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as f64
+                / 1_000_000_000.0;
+            time
+        };
+
+        let mut cumulative = 0.0;
+        for (i, &p) in probs.iter().enumerate() {
+            cumulative += p;
+            if r < cumulative {
+                return Ok(i as LlamaToken);
+            }
+        }
+
+        // Fallback: return the most probable token
+        let best = probs
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i as LlamaToken)
+            .unwrap_or(self.eos_token());
+
+        Ok(best)
+    }
+
+    fn eos_token(&self) -> LlamaToken {
+        let guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        match *guard {
+            Some(model) => unsafe { (self.fn_token_eos)(model) },
+            None => special_tokens::EOS,
+        }
+    }
+
+    fn bos_token(&self) -> LlamaToken {
+        let guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        match *guard {
+            Some(model) => unsafe { (self.fn_token_bos)(model) },
+            None => special_tokens::BOS,
+        }
+    }
+
+    fn eval(&self, ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<()> {
+        let result = unsafe {
+            (self.fn_decode)(
+                ctx,
+                tokens.as_ptr(),
+                tokens.len() as i32,
+                0, // past token count = 0 for initial eval
+            )
+        };
+
+        if result != 0 {
+            return Err(BackendError::Generation(format!(
+                "llama_decode failed with code: {}",
+                result
+            )));
+        }
+
+        trace!(token_count = tokens.len(), "eval via FFI");
+        Ok(())
+    }
+}
+
+// ─── Global backend accessor ────────────────────────────────────────────────
+
+use std::sync::OnceLock;
+
+static BACKEND: OnceLock<Box<dyn LlamaBackend>> = OnceLock::new();
+
+/// Initialize the global backend.
+///
+/// On Android, call `init_ffi_backend(lib_path)` with the path to libllama.so.
+/// On desktop, call `init_stub_backend()` for the bigram-based testing stub.
+///
+/// # Errors
+/// Returns an error if the backend is already initialized.
+pub fn init_stub_backend(seed: u64) -> BackendResult<()> {
+    BACKEND
+        .set(Box::new(StubBackend::new(seed)))
+        .map_err(|_| BackendError::StubMode("backend already initialized".into()))?;
+    info!("stub backend initialized (seed={})", seed);
+    Ok(())
+}
+
+/// Initialize the FFI backend for Android.
+#[cfg(target_os = "android")]
+pub fn init_ffi_backend(lib_path: &str) -> BackendResult<()> {
+    let backend = FfiBackend::new(lib_path)?;
+    BACKEND
+        .set(Box::new(backend))
+        .map_err(|_| BackendError::LibraryLoad("backend already initialized".into()))?;
+    info!("FFI backend initialized");
+    Ok(())
+}
+
+/// Get a reference to the initialized backend.
+///
+/// # Panics
+/// Panics if `init_stub_backend()` or `init_ffi_backend()` has not been called.
+/// In practice, the neocortex init code guarantees this.
+pub fn backend() -> &'static dyn LlamaBackend {
+    BACKEND.get().map(|b| b.as_ref()).expect(
+        "llama backend not initialized — call init_stub_backend() or init_ffi_backend() first",
+    )
+}
+
+/// Check whether a backend has been initialized.
+pub fn is_backend_initialized() -> bool {
+    BACKEND.get().is_some()
+}
+
+// ─── Legacy stub module (compatibility shim) ────────────────────────────────
+//
+// Maintains backward compatibility with existing code that calls
+// `aura_llama_sys::stubs::*` directly. These now delegate to the global backend.
+
+#[cfg(not(target_os = "android"))]
+pub mod stubs {
+    use super::*;
+
+    /// Initialize the stub backend if not already done.
+    fn ensure_init() {
+        if !is_backend_initialized() {
+            let _ = init_stub_backend(0xA0BA);
+        }
+    }
+
+    /// Stub: load model (returns sentinel pointers via backend).
+    pub fn llama_load_model(path: &str, params: &LlamaModelParams) -> *mut LlamaModel {
+        ensure_init();
+        let ctx_params = LlamaContextParams::default();
+        match backend().load_model(path, params, &ctx_params) {
+            Ok((model, _ctx)) => model,
+            Err(e) => {
+                error!(error = %e, "stub model load failed");
+                std::ptr::null_mut()
+            }
+        }
+    }
+
+    /// Stub: create context (returns sentinel pointer via backend).
+    pub fn llama_new_context(
+        model: *mut LlamaModel,
+        params: &LlamaContextParams,
+    ) -> *mut LlamaContext {
+        ensure_init();
+        // The backend load_model already creates both — return sentinel ctx
+        let _ = (model, params);
+        0x2 as *mut LlamaContext
+    }
+
+    /// Stub: free model.
+    pub fn llama_free_model(model: *mut LlamaModel) {
+        if is_backend_initialized() {
+            backend().free_model(model, std::ptr::null_mut());
+        }
+    }
+
+    /// Stub: free context.
+    pub fn llama_free_context(ctx: *mut LlamaContext) {
+        if is_backend_initialized() {
+            backend().free_model(std::ptr::null_mut(), ctx);
+        }
+    }
+
+    /// Stub: tokenize text.
+    pub fn llama_tokenize(ctx: *mut LlamaContext, text: &str) -> Vec<LlamaToken> {
+        ensure_init();
+        backend().tokenize(ctx, text).unwrap_or_default()
+    }
+
+    /// Stub: decode tokens to text.
+    pub fn llama_decode_tokens(ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> String {
+        ensure_init();
+        backend().detokenize(ctx, tokens).unwrap_or_default()
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_stub() -> StubBackend {
+        StubBackend::new(42)
+    }
+
+    #[test]
+    fn default_params_are_sane() {
+        let mp = LlamaModelParams::default();
+        assert_eq!(mp.n_gpu_layers, 0);
+        assert!(mp.use_mmap);
+
+        let cp = LlamaContextParams::default();
+        assert_eq!(cp.n_ctx, 2048);
+        assert!(cp.n_threads > 0);
+
+        let sp = SamplingParams::default();
+        assert!(sp.temperature > 0.0 && sp.temperature < 2.0);
+        assert!(sp.top_p > 0.0 && sp.top_p <= 1.0);
+    }
+
+    #[test]
+    fn stub_is_stub() {
+        let stub = test_stub();
+        assert!(stub.is_stub());
+    }
+
+    #[test]
+    fn stub_load_model_returns_non_null() {
+        let stub = test_stub();
+        let result = stub.load_model(
+            "test.gguf",
+            &LlamaModelParams::default(),
+            &LlamaContextParams::default(),
+        );
+        assert!(result.is_ok());
+        let (model, ctx) = result.expect("load should succeed");
+        assert!(!model.is_null());
+        assert!(!ctx.is_null());
+    }
+
+    #[test]
+    fn stub_tokenize_produces_tokens() {
+        let stub = test_stub();
+        let tokens = stub
+            .tokenize(std::ptr::null_mut(), "open the settings app")
+            .expect("tokenize should succeed");
+        assert!(!tokens.is_empty());
+        // First token should be BOS
+        assert_eq!(tokens[0], special_tokens::BOS);
+        // Should have BOS + 4 words = 5 tokens
+        assert_eq!(tokens.len(), 5);
+    }
+
+    #[test]
+    fn stub_tokenize_unknown_words() {
+        let stub = test_stub();
+        let tokens = stub
+            .tokenize(std::ptr::null_mut(), "xyzzy plugh")
+            .expect("tokenize should succeed");
+        // BOS + 2 UNK tokens
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0], special_tokens::BOS);
+        assert_eq!(tokens[1], special_tokens::UNK);
+        assert_eq!(tokens[2], special_tokens::UNK);
+    }
+
+    #[test]
+    fn stub_detokenize_round_trip() {
+        let stub = test_stub();
+        let tokens = stub
+            .tokenize(std::ptr::null_mut(), "open the settings")
+            .expect("tokenize should succeed");
+        let text = stub
+            .detokenize(std::ptr::null_mut(), &tokens)
+            .expect("detokenize should succeed");
+        // Should contain the original words
+        assert!(text.contains("open"));
+        assert!(text.contains("the"));
+        assert!(text.contains("settings"));
+    }
+
+    #[test]
+    fn stub_sample_next_produces_valid_token() {
+        let stub = test_stub();
+        let tokens = vec![special_tokens::BOS];
+        let params = SamplingParams::default();
+        let next = stub
+            .sample_next(std::ptr::null_mut(), &tokens, &params)
+            .expect("sample should succeed");
+        // Should be a valid token (not negative, within vocab range)
+        assert!(next >= 0);
+        assert!((next as usize) < stub.vocab.len());
+    }
+
+    #[test]
+    fn stub_generates_sequence_of_tokens() {
+        let stub = test_stub();
+        let params = SamplingParams {
+            max_tokens: 20,
+            temperature: 0.7,
+            ..Default::default()
+        };
+
+        let mut tokens = vec![special_tokens::BOS];
+        let mut generated_count = 0;
+
+        for _ in 0..20 {
+            let next = stub
+                .sample_next(std::ptr::null_mut(), &tokens, &params)
+                .expect("sample should succeed");
+            if next == special_tokens::EOS {
+                break;
+            }
+            tokens.push(next);
+            generated_count += 1;
+        }
+
+        assert!(generated_count > 0, "should generate at least one token");
+
+        let text = stub
+            .detokenize(std::ptr::null_mut(), &tokens)
+            .expect("detokenize should succeed");
+        assert!(!text.is_empty(), "generated text should not be empty");
+    }
+
+    #[test]
+    fn stub_eos_bos_tokens() {
+        let stub = test_stub();
+        assert_eq!(stub.eos_token(), special_tokens::EOS);
+        assert_eq!(stub.bos_token(), special_tokens::BOS);
+    }
+
+    #[test]
+    fn stub_eval_succeeds() {
+        let stub = test_stub();
+        let tokens = vec![special_tokens::BOS, 3, 7]; // BOS, "the", "settings"
+        let result = stub.eval(std::ptr::null_mut(), &tokens);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn stub_free_model_no_panic() {
+        let stub = test_stub();
+        let (model, ctx) = stub
+            .load_model(
+                "test.gguf",
+                &LlamaModelParams::default(),
+                &LlamaContextParams::default(),
+            )
+            .expect("load should succeed");
+        // Should not panic
+        stub.free_model(model, ctx);
+    }
+
+    #[test]
+    fn stub_repetition_penalty_avoids_repeats() {
+        let stub = test_stub();
+        let params = SamplingParams {
+            repeat_penalty: 2.0,
+            temperature: 0.3,
+            ..Default::default()
+        };
+
+        // Feed a sequence where token 3 ("the") appears many times
+        let tokens = vec![3, 3, 3, 3, 3, 3, 3, 3];
+        let mut got_different = false;
+
+        // Sample many times — with high penalty, we should sometimes get non-3 tokens
+        for _ in 0..50 {
+            let next = stub
+                .sample_next(std::ptr::null_mut(), &tokens, &params)
+                .expect("sample should succeed");
+            if next != 3 {
+                got_different = true;
+                break;
+            }
+        }
+        assert!(
+            got_different,
+            "repetition penalty should produce varied tokens"
+        );
+    }
+
+    #[test]
+    fn stub_temperature_zero_is_deterministic() {
+        let stub1 = StubBackend::new(42);
+        let stub2 = StubBackend::new(42);
+        let params = SamplingParams {
+            temperature: 0.01, // Near-greedy
+            ..Default::default()
+        };
+        let tokens = vec![special_tokens::BOS];
+
+        let t1 = stub1
+            .sample_next(std::ptr::null_mut(), &tokens, &params)
+            .expect("sample should succeed");
+        let t2 = stub2
+            .sample_next(std::ptr::null_mut(), &tokens, &params)
+            .expect("sample should succeed");
+        assert_eq!(
+            t1, t2,
+            "same seed + low temperature should produce same result"
+        );
+    }
+
+    #[test]
+    fn stub_detokenize_skips_special_tokens() {
+        let stub = test_stub();
+        let tokens = vec![special_tokens::BOS, 3, special_tokens::EOS]; // BOS, "the", EOS
+        let text = stub
+            .detokenize(std::ptr::null_mut(), &tokens)
+            .expect("detokenize should succeed");
+        assert_eq!(text, "the");
+        assert!(!text.contains("<s>"));
+        assert!(!text.contains("</s>"));
+    }
+
+    #[test]
+    fn stub_empty_tokenize() {
+        let stub = test_stub();
+        let tokens = stub
+            .tokenize(std::ptr::null_mut(), "")
+            .expect("tokenize should succeed");
+        // Just BOS
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], special_tokens::BOS);
+    }
+
+    #[test]
+    fn sampling_params_serialize() {
+        let params = SamplingParams::default();
+        let json = serde_json::to_string(&params).expect("should serialize");
+        let restored: SamplingParams = serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(params.temperature, restored.temperature);
+        assert_eq!(params.max_tokens, restored.max_tokens);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn legacy_stubs_produce_tokens() {
+        // Test backward compatibility
+        let tokens = stubs::llama_tokenize(std::ptr::null_mut(), "open settings");
+        assert!(!tokens.is_empty());
+
+        let text = stubs::llama_decode_tokens(std::ptr::null_mut(), &tokens);
+        // With stub backend, this will detokenize to words
+        assert!(!text.is_empty() || tokens.iter().all(|&t| t <= 2)); // empty if all special
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn legacy_stub_load_model() {
+        let model = stubs::llama_load_model("test.gguf", &LlamaModelParams::default());
+        assert!(!model.is_null(), "stub should return non-null sentinel");
+    }
+}

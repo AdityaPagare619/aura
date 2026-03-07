@@ -1,0 +1,252 @@
+# =============================================================================
+# AURA v4 — Default Configuration
+# =============================================================================
+#
+# This file provides sane defaults for all subsystems. It is loaded first
+# during startup, then deep-merged with safety.toml and power.toml overlays.
+#
+# Every field shown here has a corresponding Rust struct with `Default` impl.
+# Omitted fields fall back to the compiled-in Rust default.
+
+# =============================================================================
+#  § Core Subsystems
+# =============================================================================
+
+[daemon]
+checkpoint_interval_s = 300
+rss_warning_mb        = 28
+rss_ceiling_mb        = 30
+version               = "4.0.0-alpha.1"
+log_level             = "info"
+data_dir              = "/data/data/com.aura/files"
+
+[amygdala]
+instant_threshold   = 0.65
+weight_lex          = 0.40
+weight_src          = 0.25
+weight_time         = 0.20
+weight_anom         = 0.15
+storm_dedup_size    = 50
+storm_rate_limit_ms = 30000
+cold_start_events   = 200
+cold_start_hours    = 72
+
+[neocortex]
+default_n_ctx        = 4096
+n_threads            = 4
+max_memory_mb        = 2048
+inference_timeout_ms = 60000
+model_dir            = "/data/local/tmp/aura/models"
+
+[execution]
+max_steps_normal           = 200
+max_steps_safety           = 50
+max_steps_power            = 500
+rate_limit_actions_per_min = 60
+delay_min_ms               = 150
+delay_max_ms               = 500
+
+[power]
+daily_token_budget     = 50000
+conservative_threshold = 50
+low_power_threshold    = 30
+critical_threshold     = 15
+emergency_threshold    = 5
+
+[identity]
+mood_cooldown_ms = 60000
+max_mood_delta   = 0.2
+trust_hysteresis = 0.05
+
+[sqlite]
+db_path              = "/data/data/com.aura/databases/aura.db"
+wal_size_limit       = 4194304
+max_episodes         = 10000
+max_semantic_entries = 5000
+
+# =============================================================================
+#  § Routing
+# =============================================================================
+
+[routing]
+complexity_threshold = 0.50
+hysteresis_gap       = 0.15
+working_memory_slots = 7
+# V3 routing factor weights — MUST sum to 1.0.
+weight_complexity    = 0.40
+weight_importance    = 0.25
+weight_urgency       = 0.20
+weight_memory_load   = 0.15
+
+# =============================================================================
+#  § Screen Capture / Accessibility Tree
+# =============================================================================
+
+[screen]
+# Maximum depth for accessibility tree traversal.
+max_tree_depth       = 15
+# Timeout for tree snapshot (ms).
+snapshot_timeout_ms  = 2000
+# Maximum nodes to serialize per snapshot.
+max_nodes            = 500
+# Enable screen content hashing for change detection.
+enable_hash_diff     = true
+
+# =============================================================================
+#  § Execution Task Graph (ETG)
+# =============================================================================
+
+[etg]
+# Maximum depth of the task graph before aborting.
+max_graph_depth      = 10
+# Timeout for a single ETG step (ms).
+step_timeout_ms      = 5000
+# Enable rollback on step failure.
+enable_rollback      = true
+# Maximum retry attempts per step.
+max_step_retries     = 2
+
+# =============================================================================
+#  § Goal Management
+# =============================================================================
+
+[goals]
+# Maximum concurrent active goals.
+max_active           = 5
+# Default goal deadline (seconds, 0 = no deadline).
+default_deadline_s   = 0
+# Maximum sub-goal decomposition depth.
+max_decomposition    = 5
+# Maximum retry attempts per goal before marking failed.
+max_retries          = 3
+# Scheduler tick interval (ms).
+scheduler_tick_ms    = 5000
+
+# =============================================================================
+#  § Cron / Scheduled Tasks
+# =============================================================================
+
+[cron]
+# Enable the built-in cron scheduler.
+enabled              = true
+# Minimum interval between cron ticks (ms).
+min_interval_ms      = 60000
+# Maximum queued cron jobs before shedding.
+max_queue_size       = 50
+
+# =============================================================================
+#  § Telegram Integration
+# =============================================================================
+
+[telegram]
+# Enable Telegram bot integration.
+enabled              = false
+# Bot token (set via AURA_TELEGRAM_TOKEN env var for security).
+bot_token            = ""
+# Allowed chat IDs (empty = deny all).
+allowed_chat_ids     = []
+# Polling interval (ms).
+poll_interval_ms     = 2000
+
+# =============================================================================
+#  § Voice / TTS / STT
+# =============================================================================
+
+[voice]
+# Enable voice input/output.
+enabled              = false
+# Wake word detection sensitivity (0.0 = off, 1.0 = max).
+wake_sensitivity     = 0.5
+# TTS engine: "system" | "local" | "none"
+tts_engine           = "system"
+# STT engine: "system" | "whisper_local" | "none"
+stt_engine           = "system"
+# Max recording duration (ms).
+max_record_ms        = 30000
+
+# =============================================================================
+#  § Proactive Behavior
+# =============================================================================
+
+[proactive]
+# Enable proactive suggestions and actions.
+enabled                   = true
+# Minimum confidence to surface a proactive suggestion.
+min_confidence            = 0.70
+# Cooldown between proactive nudges (ms).
+cooldown_ms               = 300000
+# Maximum proactive actions per hour.
+max_per_hour              = 10
+# Require user confirmation for proactive actions.
+require_confirmation      = true
+
+# =============================================================================
+#  § Thermal Management
+# =============================================================================
+
+[thermal]
+warm_c                    = 40.0
+hot_c                     = 45.0
+critical_c                = 50.0
+hysteresis_c              = 2.0
+min_transition_interval_s = 10
+
+# =============================================================================
+#  § Retry Policy
+# =============================================================================
+
+[retry]
+max_retries    = 3
+base_delay_ms  = 200
+backoff_factor = 2
+max_delay_ms   = 10000
+jitter_ms      = 50
+
+# =============================================================================
+#  § Contextor (Memory Enrichment)
+# =============================================================================
+
+[contextor]
+enable_episodic        = true
+enable_semantic        = true
+token_budget_low       = 200
+token_budget_medium    = 500
+token_budget_high      = 1000
+token_budget_emergency = 2000
+max_results_low        = 2
+max_results_medium     = 4
+max_results_high       = 6
+max_results_emergency  = 10
+min_relevance          = 0.15
+max_conversation_turns = 10
+weight_similarity      = 0.40
+weight_recency         = 0.20
+weight_importance      = 0.20
+weight_activation      = 0.20
+recency_window_ms      = 3600000
+chars_per_token        = 4
+
+# =============================================================================
+#  § Anti-Sycophancy Guard
+# =============================================================================
+
+[anti_sycophancy]
+ring_size         = 20
+block_threshold   = 0.40
+warn_threshold    = 0.25
+max_regenerations = 3
+
+# =============================================================================
+#  § Checkpoint
+# =============================================================================
+
+[checkpoint]
+version   = 1
+max_bytes = 65536
+
+# =============================================================================
+#  § Context Package
+# =============================================================================
+
+[context_package]
+max_size = 65536

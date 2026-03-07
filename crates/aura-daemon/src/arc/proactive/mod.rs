@@ -8,10 +8,12 @@ pub mod morning;
 pub mod routines;
 pub mod suggestions;
 pub mod welcome;
+pub mod attention;
 
 pub use morning::{BriefingSection, MorningBriefing};
 pub use routines::{Automation, DetectedRoutine, RoutineManager};
 pub use suggestions::{Suggestion, SuggestionEngine, SuggestionTrigger};
+pub use attention::{AttentionState, ForestGuardian};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
@@ -77,6 +79,8 @@ pub struct ProactiveEngine {
     pub suggestions: SuggestionEngine,
     /// Routine detection and automation sub-engine.
     pub routines: RoutineManager,
+    /// Monitor to protect user from Attention Lock-in / Doomscrolling
+    pub forest_guardian: ForestGuardian,
     /// Initiative budget: [0.0, 1.0]. Each action costs points; regenerates over time.
     initiative_budget: f32,
     /// Number of suggestions surfaced today.
@@ -95,6 +99,7 @@ impl ProactiveEngine {
             morning: MorningBriefing::new(),
             suggestions: SuggestionEngine::new(),
             routines: RoutineManager::new(),
+            forest_guardian: ForestGuardian::new(),
             initiative_budget: MAX_INITIATIVE_BUDGET,
             daily_suggestions_count: 0,
             last_reset_day: 0,

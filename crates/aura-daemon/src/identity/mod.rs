@@ -8,6 +8,7 @@ pub mod proactive_consent;
 pub mod prompt_personality;
 pub mod relationship;
 pub mod user_profile;
+pub mod thinking_partner;
 
 pub use affective::{AffectiveEngine, MoodEvent};
 pub use anti_sycophancy::{GateResult, SycophancyGuard, SycophancyVerdict};
@@ -25,6 +26,7 @@ pub use proactive_consent::{ProactiveConsent, ProactiveSettings};
 pub use prompt_personality::PersonalityPromptInjector;
 pub use relationship::{InteractionType, RelationshipTracker, RiskLevel, UserRelationship};
 pub use user_profile::UserProfile;
+pub use thinking_partner::{ChallengeLevel, ThinkingPartner};
 
 // ---------------------------------------------------------------------------
 // Unified Identity Engine — facade over all identity subsystems
@@ -45,6 +47,8 @@ pub struct IdentityEngine {
     pub user_profile: Option<UserProfile>,
     /// Epistemic awareness: tracks what AURA knows vs. doesn't know (§5.2).
     pub epistemic: EpistemicAwareness,
+    /// Shaping Feature: Cognitive anti-atrophy coach.
+    pub coach: ThinkingPartner,
 }
 
 impl IdentityEngine {
@@ -59,6 +63,7 @@ impl IdentityEngine {
             truth_framework: TruthFramework::new(),
             user_profile: None,
             epistemic: EpistemicAwareness::new(),
+            coach: ThinkingPartner::new(),
         }
     }
 

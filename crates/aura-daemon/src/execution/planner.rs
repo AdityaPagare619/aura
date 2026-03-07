@@ -577,6 +577,8 @@ pub struct PlanExplanation {
 /// A cached plan entry keyed by goal description hash.
 #[derive(Debug, Clone)]
 struct CachedPlan {
+    /// Original goal description for semantic matching.
+    description: String,
     /// Hash of the goal description (lowercase, trimmed).
     description_hash: u64,
     /// The cached plan.
@@ -655,11 +657,29 @@ impl EnhancedPlanner {
         hash
     }
 
+    /// Computes a lightweight semantic similarity score proxy (Jaccard overlap).
+    /// In a full deployment, this would use the `NeocortexClient` for vector embeddings.
+    fn compute_semantic_similarity(a: &str, b: &str) -> f32 {
+        let a_words: std::collections::HashSet<_> = a.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+        let b_words: std::collections::HashSet<_> = b.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+        
+        if a_words.is_empty() || b_words.is_empty() {
+            return 0.0;
+        }
+        
+        let intersection = a_words.intersection(&b_words).count();
+        let union = a_words.union(&b_words).count();
+        
+        intersection as f32 / union as f32
+    }
+
     // ── Plan Caching ────────────────────────────────────────────────────
 
-    /// Look up a cached plan for the given goal description.
+    /// Look up a cached plan for the given goal description using exact hash or semantic similarity.
     pub fn cache_lookup(&mut self, description: &str) -> Option<&ActionPlan> {
         let hash = Self::hash_description(description);
+        
+        // Phase 1: Exact Hash Match (O(N) iteration, O(1) cmp)
         for entry in self.cache.iter_mut() {
             if entry.description_hash == hash && entry.success_rate >= 0.5 {
                 entry.hit_count += 1;
@@ -667,6 +687,29 @@ impl EnhancedPlanner {
                 return Some(&entry.plan);
             }
         }
+
+        // Phase 2: Semantic Similarity Match (Threshold > 0.75)
+        let mut best_match: Option<usize> = None;
+        let mut best_score = 0.75_f32; // Minimum threshold 75% similarity
+
+        for (i, entry) in self.cache.iter().enumerate() {
+            if entry.success_rate >= 0.5 {
+                let score = Self::compute_semantic_similarity(description, &entry.description);
+                if score > best_score {
+                    best_score = score;
+                    best_match = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_match {
+            let entry = &mut self.cache[idx];
+            entry.hit_count += 1;
+            entry.last_used_ms = self.current_time_ms;
+            tracing::debug!(score = best_score, "semantic plan cache hit");
+            return Some(&entry.plan);
+        }
+
         None
     }
 
@@ -699,6 +742,7 @@ impl EnhancedPlanner {
         }
 
         self.cache.push(CachedPlan {
+            description: description.to_string(),
             description_hash: hash,
             plan,
             hit_count: 1,

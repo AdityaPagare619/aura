@@ -50,6 +50,7 @@ use crate::routing::classifier::RouteClassifier;
 use crate::routing::system1::System1;
 use crate::routing::system2::System2;
 use crate::screen::anti_bot::AntiBot;
+use crate::extensions::{CapabilityLoader, ExtensionDiscovery};
 
 // ---------------------------------------------------------------------------
 // SubSystems — all processing modules instantiated during startup
@@ -113,6 +114,12 @@ pub struct SubSystems {
     /// Android platform state (power, thermal, doze, notifications, sensors, connectivity).
     pub platform: Option<PlatformState>,
 
+    // -- Extension subsystem (non-critical) --------------------------------
+    /// Capability loader for hot-reloading extensions.
+    pub capability_loader: Option<CapabilityLoader>,
+    /// Smart extension discovery engine.
+    pub extension_discovery: Option<ExtensionDiscovery>,
+
     // -- IPC subsystem (non-critical, connects later) ----------------------
     /// Neocortex IPC client — starts disconnected; connects in main_loop.
     pub neocortex_client: Option<NeocortexClient>,
@@ -151,6 +158,8 @@ impl std::fmt::Debug for SubSystems {
             .field("goal_registry", &self.goal_registry.is_some())
             .field("anti_bot", &self.anti_bot.is_some())
             .field("platform", &self.platform.is_some())
+            .field("capability_loader", &self.capability_loader.is_some())
+            .field("extension_discovery", &self.extension_discovery.is_some())
             .field("neocortex_client", &self.neocortex_client.is_some())
             .field("arc", &self.arc.is_some())
             .field("voice_bridge", &self.voice_bridge.is_some())
@@ -599,6 +608,15 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
         "platform subsystem initialised"
     );
 
+    // -- 8.5. Extensions (non-critical) ------------------------------------
+    let capability_loader = init_non_critical("capability_loader", || CapabilityLoader::new());
+    let extension_discovery = init_non_critical("extension_discovery", || ExtensionDiscovery::new());
+    tracing::info!(
+        capability_loader = capability_loader.is_some(),
+        extension_discovery = extension_discovery.is_some(),
+        "extension subsystems initialised"
+    );
+
     // -- 9. IPC (non-critical, starts disconnected) ------------------------
     let neocortex_client =
         init_non_critical("neocortex_client", || NeocortexClient::disconnected());
@@ -630,6 +648,8 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
         goal_registry,
         anti_bot,
         platform,
+        capability_loader,
+        extension_discovery,
         neocortex_client,
         arc,
         // Bridge handles are `None` at startup — they are spawned in

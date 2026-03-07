@@ -14,6 +14,7 @@ pub mod arc;
 pub mod bridge;
 pub mod daemon_core;
 pub mod execution;
+pub mod extensions;
 pub mod goals;
 pub mod identity;
 pub mod ipc;

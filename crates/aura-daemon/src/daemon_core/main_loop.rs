@@ -207,11 +207,31 @@ impl LoopSubsystems {
 // ---------------------------------------------------------------------------
 
 /// Current wall-clock time in milliseconds since UNIX epoch.
+/// Guaranteed to be strictly monotonic (never goes backwards) even if the system clock changes.
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
+    static LAST_TIME_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis() as u64;
+    
+    let mut last = LAST_TIME_MS.load(std::sync::atomic::Ordering::Acquire);
+    loop {
+        if now <= last {
+            // Clock went backwards or didn't move! Advance by 1 ms to guarantee monotonicity.
+            let next = last + 1;
+            match LAST_TIME_MS.compare_exchange_weak(last, next, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::Relaxed) {
+                Ok(_) => return next,
+                Err(x) => last = x,
+            }
+        } else {
+            match LAST_TIME_MS.compare_exchange_weak(last, now, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::Relaxed) {
+                Ok(_) => return now,
+                Err(x) => last = x,
+            }
+        }
+    }
 }
 
 /// Best-effort send of a [`DaemonResponse`] to the bridge layer.

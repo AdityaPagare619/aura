@@ -13,6 +13,9 @@ pub mod monitor;
 pub mod etg;
 pub mod executor;
 pub mod planner;
+pub mod react;
+pub mod learning;
+pub mod tools;
 
 pub use cycle::{CycleDetector, CycleTier, TransitionEntry};
 pub use retry::{RetryPolicy, retry_with_backoff};
@@ -20,3 +23,4 @@ pub use monitor::{ExecutionMonitor, InvariantViolation};
 pub use etg::EtgStore;
 pub use executor::{Executor, ExecutionOutcome};
 pub use planner::{ActionPlanner, PlanError};
+pub use react::{SemanticReact, CognitiveState, EscalationContext};

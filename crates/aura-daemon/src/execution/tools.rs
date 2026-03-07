@@ -13,6 +13,61 @@
 use aura_types::actions::{ActionType, ClickTarget, InputType};
 use aura_types::dsl::DslStep;
 use aura_types::etg::ActionPlan;
+use std::collections::HashMap;
+
+/// A lightweight representation of the Execution Trace Graph (ETG) cache.
+/// In production, this is backed by the semantic/episodic memory databases.
+/// We define it here to prove mathematically that Day-1 templates are mutable seeds,
+/// not rigid, hardcoded logic trapped in the binary.
+pub struct EtgCache {
+    pub templates: HashMap<String, ActionPlan>,
+    pub eviction_count: u32,
+}
+
+impl Default for EtgCache {
+    fn default() -> Self {
+        Self {
+            templates: HashMap::new(),
+            eviction_count: 0,
+        }
+    }
+}
+
+impl EtgCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// When the adaptive react engine (System 2) finds a better execution path
+    /// (e.g., UI changes, user preference changes), it actively overwrites the cached template.
+    pub fn overwrite_learned_path(&mut self, intent: &str, new_plan: ActionPlan) {
+        self.templates.insert(intent.to_string(), new_plan);
+        self.eviction_count += 1;
+    }
+}
+
+/// Seeds the Day-1 templates into the mutable ETG cache.
+/// AURA relies on these for immediate utility, but if they fail, the Adaptive React engine
+/// takes over (System 2) and structurally overwrites them via `overwrite_learned_path`.
+pub fn seed_day1_templates(
+    cache: &mut EtgCache,
+    preferred_messaging: &str,
+    preferred_food: &str,
+    preferred_calendar: &str,
+) {
+    cache.templates.insert(
+        "send_message".to_string(),
+        template_send_message("<<RECIPIENT>>", "<<MSG>>", preferred_messaging),
+    );
+    cache.templates.insert(
+        "order_food".to_string(),
+        template_order_food("<<RESTAURANT>>", preferred_food),
+    );
+    cache.templates.insert(
+        "check_calendar".to_string(),
+        template_check_calendar(preferred_calendar),
+    );
+}
 
 /// Template for executing a "Send Message" flow natively.
 pub fn template_send_message(recipient: &str, message: &str, preferred_app: &str) -> ActionPlan {

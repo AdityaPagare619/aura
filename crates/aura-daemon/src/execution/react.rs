@@ -42,13 +42,21 @@ pub struct EscalationContext {
 #[derive(Debug, Clone)]
 pub struct SemanticReact {
     /// Base confidence required to stay in System 1.
-    base_confidence_threshold: f32,
+    pub base_confidence_threshold: f32,
+    /// Number of consecutive failures before forcing escalation to System 2.
+    /// Default: 3, but can be raised or lowered based on user tolerance.
+    pub consecutive_failure_threshold: u32,
+    /// Critical battery level that restricts System 2 unless highly urgent.
+    /// Default: 0.15 (15%), but adjusts based on device aging or user behavior.
+    pub critical_battery_threshold: f32,
 }
 
 impl Default for SemanticReact {
     fn default() -> Self {
         Self {
             base_confidence_threshold: 0.70, // Start demanding 70% confidence to stay in System 1
+            consecutive_failure_threshold: 3,
+            critical_battery_threshold: 0.15,
         }
     }
 }
@@ -56,6 +64,18 @@ impl Default for SemanticReact {
 impl SemanticReact {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Allows the Learning Engine to organically adjust escalation thresholds based on 
+    /// historical success/failure rates, rather than being permanently hardcoded.
+    pub fn adapt_thresholds(&mut self, feedback_delta: f32, successful_runs: u32) {
+        // Precise System Modeling: State mutation via learning event.
+        self.base_confidence_threshold = (self.base_confidence_threshold + feedback_delta).clamp(0.40, 0.95);
+        
+        if successful_runs > 50 {
+            // User is highly tolerant, or system is highly stable. Expand failure tolerance.
+            self.consecutive_failure_threshold = 4;
+        }
     }
 
     /// Determines the optimal cognitive state given the current context.
@@ -70,13 +90,13 @@ impl SemanticReact {
             return CognitiveState::System1;
         }
 
-        if ctx.battery_level < 0.15 && ctx.amygdala_arousal < 0.8 {
-            warn!("Low battery (<15%) and non-critical task: FORCING System 1.");
+        if ctx.battery_level < self.critical_battery_threshold && ctx.amygdala_arousal < 0.8 {
+            warn!("Low battery (<{}%) and non-critical task: FORCING System 1.", self.critical_battery_threshold * 100.0);
             return CognitiveState::System1;
         }
 
-        if ctx.consecutive_failures >= 3 {
-            info!("Consecutive failure threshold reached (3): ESCALATING to System 2.");
+        if ctx.consecutive_failures >= self.consecutive_failure_threshold {
+            info!("Consecutive failure threshold reached ({}): ESCALATING to System 2.", self.consecutive_failure_threshold);
             return CognitiveState::System2;
         }
 

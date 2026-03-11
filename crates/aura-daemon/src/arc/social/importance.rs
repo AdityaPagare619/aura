@@ -38,6 +38,17 @@ const RECENCY_HALF_LIFE: f64 = 7.0 * 86400.0;
 /// Depth normalization: average words per message considered "deep".
 const DEPTH_NORM_DEEP: f32 = 50.0;
 
+/// Default observation window for frequency scoring (days).
+pub(crate) const DEFAULT_OBSERVATION_WINDOW_DAYS: u32 = 30;
+
+// ---------------------------------------------------------------------------
+// Serde default helpers
+// ---------------------------------------------------------------------------
+
+fn default_observation_window_days() -> u32 {
+    DEFAULT_OBSERVATION_WINDOW_DAYS
+}
+
 // ---------------------------------------------------------------------------
 // ImportanceScorer
 // ---------------------------------------------------------------------------
@@ -49,6 +60,9 @@ pub struct ImportanceScorer {
     last_run_at: i64,
     /// Number of scoring cycles completed.
     cycle_count: u64,
+    /// Observation window in days used for frequency scoring.
+    #[serde(default = "default_observation_window_days")]
+    observation_window_days: u32,
 }
 
 impl ImportanceScorer {
@@ -58,13 +72,25 @@ impl ImportanceScorer {
         Self {
             last_run_at: 0,
             cycle_count: 0,
+            observation_window_days: DEFAULT_OBSERVATION_WINDOW_DAYS,
         }
+    }
+
+    /// Configured observation window in days for frequency scoring.
+    #[must_use]
+    pub(crate) fn observation_window_days(&self) -> u32 {
+        self.observation_window_days
     }
 
     /// Compute importance for a single contact.
     ///
     /// `now` is the current unix-epoch timestamp in seconds.
     /// `observation_window_days` is how many days of data to consider for frequency.
+    ///
+    /// Weights adapt to the contact's interaction profile:
+    /// - High-frequency contacts: frequency weight boosted.
+    /// - Deep-but-rare contacts: depth weight boosted.
+    /// - Explicitly marked contacts: explicit weight boosted.
     #[must_use]
     pub fn compute_importance(
         &self,
@@ -77,10 +103,48 @@ impl ImportanceScorer {
         let depth_score = self.depth_score(contact);
         let explicit_score = self.explicit_score(contact);
 
-        let importance = W_FREQ * freq_score
-            + W_RECENCY * recency_score
-            + W_DEPTH * depth_score
-            + W_EXPLICIT * explicit_score;
+        // Adaptive weighting: derive emphasis from contact profile.
+        // Start from base weights and redistribute based on signal strength.
+        let mut w_freq = W_FREQ;
+        let mut w_recency = W_RECENCY;
+        let mut w_depth = W_DEPTH;
+        let mut w_explicit = W_EXPLICIT;
+
+        // High-frequency contacts: boost frequency, reduce depth weight.
+        // "If I talk to someone daily, consistency matters more than message depth."
+        if freq_score > 0.7 {
+            let emphasis = (freq_score - 0.7) / 0.3; // 0.0–1.0
+            w_freq += 0.1 * emphasis;
+            w_depth -= 0.1 * emphasis;
+        }
+
+        // Deep-but-rare contacts: boost depth, reduce frequency weight.
+        // "A mentor I talk to monthly with deep conversations is highly important."
+        if depth_score > 0.6 && freq_score < 0.4 {
+            let emphasis = depth_score * (1.0 - freq_score); // higher when very deep + very rare
+            w_depth += 0.1 * emphasis;
+            w_freq -= 0.1 * emphasis;
+        }
+
+        // Explicit override: if the user explicitly marked importance, honor it more.
+        if contact.explicit_importance.is_some() {
+            w_explicit += 0.05;
+            // Take from frequency and recency equally
+            w_freq -= 0.025;
+            w_recency -= 0.025;
+        }
+
+        // Clamp weights to positive and renormalize to sum to 1.0.
+        w_freq = w_freq.max(0.05);
+        w_recency = w_recency.max(0.05);
+        w_depth = w_depth.max(0.05);
+        w_explicit = w_explicit.max(0.05);
+        let total_w = w_freq + w_recency + w_depth + w_explicit;
+
+        let importance = (w_freq / total_w) * freq_score
+            + (w_recency / total_w) * recency_score
+            + (w_depth / total_w) * depth_score
+            + (w_explicit / total_w) * explicit_score;
 
         importance.clamp(0.0, 1.0)
     }

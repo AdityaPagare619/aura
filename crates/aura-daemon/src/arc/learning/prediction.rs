@@ -86,14 +86,23 @@ const ROUTINE_CHANGE_WINDOW: usize = 140;
 /// indicates the user's routine has fundamentally changed.
 const ROUTINE_CHANGE_THRESHOLD: f32 = 0.7;
 
-/// Weight for temporal predictions in the fusion.
-const TEMPORAL_WEIGHT: f32 = 0.45;
+/// Base weight for temporal predictions (used when no accuracy data exists).
+/// With the Dirichlet-smoothed adaptive scheme, actual weights self-calibrate
+/// from per-source prediction accuracy. These serve as documentation only.
+const TEMPORAL_WEIGHT_BASE: f32 = 0.45;
+const SEQUENCE_WEIGHT_BASE: f32 = 0.35;
+const CONTEXT_WEIGHT_BASE: f32 = 0.20;
 
-/// Weight for sequential predictions in the fusion.
-const SEQUENCE_WEIGHT: f32 = 0.35;
+/// Dirichlet smoothing parameter (prior pseudo-count per source).
+/// α=1.0 gives a uniform prior: with no data, all sources get equal weight.
+/// Higher α makes the system more conservative (slower to shift weights).
+const DIRICHLET_ALPHA: f32 = 1.0;
 
-/// Weight for contextual predictions in the fusion.
-const CONTEXT_WEIGHT: f32 = 0.20;
+/// Source indices for the accuracy tracking arrays.
+const SOURCE_TEMPORAL: usize = 0;
+const SOURCE_SEQUENCE: usize = 1;
+const SOURCE_CONTEXT: usize = 2;
+const NUM_SOURCES: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Prediction
@@ -176,6 +185,13 @@ pub struct PredictionEngine {
     routine_change_detected: bool,
     /// Timestamp of last routine change detection.
     last_routine_change_ms: u64,
+    /// Per-source prediction accuracy: how many times each source contributed
+    /// to a correct prediction.  Indexed by SOURCE_TEMPORAL / _SEQUENCE / _CONTEXT.
+    source_hits: [u32; NUM_SOURCES],
+    /// Per-source total opportunities: how many times each source contributed
+    /// to ANY prediction that was later evaluated.  Used with `source_hits`
+    /// to compute Dirichlet-smoothed adaptive weights.
+    source_totals: [u32; NUM_SOURCES],
     /// Cache of last prediction set (for surprise computation).
     #[serde(skip)]
     last_predictions: Vec<Prediction>,
@@ -192,8 +208,51 @@ impl PredictionEngine {
             total_surprise: 0.0,
             routine_change_detected: false,
             last_routine_change_ms: 0,
+            source_hits: [0; NUM_SOURCES],
+            source_totals: [0; NUM_SOURCES],
             last_predictions: Vec::new(),
         }
+    }
+
+    /// Compute adaptive fusion weights using Dirichlet-smoothed proportions.
+    ///
+    /// Formula per source:
+    /// ```text
+    /// w_i = (hits_i + α) / Σ_j(hits_j + α)
+    /// ```
+    ///
+    /// With no data (all hits=0): weights are uniform (1/3 each).
+    /// As data accumulates: sources that predict correctly gain weight.
+    /// The α prior prevents any source from reaching zero weight — AURA
+    /// always listens to all signals, just trusts proven sources more.
+    #[must_use]
+    fn compute_adaptive_weights(&self) -> [f32; NUM_SOURCES] {
+        let mut raw = [0.0_f32; NUM_SOURCES];
+        let mut sum = 0.0_f32;
+
+        for i in 0..NUM_SOURCES {
+            // Dirichlet: (hits + α) — smoothed count
+            raw[i] = self.source_hits[i] as f32 + DIRICHLET_ALPHA;
+            sum += raw[i];
+        }
+
+        if sum > 0.0 {
+            for w in &mut raw {
+                *w /= sum;
+            }
+        } else {
+            // Fallback: equal weights (shouldn't happen with α > 0)
+            let eq = 1.0 / NUM_SOURCES as f32;
+            raw = [eq; NUM_SOURCES];
+        }
+
+        raw
+    }
+
+    /// Current adaptive fusion weights [temporal, sequence, context].
+    #[must_use]
+    pub fn current_weights(&self) -> [f32; NUM_SOURCES] {
+        self.compute_adaptive_weights()
     }
 
     /// Generate predictions for the current moment.
@@ -304,21 +363,24 @@ impl PredictionEngine {
             }
         };
 
-        add_source(&temporal_preds, TEMPORAL_WEIGHT, &mut scores, &|id, conf| {
+        // Adaptive weights: self-calibrate from historical per-source accuracy
+        let weights = self.compute_adaptive_weights();
+
+        add_source(&temporal_preds, weights[SOURCE_TEMPORAL], &mut scores, &|id, conf| {
             PredictionSource::Temporal {
                 pattern_id: id,
                 confidence: conf,
             }
         });
 
-        add_source(&sequence_preds, SEQUENCE_WEIGHT, &mut scores, &|id, conf| {
+        add_source(&sequence_preds, weights[SOURCE_SEQUENCE], &mut scores, &|id, conf| {
             PredictionSource::Sequence {
                 pattern_id: id,
                 confidence: conf,
             }
         });
 
-        add_source(&context_preds, CONTEXT_WEIGHT, &mut scores, &|id, conf| {
+        add_source(&context_preds, weights[SOURCE_CONTEXT], &mut scores, &|id, conf| {
             PredictionSource::Context {
                 pattern_id: id,
                 confidence: conf,
@@ -396,6 +458,27 @@ impl PredictionEngine {
                 // Action was predicted — surprise inversely proportional
                 // to its confidence
                 let s = 1.0 - pred.confidence;
+
+                // ── Adaptive weight learning ──
+                // Credit each source that contributed to this correct prediction.
+                // This drives Dirichlet weights: accurate sources gain weight.
+                for source in &pred.sources {
+                    match source {
+                        PredictionSource::Temporal { .. } => {
+                            self.source_hits[SOURCE_TEMPORAL] =
+                                self.source_hits[SOURCE_TEMPORAL].saturating_add(1);
+                        }
+                        PredictionSource::Sequence { .. } => {
+                            self.source_hits[SOURCE_SEQUENCE] =
+                                self.source_hits[SOURCE_SEQUENCE].saturating_add(1);
+                        }
+                        PredictionSource::Context { .. } => {
+                            self.source_hits[SOURCE_CONTEXT] =
+                                self.source_hits[SOURCE_CONTEXT].saturating_add(1);
+                        }
+                    }
+                }
+
                 (s, Some(rank))
             }
             None => {
@@ -410,6 +493,28 @@ impl PredictionEngine {
                 }
             }
         };
+
+        // ── Track total opportunities per source ──
+        // Every source that participated in the prediction set gets a "total"
+        // increment, regardless of whether the prediction was correct.
+        for pred in &self.last_predictions {
+            for source in &pred.sources {
+                match source {
+                    PredictionSource::Temporal { .. } => {
+                        self.source_totals[SOURCE_TEMPORAL] =
+                            self.source_totals[SOURCE_TEMPORAL].saturating_add(1);
+                    }
+                    PredictionSource::Sequence { .. } => {
+                        self.source_totals[SOURCE_SEQUENCE] =
+                            self.source_totals[SOURCE_SEQUENCE].saturating_add(1);
+                    }
+                    PredictionSource::Context { .. } => {
+                        self.source_totals[SOURCE_CONTEXT] =
+                            self.source_totals[SOURCE_CONTEXT].saturating_add(1);
+                    }
+                }
+            }
+        }
 
         // Record in rolling history
         self.surprise_history.push(surprise);
@@ -705,6 +810,7 @@ mod tests {
         engine.surprise_history.push(0.5);
         engine.total_observations = 10;
         engine.total_surprise = 5.0;
+        engine.source_hits = [5, 3, 2];
 
         let json = serde_json::to_string(&engine).expect("serialize");
         let back: PredictionEngine = serde_json::from_str(&json).expect("deserialize");
@@ -712,5 +818,66 @@ mod tests {
         assert_eq!(back.total_observations, 10);
         assert!((back.total_surprise - 5.0).abs() < f64::EPSILON);
         assert_eq!(back.surprise_history.len(), 1);
+        assert_eq!(back.source_hits, [5, 3, 2]);
+    }
+
+    #[test]
+    fn test_adaptive_weights_start_equal() {
+        let engine = PredictionEngine::new();
+        let w = engine.current_weights();
+        // With no data and α=1.0:  w_i = 1 / 3 ≈ 0.333
+        let expected = 1.0 / 3.0;
+        for wi in &w {
+            assert!(
+                (*wi - expected).abs() < 0.01,
+                "initial weights should be ≈ 1/3, got {wi}"
+            );
+        }
+        // Sum must equal 1.0
+        let sum: f32 = w.iter().sum();
+        assert!((sum - 1.0).abs() < 0.001, "weights must sum to 1.0, got {sum}");
+    }
+
+    #[test]
+    fn test_adaptive_weights_shift_with_accuracy() {
+        let mut engine = PredictionEngine::new();
+        // Simulate: temporal source wins 20 times, others never
+        engine.source_hits = [20, 0, 0];
+        engine.source_totals = [30, 30, 30];
+        let w = engine.current_weights();
+
+        // Temporal should have the highest weight
+        assert!(
+            w[0] > w[1] && w[0] > w[2],
+            "temporal should dominate: {w:?}"
+        );
+        // But no source should be zero (Dirichlet prior prevents this)
+        assert!(
+            w[1] > 0.0 && w[2] > 0.0,
+            "no source should be zero: {w:?}"
+        );
+        // Sum must equal 1.0
+        let sum: f32 = w.iter().sum();
+        assert!((sum - 1.0).abs() < 0.001, "weights must sum to 1.0, got {sum}");
+    }
+
+    #[test]
+    fn test_correct_prediction_credits_source() {
+        let mut engine = PredictionEngine::new();
+        let detector = setup_detector_with_temporal_patterns();
+
+        // Generate predictions at 9am Monday
+        engine.predict(&detector, 540.0, 0, &[], &[]);
+
+        let hits_before = engine.source_hits;
+
+        // Observe the predicted action — should credit temporal source
+        engine.compute_surprise("check_email", 1000);
+
+        // Temporal hits should have increased (since our test patterns are temporal)
+        assert!(
+            engine.source_hits[0] > hits_before[0],
+            "correct prediction should credit temporal source"
+        );
     }
 }

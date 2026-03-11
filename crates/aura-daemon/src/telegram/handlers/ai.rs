@@ -1,12 +1,13 @@
 //! AI command handlers: /ask, /think, /plan, /explain, /summarize, /translate.
 //!
-//! These commands forward requests to the Neocortex (AURA's LLM backend)
-//! via the daemon's IPC channels. Since the Neocortex call is async and
-//! potentially slow, handlers enqueue a "thinking..." placeholder and
-//! update it when the response arrives.
+//! These commands are **daemon-routed** — when the cognitive pipeline is
+//! available, `dispatch()` in `mod.rs` forwards them via [`UserCommandTx`]
+//! and these handlers are never called.
 //!
-//! Until the IPC integration is wired, handlers return stub responses
-//! acknowledging the request.
+//! The functions below are **fallback handlers**: they execute only when the
+//! daemon channel is unavailable (channel closed, daemon starting up, or
+//! running in degraded mode). They must be HONEST — never pretend the LLM
+//! is processing when it isn't.
 
 use aura_types::errors::AuraError;
 use tracing::instrument;
@@ -15,82 +16,113 @@ use super::{HandlerContext, HandlerResponse};
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
-/// `/ask <question>` — Ask AURA a question.
+/// `/ask <question>` — Fallback when the Neocortex pipeline is unavailable.
+///
+/// This handler only runs if the daemon channel is closed or absent.
+/// It acknowledges the user's question honestly and explains the situation.
 #[instrument(skip(ctx))]
 pub fn handle_ask(ctx: &HandlerContext<'_>, question: &str) -> Result<HandlerResponse, AuraError> {
     if question.is_empty() {
         return Ok(HandlerResponse::text("Usage: /ask <question>"));
     }
 
-    // TODO: Forward to Neocortex via IPC channel.
-    // For now, enqueue a placeholder and return acknowledgement.
-    let _ = ctx.queue.enqueue_text(
-        ctx.chat_id,
-        &format!("Thinking about: {}", truncate(question, 200)),
-        None,
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        question = truncate(question, 100),
+        "AI fallback: /ask reached local handler — daemon pipeline unavailable"
     );
 
     Ok(HandlerResponse::Html(format!(
-        "<b>Question received</b>\n\n<i>{}</i>\n\n\
-         Processing via Neocortex... response will follow.",
-        escape_html(truncate(question, 500))
+        "<b>Cognitive Engine Unavailable</b>\n\n\
+         Your question: <i>{}</i>\n\n\
+         AURA's reasoning engine is not yet connected. \
+         This happens during startup or if the inference process is loading.\n\n\
+         Your question was <b>not</b> processed. Please retry in a moment with:\n\
+         <code>/ask {}</code>",
+        escape_html(truncate(question, 500)),
+        escape_html(truncate(question, 100)),
     )))
 }
 
-/// `/think <problem>` — Deep reasoning on a problem.
-#[instrument(skip(_ctx))]
+/// `/think <problem>` — Fallback when the Neocortex pipeline is unavailable.
+#[instrument(skip(ctx))]
 pub fn handle_think(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     problem: &str,
 ) -> Result<HandlerResponse, AuraError> {
     if problem.is_empty() {
         return Ok(HandlerResponse::text("Usage: /think <problem>"));
     }
 
-    // TODO: Forward to Neocortex with reasoning mode.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        problem = truncate(problem, 100),
+        "AI fallback: /think reached local handler — daemon pipeline unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Deep Reasoning</b>\n\n<i>{}</i>\n\n\
-         Engaging extended reasoning... this may take a moment.",
-        escape_html(truncate(problem, 500))
+        "<b>Cognitive Engine Unavailable</b>\n\n\
+         Problem: <i>{}</i>\n\n\
+         Deep reasoning requires the inference engine, which is currently \
+         offline or starting up.\n\n\
+         Your request was <b>not</b> processed. Please retry shortly.",
+        escape_html(truncate(problem, 500)),
     )))
 }
 
-/// `/plan <goal>` — Generate a plan for a goal.
-#[instrument(skip(_ctx))]
-pub fn handle_plan(_ctx: &HandlerContext<'_>, goal: &str) -> Result<HandlerResponse, AuraError> {
+/// `/plan <goal>` — Fallback when the Neocortex pipeline is unavailable.
+#[instrument(skip(ctx))]
+pub fn handle_plan(ctx: &HandlerContext<'_>, goal: &str) -> Result<HandlerResponse, AuraError> {
     if goal.is_empty() {
         return Ok(HandlerResponse::text("Usage: /plan <goal>"));
     }
 
-    // TODO: Forward to Neocortex planning pipeline.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        goal = truncate(goal, 100),
+        "AI fallback: /plan reached local handler — daemon pipeline unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Plan Generation</b>\n\nGoal: <i>{}</i>\n\n\
-         Generating action plan... response will follow.",
-        escape_html(truncate(goal, 500))
+        "<b>Cognitive Engine Unavailable</b>\n\n\
+         Goal: <i>{}</i>\n\n\
+         Plan generation requires the inference engine, which is currently \
+         offline or starting up.\n\n\
+         Your request was <b>not</b> processed. Please retry shortly.",
+        escape_html(truncate(goal, 500)),
     )))
 }
 
-/// `/explain <topic>` — Explain a topic.
-#[instrument(skip(_ctx))]
+/// `/explain <topic>` — Fallback when the Neocortex pipeline is unavailable.
+#[instrument(skip(ctx))]
 pub fn handle_explain(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     topic: &str,
 ) -> Result<HandlerResponse, AuraError> {
     if topic.is_empty() {
         return Ok(HandlerResponse::text("Usage: /explain <topic>"));
     }
 
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        topic = truncate(topic, 100),
+        "AI fallback: /explain reached local handler — daemon pipeline unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Explanation</b>\n\nTopic: <i>{}</i>\n\n\
-         Preparing explanation... response will follow.",
-        escape_html(truncate(topic, 500))
+        "<b>Cognitive Engine Unavailable</b>\n\n\
+         Topic: <i>{}</i>\n\n\
+         Explanations require the inference engine, which is currently \
+         offline or starting up.\n\n\
+         Your request was <b>not</b> processed. Please retry shortly.",
+        escape_html(truncate(topic, 500)),
     )))
 }
 
-/// `/summarize <text>` — Summarize text.
-#[instrument(skip(_ctx))]
+/// `/summarize <text>` — Fallback when the Neocortex pipeline is unavailable.
+#[instrument(skip(ctx))]
 pub fn handle_summarize(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     text: &str,
 ) -> Result<HandlerResponse, AuraError> {
     if text.is_empty() {
@@ -98,16 +130,25 @@ pub fn handle_summarize(
     }
 
     let word_count = text.split_whitespace().count();
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        word_count,
+        "AI fallback: /summarize reached local handler — daemon pipeline unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Summarize</b>\n\nInput: {word_count} words\n\n\
-         Generating summary... response will follow."
+        "<b>Cognitive Engine Unavailable</b>\n\n\
+         Input: {word_count} words\n\n\
+         Summarization requires the inference engine, which is currently \
+         offline or starting up.\n\n\
+         Your text was <b>not</b> processed. Please retry shortly."
     )))
 }
 
-/// `/translate <text> <lang>` — Translate text.
-#[instrument(skip(_ctx))]
+/// `/translate <text> <lang>` — Fallback when the Neocortex pipeline is unavailable.
+#[instrument(skip(ctx))]
 pub fn handle_translate(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     text: &str,
     target_lang: &str,
 ) -> Result<HandlerResponse, AuraError> {
@@ -115,11 +156,21 @@ pub fn handle_translate(
         return Ok(HandlerResponse::text("Usage: /translate <text> <lang>"));
     }
 
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        target_lang,
+        text_len = text.len(),
+        "AI fallback: /translate reached local handler — daemon pipeline unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Translate</b>\n\nTarget: {target_lang}\n\
+        "<b>Cognitive Engine Unavailable</b>\n\n\
+         Target language: <code>{target_lang}</code>\n\
          Input: <i>{}</i>\n\n\
-         Translating... response will follow.",
-        escape_html(truncate(text, 300))
+         Translation requires the inference engine, which is currently \
+         offline or starting up.\n\n\
+         Your text was <b>not</b> processed. Please retry shortly.",
+        escape_html(truncate(text, 300)),
     )))
 }
 
@@ -166,6 +217,8 @@ mod tests {
             audit: aud,
             queue: q,
             startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: None,
         }
     }
 
@@ -184,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ask_valid() {
+    fn test_ask_fallback_is_honest() {
         let mut sec = SecurityGate::new(vec![42]);
         let mut aud = AuditLog::new(100);
         let db = Connection::open_in_memory().unwrap();
@@ -193,8 +246,48 @@ mod tests {
 
         match handle_ask(&ctx, "what is rust?").unwrap() {
             HandlerResponse::Html(html) => {
-                assert!(html.contains("Question received"));
+                assert!(html.contains("Cognitive Engine Unavailable"));
                 assert!(html.contains("what is rust?"));
+                assert!(html.contains("not"));
+                // Must NOT contain misleading "Processing" or "Thinking"
+                assert!(!html.contains("Processing via Neocortex"));
+                assert!(!html.contains("Thinking about"));
+            }
+            other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_think_fallback_is_honest() {
+        let mut sec = SecurityGate::new(vec![42]);
+        let mut aud = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let q = MessageQueue::open(db).unwrap();
+        let ctx = make_ctx(&mut sec, &mut aud, &q);
+
+        match handle_think(&ctx, "halting problem").unwrap() {
+            HandlerResponse::Html(html) => {
+                assert!(html.contains("Cognitive Engine Unavailable"));
+                assert!(html.contains("halting problem"));
+                assert!(html.contains("not"));
+            }
+            other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_translate_fallback_includes_lang() {
+        let mut sec = SecurityGate::new(vec![42]);
+        let mut aud = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let q = MessageQueue::open(db).unwrap();
+        let ctx = make_ctx(&mut sec, &mut aud, &q);
+
+        match handle_translate(&ctx, "hello world", "es").unwrap() {
+            HandlerResponse::Html(html) => {
+                assert!(html.contains("Cognitive Engine Unavailable"));
+                assert!(html.contains("es"));
+                assert!(html.contains("hello world"));
             }
             other => panic!("expected Html, got {other:?}"),
         }

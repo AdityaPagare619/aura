@@ -50,6 +50,12 @@ const WEIGHT_MEMORY_LOAD: f32 = 0.11;
 /// Weight given to personality-derived routing bias.
 const WEIGHT_PERSONALITY: f32 = 0.15;
 
+/// Weight given to screen semantic complexity (from SemanticGraph analysis).
+/// When screen analysis is available, this is borrowed from the other factors
+/// proportionally (the 5 original weights still sum to 1.0; screen complexity
+/// acts as an additive nudge clamped into the final score).
+const WEIGHT_SCREEN_COMPLEXITY: f32 = 0.08;
+
 /// Default working memory slot capacity.
 const DEFAULT_MEMORY_SLOTS: usize = 7;
 
@@ -111,6 +117,10 @@ pub struct RouteClassifier {
     /// Personality-derived routing bias in \[-0.15, 0.15\].
     /// Positive → favours System2, negative → favours System1.
     personality_bias: f32,
+    /// Screen semantic complexity signal from the last SemanticGraph analysis.
+    /// Range \[0.0, 1.0\]: 0 = no screen data or trivial UI, 1 = very complex UI.
+    /// Complex UIs (dialogs, deeply nested forms) nudge toward System2.
+    screen_complexity: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +136,7 @@ impl RouteClassifier {
             working_memory_count: 0,
             working_memory_max: DEFAULT_MEMORY_SLOTS,
             personality_bias: 0.0,
+            screen_complexity: 0.0,
         }
     }
 
@@ -150,6 +161,25 @@ impl RouteClassifier {
     #[instrument(skip(self))]
     pub fn set_personality_bias(&mut self, bias: f32) {
         self.personality_bias = bias.clamp(-0.15, 0.15);
+    }
+
+    /// Set the screen semantic context from a recent `SemanticGraph` analysis.
+    ///
+    /// `complexity` is a \[0.0, 1.0\] composite derived from the number of
+    /// detected UI patterns, interactive element count, and screen semantic
+    /// state (e.g. a `Blocked` dialog or deeply nested `SettingsPage` is
+    /// more complex than a simple `Interactive` screen).
+    ///
+    /// `pattern_count` is the number of recognized `UiPattern`s — higher
+    /// counts suggest richer UI requiring deeper reasoning.
+    ///
+    /// Resets to 0.0 when screen data is stale or unavailable.
+    #[instrument(skip(self))]
+    pub fn set_screen_context(&mut self, complexity: f32, pattern_count: usize) {
+        // Blend detected patterns into complexity: each pattern adds 0.08,
+        // capped at 0.3, so a screen with 3+ patterns always gets a boost.
+        let pattern_boost = (pattern_count as f32 * 0.08).min(0.3);
+        self.screen_complexity = (complexity + pattern_boost).clamp(0.0, 1.0);
     }
 
     /// Run the 10-node deterministic routing cascade on a scored event.
@@ -205,7 +235,8 @@ impl RouteClassifier {
             + WEIGHT_IMPORTANCE * importance
             + WEIGHT_URGENCY * urgency
             + WEIGHT_MEMORY_LOAD * memory_load
-            + WEIGHT_PERSONALITY * personality_norm;
+            + WEIGHT_PERSONALITY * personality_norm
+            + WEIGHT_SCREEN_COMPLEXITY * self.screen_complexity;
 
         tracing::trace!(
             complexity,
@@ -214,6 +245,7 @@ impl RouteClassifier {
             memory_load,
             personality_bias = self.personality_bias,
             personality_norm,
+            screen_complexity = self.screen_complexity,
             composite = score,
             "routing score factors"
         );

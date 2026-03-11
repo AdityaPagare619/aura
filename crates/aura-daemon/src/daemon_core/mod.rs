@@ -9,4 +9,3 @@ pub mod react;
 pub mod shutdown;
 pub mod startup;
 pub mod tutorial;
-pub mod accelerator;

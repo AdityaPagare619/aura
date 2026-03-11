@@ -22,5 +22,6 @@ pub use retry::{RetryPolicy, retry_with_backoff};
 pub use monitor::{ExecutionMonitor, InvariantViolation};
 pub use etg::EtgStore;
 pub use executor::{Executor, ExecutionOutcome};
-pub use planner::{ActionPlanner, PlanError};
+pub use planner::{ActionPlanner, EnhancedPlanner, PlanError};
 pub use react::{SemanticReact, CognitiveState, EscalationContext};
+pub use learning::{WorkflowObserver, WorkflowPattern, ExecutionTrace};

@@ -638,35 +638,15 @@ async fn run_generalization(
     now_ms: u64,
     report: &mut ConsolidationReport,
 ) {
-    // Fetch recent episodes — use a broad query to get a diverse sample
+    // Fetch recent full episodes — getting full objects to utilize context/behavioral tags
     let episodes = match episodic
-        .query("", CLUSTER_EPISODE_LIMIT, 0.0, now_ms)
+        .get_recent_episodes(CLUSTER_EPISODE_LIMIT)
         .await
     {
         Ok(results) => results,
-        Err(_) => {
-            // Fallback: try find_similar with very low threshold
-            match episodic.find_similar("", 0.0, CLUSTER_EPISODE_LIMIT).await {
-                Ok(eps) => {
-                    // Convert Episode to something we can work with
-                    let mut results = Vec::new();
-                    for ep in eps {
-                        results.push(aura_types::memory::MemoryResult {
-                            content: ep.content,
-                            tier: aura_types::ipc::MemoryTier::Episodic,
-                            relevance: 0.5,
-                            importance: ep.importance,
-                            timestamp_ms: ep.timestamp_ms,
-                            source_id: ep.id,
-                        });
-                    }
-                    results
-                }
-                Err(e) => {
-                    report.errors.push(format!("episode fetch for clustering failed: {}", e));
-                    return;
-                }
-            }
+        Err(e) => {
+            report.errors.push(format!("episode fetch for clustering failed: {}", e));
+            return;
         }
     };
 
@@ -675,8 +655,15 @@ async fn run_generalization(
         return;
     }
 
-    // Extract contents for clustering
-    let contents: Vec<String> = episodes.iter().map(|e| e.content.clone()).collect();
+    // Extract contents for clustering, appending behavioral tags to influence embeddings
+    let contents: Vec<String> = episodes.iter().map(|e| {
+        if e.context_tags.is_empty() {
+            e.content.clone()
+        } else {
+            // Include behavioral context to make non-text events semantically meaningful
+            format!("{} [Behavior/Context: {}]", e.content, e.context_tags.join(", "))
+        }
+    }).collect();
 
     // Run k-means clustering
     let clusters = cluster_episodes(&contents, KMEANS_K);

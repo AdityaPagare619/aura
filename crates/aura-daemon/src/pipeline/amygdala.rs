@@ -3,6 +3,22 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, trace, warn};
 
 // ---------------------------------------------------------------------------
+// Decision Sanctuary (Cognitive Load Routing)
+// ---------------------------------------------------------------------------
+
+/// The routing tier for a decision, based on calculated cognitive load.
+/// Implementations of Concept 2: "Decision Sanctuary".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DecisionTier {
+    /// Tier 1: AURA decides (micro-decisions) to preserve human energy.
+    AutoHandle,
+    /// Tier 2: AURA narrows options (e.g. presents top 3 instead of 50).
+    NarrowOptions,
+    /// Tier 3: Human decides (critical/important decisions).
+    RequireHuman,
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -41,6 +57,20 @@ const COLD_START_WINDOW_MS: u64 = 72 * 3_600 * 1_000;
 
 /// Cold-start threshold multiplier.
 const COLD_START_FACTOR: f32 = 0.85;
+
+/// Default cognitive load decay half-life in hours (used for serde backward compat).
+const DEFAULT_DECAY_HALF_LIFE_HOURS: f32 = 24.0;
+
+/// Minimum adaptive half-life (4 hours — fast recovery).
+const MIN_DECAY_HALF_LIFE: f32 = 4.0;
+
+/// Maximum adaptive half-life (168 hours = 7 days — very slow recovery).
+const MAX_DECAY_HALF_LIFE: f32 = 168.0;
+
+/// Serde default function for `decay_half_life_hours`.
+fn default_half_life() -> f32 {
+    DEFAULT_DECAY_HALF_LIFE_HOURS
+}
 
 // ---------------------------------------------------------------------------
 // Static keyword table — sorted by weight descending for early exit
@@ -127,6 +157,19 @@ pub struct Amygdala {
     channel_weights: [f32; 4],
     /// Wake threshold.
     threshold: f32,
+    /// Current estimated cognitive load of the user [0.0, 1.0].
+    pub cognitive_load: f32,
+    /// Timestamp (ms) of the last cognitive-load update, used for
+    /// exponential decay.  `#[serde(default)]` ensures backward compat
+    /// with persisted state that lacks this field.
+    #[serde(default)]
+    last_load_update_ms: u64,
+    /// Adaptive cognitive load decay half-life in hours.
+    /// Learned from observed outcomes: if AURA acts during "low load"
+    /// and the user was overwhelmed, the half-life increases (slower decay).
+    /// Default 24.0 preserves original behavior until learning kicks in.
+    #[serde(default = "default_half_life")]
+    pub(crate) decay_half_life_hours: f32,
 }
 
 impl Amygdala {
@@ -146,6 +189,9 @@ impl Amygdala {
             last_wake_ms: 0,
             channel_weights: DEFAULT_WEIGHTS,
             threshold: DEFAULT_THRESHOLD,
+            cognitive_load: 0.3, // warm start with low/medium load
+            last_load_update_ms: 0,
+            decay_half_life_hours: DEFAULT_DECAY_HALF_LIFE_HOURS,
         }
     }
 
@@ -161,6 +207,13 @@ impl Amygdala {
     )]
     pub fn score(&mut self, event: &ParsedEvent) -> ScoredEvent {
         trace!("scoring event");
+
+        // ── Decay cognitive load before scoring ───────────────────────
+        // Without this, cognitive_load accumulates monotonically whenever
+        // record_human_decision / route_decision are not called frequently.
+        // The existing decay infrastructure (adaptive half-life, numerical
+        // stability guards, clamping) handles all edge cases.
+        self.decay_cognitive_load(event.timestamp_ms);
 
         // Track first event time.
         if self.event_count == 0 {
@@ -230,6 +283,111 @@ impl Amygdala {
         );
 
         Self::build_scored(event, s_total, s_lex, s_src, s_time, s_anom, gate)
+    }
+
+    /// Record a decision made by the human to increase estimated cognitive load.
+    pub fn record_human_decision(&mut self) {
+        let now = Self::current_time_ms();
+        self.decay_cognitive_load(now);
+        // Increase load, capping at 1.0.
+        self.cognitive_load = (self.cognitive_load + 0.05).min(1.0);
+        trace!(cognitive_load = self.cognitive_load, "Human decision recorded, cognitive load increased");
+    }
+
+    /// Route a pending decision to the appropriate tier based on its importance
+    /// and the user's current cognitive load (Decision Sanctuary).
+    pub fn route_decision(&mut self, decision_importance: f32) -> DecisionTier {
+        self.decay_cognitive_load(Self::current_time_ms());
+        // High cognitive load means AURA should handle more to protect the user.
+        // As load approaches 1.0, the threshold for human intervention rises.
+        let tier3_threshold = (0.6 + (self.cognitive_load * 0.3)).clamp(0.0, 1.0);
+        let tier2_threshold = (0.3 + (self.cognitive_load * 0.3)).clamp(0.0, tier3_threshold);
+
+        if decision_importance >= tier3_threshold {
+            DecisionTier::RequireHuman
+        } else if decision_importance >= tier2_threshold {
+            DecisionTier::NarrowOptions
+        } else {
+            DecisionTier::AutoHandle
+        }
+    }
+
+    /// Apply exponential decay to `cognitive_load` based on elapsed time.
+    ///
+    /// Half-life is adaptive (default ~24 hours, learned via `adjust_decay_rate`):
+    /// `load *= exp(-ln2 * elapsed_h / decay_half_life_hours)`.
+    fn decay_cognitive_load(&mut self, now_ms: u64) {
+        if self.last_load_update_ms == 0 || now_ms <= self.last_load_update_ms {
+            self.last_load_update_ms = now_ms;
+            return;
+        }
+        let elapsed_ms = now_ms - self.last_load_update_ms;
+        let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+        let half_life = self.decay_half_life_hours as f64;
+        // Guard against non-finite or zero half-life values.
+        let safe_half_life = if half_life.is_finite() && half_life > 0.0 {
+            half_life
+        } else {
+            DEFAULT_DECAY_HALF_LIFE_HOURS as f64
+        };
+        let decay = (-std::f64::consts::LN_2 * elapsed_hours / safe_half_life).exp() as f32;
+        self.cognitive_load *= decay;
+        // Clamp tiny residuals to zero.
+        if self.cognitive_load < 0.001 {
+            self.cognitive_load = 0.0;
+        }
+        self.last_load_update_ms = now_ms;
+        trace!(
+            cognitive_load = self.cognitive_load,
+            decay,
+            elapsed_hours,
+            half_life = self.decay_half_life_hours,
+            "cognitive load decayed"
+        );
+    }
+
+    /// Adjust cognitive load decay rate based on observed outcomes.
+    /// Called by the learning engine when it observes that autonomous actions
+    /// during low cognitive load periods had good/bad outcomes.
+    ///
+    /// - `good_outcome = true`: AURA acted during low load and user was satisfied
+    ///   → current decay rate is good, reinforce (small regression toward 24h mean)
+    /// - `good_outcome = false`: AURA acted during low load but user was overwhelmed
+    ///   → decay is too fast, increase half-life (slow down decay)
+    pub(crate) fn adjust_decay_rate(&mut self, good_outcome: bool) {
+        const LEARN_RATE: f32 = 0.05;
+
+        if good_outcome {
+            // Reinforce current rate — slight regression toward mean (24h).
+            let adjustment = LEARN_RATE * (DEFAULT_DECAY_HALF_LIFE_HOURS - self.decay_half_life_hours);
+            let new_half_life = self.decay_half_life_hours + adjustment;
+            // Guard against NaN/Inf from arithmetic.
+            if new_half_life.is_finite() {
+                self.decay_half_life_hours = new_half_life;
+            }
+        } else {
+            // Bad outcome during "low load" — we decayed too fast, slow it down.
+            let new_half_life = self.decay_half_life_hours * (1.0 + LEARN_RATE);
+            if new_half_life.is_finite() {
+                self.decay_half_life_hours = new_half_life;
+            }
+        }
+
+        self.decay_half_life_hours = self.decay_half_life_hours.clamp(MIN_DECAY_HALF_LIFE, MAX_DECAY_HALF_LIFE);
+
+        tracing::debug!(
+            half_life = self.decay_half_life_hours,
+            good_outcome,
+            "adjusted cognitive load decay rate"
+        );
+    }
+
+    /// Current wall-clock time in milliseconds (monotonic-safe).
+    fn current_time_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
     }
 
     /// Effective threshold accounting for cold-start.
@@ -511,5 +669,182 @@ mod tests {
         let total = w[0] * 0.70 + w[1] * 0.50 + w[2] * 0.50 + w[3] * 0.30;
         // = 0.28 + 0.125 + 0.10 + 0.045 = 0.55
         assert!((total - 0.55).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_decision_sanctuary_routing() {
+        let mut amygdala = Amygdala::new();
+        
+        // At default load (0.3):
+        // tier3_threshold = 0.6 + 0.3*0.3 = 0.69
+        // tier2_threshold = 0.3 + 0.3*0.3 = 0.39
+        assert_eq!(amygdala.route_decision(0.2), DecisionTier::AutoHandle);
+        assert_eq!(amygdala.route_decision(0.5), DecisionTier::NarrowOptions);
+        assert_eq!(amygdala.route_decision(0.8), DecisionTier::RequireHuman);
+
+        // Record humans decisions to increase cognitive load
+        for _ in 0..10 {
+            amygdala.record_human_decision();
+        }
+        
+        // At load 0.8:
+        // tier3_threshold = 0.6 + 0.8*0.3 = 0.84
+        // tier2_threshold = 0.3 + 0.8*0.3 = 0.54
+        assert_eq!(amygdala.route_decision(0.5), DecisionTier::AutoHandle); // Was NarrowOptions, now AutoHandle
+        assert_eq!(amygdala.route_decision(0.8), DecisionTier::NarrowOptions); // Was RequireHuman, now NarrowOptions
+        assert_eq!(amygdala.route_decision(0.9), DecisionTier::RequireHuman);
+    }
+
+    #[test]
+    fn test_cognitive_load_decay() {
+        let mut amygdala = Amygdala::new();
+        amygdala.cognitive_load = 0.8;
+
+        // Simulate 24 hours passing (should roughly halve).
+        let base_ms: u64 = 1_700_000_000_000;
+        amygdala.last_load_update_ms = base_ms;
+        let after_24h = base_ms + 24 * 3_600_000;
+        amygdala.decay_cognitive_load(after_24h);
+        assert!(
+            (amygdala.cognitive_load - 0.4).abs() < 0.02,
+            "load should halve after 24h, got {}",
+            amygdala.cognitive_load,
+        );
+
+        // Simulate another 24 hours — halves again.
+        let after_48h = after_24h + 24 * 3_600_000;
+        amygdala.decay_cognitive_load(after_48h);
+        assert!(
+            (amygdala.cognitive_load - 0.2).abs() < 0.02,
+            "load should halve again, got {}",
+            amygdala.cognitive_load,
+        );
+    }
+
+    #[test]
+    fn test_cognitive_load_decay_zero_elapsed() {
+        let mut amygdala = Amygdala::new();
+        amygdala.cognitive_load = 0.5;
+        let t = 1_700_000_000_000u64;
+        amygdala.last_load_update_ms = t;
+
+        // Same timestamp → no decay.
+        amygdala.decay_cognitive_load(t);
+        assert!((amygdala.cognitive_load - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_decay_half_life_default() {
+        let amygdala = Amygdala::new();
+        assert!(
+            (amygdala.decay_half_life_hours - 24.0).abs() < f32::EPSILON,
+            "default half-life should be 24.0, got {}",
+            amygdala.decay_half_life_hours,
+        );
+    }
+
+    #[test]
+    fn test_adaptive_half_life_used_in_decay() {
+        // With a 12-hour half-life, load should halve in 12 hours (not 24).
+        let mut amygdala = Amygdala::new();
+        amygdala.decay_half_life_hours = 12.0;
+        amygdala.cognitive_load = 0.8;
+
+        let base_ms: u64 = 1_700_000_000_000;
+        amygdala.last_load_update_ms = base_ms;
+        let after_12h = base_ms + 12 * 3_600_000;
+        amygdala.decay_cognitive_load(after_12h);
+        assert!(
+            (amygdala.cognitive_load - 0.4).abs() < 0.02,
+            "load should halve after 12h with 12h half-life, got {}",
+            amygdala.cognitive_load,
+        );
+    }
+
+    #[test]
+    fn test_adjust_decay_rate_bad_outcome_increases_half_life() {
+        let mut amygdala = Amygdala::new();
+        let before = amygdala.decay_half_life_hours;
+        amygdala.adjust_decay_rate(false);
+        assert!(
+            amygdala.decay_half_life_hours > before,
+            "bad outcome should increase half-life: {} -> {}",
+            before,
+            amygdala.decay_half_life_hours,
+        );
+    }
+
+    #[test]
+    fn test_adjust_decay_rate_good_outcome_regresses_toward_mean() {
+        let mut amygdala = Amygdala::new();
+        // Start with a high half-life.
+        amygdala.decay_half_life_hours = 48.0;
+        amygdala.adjust_decay_rate(true);
+        // Good outcome regresses toward 24h mean, so it should decrease.
+        assert!(
+            amygdala.decay_half_life_hours < 48.0,
+            "good outcome should regress high half-life toward 24h: {}",
+            amygdala.decay_half_life_hours,
+        );
+
+        // Start with a low half-life.
+        amygdala.decay_half_life_hours = 8.0;
+        amygdala.adjust_decay_rate(true);
+        // Good outcome regresses toward 24h mean, so it should increase.
+        assert!(
+            amygdala.decay_half_life_hours > 8.0,
+            "good outcome should regress low half-life toward 24h: {}",
+            amygdala.decay_half_life_hours,
+        );
+    }
+
+    #[test]
+    fn test_adjust_decay_rate_clamped_to_range() {
+        let mut amygdala = Amygdala::new();
+
+        // Many bad outcomes should not exceed MAX (168h).
+        for _ in 0..1000 {
+            amygdala.adjust_decay_rate(false);
+        }
+        assert!(
+            amygdala.decay_half_life_hours <= 168.0,
+            "half-life should be clamped to max: {}",
+            amygdala.decay_half_life_hours,
+        );
+
+        // Force to minimum and verify clamping.
+        amygdala.decay_half_life_hours = 1.0; // below MIN
+        amygdala.adjust_decay_rate(true); // triggers clamp
+        assert!(
+            amygdala.decay_half_life_hours >= 4.0,
+            "half-life should be clamped to min: {}",
+            amygdala.decay_half_life_hours,
+        );
+    }
+
+    #[test]
+    fn test_decay_half_life_serde_backward_compat() {
+        // Simulate deserializing old persisted state without decay_half_life_hours.
+        // The serde default function should provide 24.0.
+        let json = r#"{
+            "source_ema": [0.5,0.5,0.5,0.5,0.5],
+            "time_histogram": [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5],
+            "welford": {"count":0,"mean":0.0,"m2":0.0},
+            "dedup_ring": [],
+            "dedup_cursor": 0,
+            "event_count": 0,
+            "first_event_ms": 0,
+            "last_wake_ms": 0,
+            "channel_weights": [0.4,0.25,0.2,0.15],
+            "threshold": 0.65,
+            "cognitive_load": 0.3,
+            "last_load_update_ms": 0
+        }"#;
+        let amygdala: Amygdala = serde_json::from_str(json).expect("deserialize old state");
+        assert!(
+            (amygdala.decay_half_life_hours - 24.0).abs() < f32::EPSILON,
+            "missing field should default to 24.0, got {}",
+            amygdala.decay_half_life_hours,
+        );
     }
 }

@@ -23,14 +23,17 @@ pub mod interests;
 pub mod patterns;
 pub mod prediction;
 pub mod skills;
+pub mod world_model;
 
 pub use dreaming::DreamingEngine;
-pub use dimensions::DimensionDiscovery;
+pub use dimensions::{Dimension, DimensionDiscovery, Feature, ProtoDimension};
 pub use hebbian::HebbianNetwork;
 pub use interests::InterestModel;
 pub use patterns::PatternDetector;
+pub use patterns::ContextKey;
 pub use prediction::PredictionEngine;
 pub use skills::SkillRegistry;
+pub use world_model::{WorldModel, UserStateSnapshot};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
@@ -109,6 +112,8 @@ pub struct LearningEngine {
     pub prediction: PredictionEngine,
     /// Emergent dimension discovery engine (Concept Design §4.1).
     pub dimensions: DimensionDiscovery,
+    /// Unified world model — fuses all sub-engine outputs (Phase 1A).
+    pub world_model: WorldModel,
 }
 
 impl LearningEngine {
@@ -123,6 +128,7 @@ impl LearningEngine {
             dreaming: DreamingEngine::new(),
             prediction: PredictionEngine::new(),
             dimensions: DimensionDiscovery::new(),
+            world_model: WorldModel::new(),
         }
     }
 
@@ -163,6 +169,15 @@ impl LearningEngine {
 
         debug!(concept_a, concept_b, ?outcome, "observation recorded");
         Ok(())
+    }
+
+    /// Observe a set of features that happened simultaneously,
+    /// so that the emergent dimension discovery engine can track
+    /// correlations and crystallise new personality dimensions.
+    #[instrument(skip_all, fields(feature_count = features.len()))]
+    pub fn observe_features(&mut self, features: &[Feature], now_ms: u64) {
+        self.dimensions.observe(features, now_ms);
+        debug!(features = ?features, "features recorded for dimension discovery");
     }
 
     /// Run a consolidation pass over the Hebbian network.
@@ -283,6 +298,45 @@ impl LearningEngine {
         );
 
         Ok(())
+    }
+
+    /// Update the world model by fusing insights from other sub-engines.
+    ///
+    /// Uses split borrow destructuring to satisfy the borrow checker —
+    /// `fuse()` needs mutable access to `prediction` and read access to
+    /// other sub-engines while mutating `world_model`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_world_model(
+        &mut self,
+        minute_of_day: f32,
+        day_of_week: u8,
+        recent_actions: &[&str],
+        current_context: &[ContextKey],
+        now_ms: u64,
+    ) -> UserStateSnapshot {
+        let LearningEngine {
+            hebbian,
+            interests,
+            skills,
+            patterns,
+            dreaming: _,
+            prediction,
+            dimensions,
+            world_model,
+        } = self;
+        world_model.fuse(
+            prediction,
+            patterns,
+            dimensions,
+            interests,
+            skills,
+            hebbian,
+            minute_of_day,
+            day_of_week,
+            recent_actions,
+            current_context,
+            now_ms,
+        )
     }
 }
 

@@ -1,8 +1,8 @@
 //! Pattern discovery engine for AURA's memory system.
 //!
 //! Tracks action→outcome relationships with Hebbian learning
-//! (success: +0.1, failure: -0.15) and discovers temporal co-occurrence
-//! patterns from event streams.
+//! using exposure-attenuated rates: learning rate decays as 1/√(1+n)
+//! so established patterns resist change while new patterns adapt quickly.
 
 use std::collections::VecDeque;
 
@@ -18,10 +18,12 @@ const MAX_ACTION_PATTERNS: usize = 2048;
 const MAX_TEMPORAL_PATTERNS: usize = 512;
 const MAX_RECENT_EVENTS: usize = 256;
 
-/// Hebbian strengthening increment on success.
-const HEBBIAN_SUCCESS: f32 = 0.1;
-/// Hebbian weakening decrement on failure (asymmetric — failures matter more).
-const HEBBIAN_FAILURE: f32 = 0.15;
+/// Base Hebbian strengthening increment on success (attenuated by exposure).
+const HEBBIAN_SUCCESS_BASE: f32 = 0.1;
+/// Base Hebbian weakening decrement on failure (attenuated by exposure).
+/// Asymmetric — failures matter 1.5× more than successes, preserving
+/// the biological "safety bias" where negative outcomes are weighted heavier.
+const HEBBIAN_FAILURE_BASE: f32 = 0.15;
 
 /// Prune patterns weaker than this after the age threshold.
 const PRUNE_STRENGTH_THRESHOLD: f32 = 0.05;
@@ -108,12 +110,17 @@ impl PatternEngine {
             pattern.occurrences = pattern.occurrences.saturating_add(1);
             pattern.last_seen_ms = timestamp_ms;
             pattern.outcome = outcome.to_string();
+            // Exposure-attenuated learning: rate = base / √(1 + occurrences)
+            // A pattern seen 100 times updates 10× slower than one seen once.
+            // This makes established patterns resistant to noise while new
+            // patterns adapt quickly — matching biological synaptic plasticity.
+            let attenuation = 1.0 / (1.0 + pattern.occurrences as f32).sqrt();
             if success {
                 pattern.success_count = pattern.success_count.saturating_add(1);
-                pattern.strength = (pattern.strength + HEBBIAN_SUCCESS).clamp(-1.0, 1.0);
+                pattern.strength = (pattern.strength + HEBBIAN_SUCCESS_BASE * attenuation).clamp(-1.0, 1.0);
             } else {
                 pattern.failure_count = pattern.failure_count.saturating_add(1);
-                pattern.strength = (pattern.strength - HEBBIAN_FAILURE).clamp(-1.0, 1.0);
+                pattern.strength = (pattern.strength - HEBBIAN_FAILURE_BASE * attenuation).clamp(-1.0, 1.0);
             }
         } else {
             // Check capacity.
@@ -136,9 +143,9 @@ impl PatternEngine {
             }
 
             let initial_strength = if success {
-                HEBBIAN_SUCCESS
+                HEBBIAN_SUCCESS_BASE
             } else {
-                -HEBBIAN_FAILURE
+                -HEBBIAN_FAILURE_BASE
             };
 
             self.action_patterns.push(ActionPattern {
@@ -173,11 +180,13 @@ impl PatternEngine {
         if let Some(pattern) = self.action_patterns.iter_mut().find(|p| {
             p.action.eq_ignore_ascii_case(action) && p.context.eq_ignore_ascii_case(context)
         }) {
+            // Exposure-attenuated: same formula as record_outcome.
+            let attenuation = 1.0 / (1.0 + pattern.occurrences as f32).sqrt();
             if success {
-                pattern.strength = (pattern.strength + HEBBIAN_SUCCESS).clamp(-1.0, 1.0);
+                pattern.strength = (pattern.strength + HEBBIAN_SUCCESS_BASE * attenuation).clamp(-1.0, 1.0);
                 pattern.success_count = pattern.success_count.saturating_add(1);
             } else {
-                pattern.strength = (pattern.strength - HEBBIAN_FAILURE).clamp(-1.0, 1.0);
+                pattern.strength = (pattern.strength - HEBBIAN_FAILURE_BASE * attenuation).clamp(-1.0, 1.0);
                 pattern.failure_count = pattern.failure_count.saturating_add(1);
             }
             pattern.occurrences = pattern.occurrences.saturating_add(1);
@@ -274,6 +283,19 @@ impl PatternEngine {
         }
 
         discovered
+    }
+
+    /// Predict the next event based on temporal co-occurrence patterns.
+    #[instrument(skip(self))]
+    pub fn predict_next_temporal(&self, current_event: &str) -> Vec<(String, f32)> {
+        let mut predictions = Vec::new();
+        for p in &self.temporal_patterns {
+            if p.events.len() == 2 && p.events[0] == current_event {
+                predictions.push((p.events[1].clone(), p.confidence));
+            }
+        }
+        predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        predictions
     }
 
     /// Get the strongest patterns (top N by absolute strength).

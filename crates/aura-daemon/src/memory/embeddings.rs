@@ -277,17 +277,50 @@ fn tokenize(text: &str) -> Vec<String> {
 // Neural embedding via IPC (future — requires DaemonToNeocortex::Embed variant)
 // ---------------------------------------------------------------------------
 
-/// Async neural embedding via the Neocortex process.
-/// Currently returns None since the IPC protocol lacks an Embed message.
-/// When available, this will be the primary embedding source with TF-IDF as fallback.
-#[allow(dead_code)]
-pub async fn embed_neural(_text: &str) -> Option<Vec<f32>> {
-    // TODO: When DaemonToNeocortex gains an Embed variant:
-    // 1. Send text to neocortex
-    // 2. Receive 384-dim f32 vector
-    // 3. Cache result
-    // 4. Return Some(embedding)
-    None
+/// Async neural embedding via the Neocortex process, with TF-IDF fallback.
+///
+/// If an IPC client is provided and connected, this attempts to request a 
+/// high-quality neural embedding. If the request fails, times out, or returns 
+/// invalid dimensions, it silently falls back to the deterministic TF-IDF 
+/// sign-hashing method to ensure the system never completely fails to embed.
+pub async fn embed_best_effort(
+    text: &str,
+    client: Option<&mut crate::ipc::client::NeocortexClient>,
+) -> Vec<f32> {
+    if text.is_empty() {
+        return vec![0.0; EMBED_DIM];
+    }
+
+    if let Some(c) = client {
+        if c.is_connected() {
+            let msg = aura_types::ipc::DaemonToNeocortex::Embed {
+                text: text.to_string(),
+            };
+            match c.request(&msg).await {
+                Ok(aura_types::ipc::NeocortexToDaemon::Embedding { vector }) => {
+                    if vector.len() == EMBED_DIM {
+                        return vector;
+                    } else {
+                        tracing::warn!(
+                            "Neocortex returned embedding of wrong dimension (expected {}, got {}). \
+                             Falling back to TF-IDF.",
+                            EMBED_DIM,
+                            vector.len()
+                        );
+                    }
+                }
+                Ok(_) => {
+                    tracing::warn!("Neocortex returned unexpected response to Embed request. Falling back.");
+                }
+                Err(e) => {
+                    tracing::warn!("Neural embedding failed: {}. Falling back to TF-IDF.", e);
+                }
+            }
+        }
+    }
+
+    // Fallback to TF-IDF
+    embed(text)
 }
 
 // ---------------------------------------------------------------------------

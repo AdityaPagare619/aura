@@ -10,6 +10,13 @@ pub struct RawEvent {
     pub content_description: Option<String>,
     pub timestamp_ms: u64,
     pub source_node_id: Option<String>,
+    /// Optional full accessibility tree snapshot, attached by the JNI bridge
+    /// for `TYPE_WINDOW_STATE_CHANGED` (event_type == 32) events.
+    /// When present, enables ScreenCache + SemanticGraph processing in the
+    /// main loop.  When absent, the loop falls back to lightweight
+    /// package::class summaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_nodes: Option<Vec<crate::screen::RawA11yNode>>,
 }
 
 /// Notification received from NotificationListenerService.
@@ -67,6 +74,21 @@ pub enum Intent {
     SystemAlert,
     ProactiveOpportunity,
     RoutineEvent,
+}
+
+impl Intent {
+    /// Returns a stable, lowercase-kebab string label for this intent.
+    /// Used by OutcomeBus, ReactionDetector, and BDI belief keys.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Intent::InformationRequest => "information-request",
+            Intent::ActionRequest => "action-request",
+            Intent::ConversationContinue => "conversation-continue",
+            Intent::SystemAlert => "system-alert",
+            Intent::ProactiveOpportunity => "proactive-opportunity",
+            Intent::RoutineEvent => "routine-event",
+        }
+    }
 }
 
 /// Scored event after Stage 2 (Amygdala) — relevance scored, gate decision made.

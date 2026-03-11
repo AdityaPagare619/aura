@@ -30,6 +30,9 @@ const SCORE_ALPHA: f32 = 0.3;
 /// EMA alpha for trend updates.
 const TREND_ALPHA: f32 = 0.2;
 
+/// Default half-life for interest decay: 30 days in milliseconds.
+pub(crate) const DEFAULT_UPDATE_HALF_LIFE_MS: u64 = 30 * 24 * 3600 * 1000;
+
 // ---------------------------------------------------------------------------
 // InterestEntry
 // ---------------------------------------------------------------------------
@@ -58,6 +61,15 @@ pub struct InterestModel {
     interests: HashMap<String, InterestEntry>,
     /// Per-domain affinity weights.
     category_weights: HashMap<DomainId, f32>,
+
+    /// Configurable half-life (ms) for interest score decay.
+    /// Default: 30 days ([`DEFAULT_UPDATE_HALF_LIFE_MS`]).
+    #[serde(default = "default_update_half_life_ms")]
+    pub(crate) update_half_life_ms: u64,
+}
+
+fn default_update_half_life_ms() -> u64 {
+    DEFAULT_UPDATE_HALF_LIFE_MS
 }
 
 impl InterestModel {
@@ -71,6 +83,7 @@ impl InterestModel {
         Self {
             interests: HashMap::with_capacity(32),
             category_weights,
+            update_half_life_ms: DEFAULT_UPDATE_HALF_LIFE_MS,
         }
     }
 
@@ -78,6 +91,12 @@ impl InterestModel {
     #[must_use]
     pub fn interest_count(&self) -> usize {
         self.interests.len()
+    }
+
+    /// The configured half-life (ms) for interest score decay.
+    #[must_use]
+    pub(crate) fn update_half_life_ms(&self) -> u64 {
+        self.update_half_life_ms
     }
 
     /// Record an observation of user interest in `topic`.

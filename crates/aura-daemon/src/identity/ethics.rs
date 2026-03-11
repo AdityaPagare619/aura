@@ -719,6 +719,27 @@ impl ConsentTracker {
         }
     }
 
+    /// Create a consent tracker pre-loaded with AURA's privacy-first defaults:
+    ///
+    /// - `"learning"` → **granted** (core value; user can revoke)
+    /// - `"proactive_actions"` → **denied** (user must opt-in)
+    /// - `"data_sharing"` → **denied** (never on by default)
+    ///
+    /// Privacy Sovereignty is Pillar #1: when in doubt, deny.
+    pub fn with_defaults(now_ms: u64) -> Self {
+        let mut tracker = Self::new();
+        // Learning is granted by default — AURA's cognitive loop depends on it,
+        // but the user can revoke at any time.
+        tracker.grant_consent("learning", now_ms, None, 0.5);
+        // Proactive actions and data sharing require explicit opt-in.
+        // We do NOT call grant_consent for these — absence means denied.
+        tracing::info!(
+            "ConsentTracker initialized with privacy-first defaults: \
+             learning=granted, proactive_actions=denied, data_sharing=denied"
+        );
+        tracker
+    }
+
     /// Grant consent for an action category.
     pub fn grant_consent(
         &mut self,

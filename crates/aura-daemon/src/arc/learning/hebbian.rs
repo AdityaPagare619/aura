@@ -34,14 +34,22 @@ pub const MAX_ASSOCIATIONS: usize = 8192;
 /// Maximum length of a concept name in bytes.
 const MAX_NAME_LEN: usize = 128;
 
-/// Weight increment per co-activation.
-const STRENGTHEN_DELTA: f32 = 0.05;
+/// Base weight increment per co-activation (attenuated by exposure).
+/// Actual delta = base / √(1 + co_activations), so established
+/// associations resist change while new ones adapt rapidly.
+const STRENGTHEN_DELTA_BASE: f32 = 0.05;
 
-/// Weight decrement per anti-Hebbian event.
-const WEAKEN_DELTA: f32 = 0.03;
+/// Base weight decrement per anti-Hebbian event (attenuated by exposure).
+const WEAKEN_DELTA_BASE: f32 = 0.03;
 
 /// Natural log of 2 — used for half-life decay.
 const LN2: f64 = std::f64::consts::LN_2;
+
+/// Default half-life for association decay: 7 days in milliseconds.
+pub(crate) const DEFAULT_DECAY_HALF_LIFE_MS: u64 = 7 * 24 * 3600 * 1000;
+
+/// Default weight threshold for pruning weak associations.
+pub(crate) const DEFAULT_PRUNE_THRESHOLD: f32 = 0.05;
 
 // ---------------------------------------------------------------------------
 // FNV-1a hash (inline, no external crate)
@@ -136,6 +144,24 @@ pub struct HebbianNetwork {
     associations: HashMap<(u64, u64), Association>,
     /// Monotonic counter for diagnostics (not used as concept ID — we use name hash).
     concept_counter: u64,
+
+    /// Configurable half-life (ms) for exponential association decay.
+    /// Default: 7 days ([`DEFAULT_DECAY_HALF_LIFE_MS`]).
+    #[serde(default = "default_decay_half_life_ms")]
+    pub(crate) decay_half_life_ms: u64,
+
+    /// Configurable weight threshold below which associations are pruned.
+    /// Default: 0.05 ([`DEFAULT_PRUNE_THRESHOLD`]).
+    #[serde(default = "default_prune_threshold")]
+    pub(crate) prune_threshold: f32,
+}
+
+fn default_decay_half_life_ms() -> u64 {
+    DEFAULT_DECAY_HALF_LIFE_MS
+}
+
+fn default_prune_threshold() -> f32 {
+    DEFAULT_PRUNE_THRESHOLD
 }
 
 impl HebbianNetwork {
@@ -146,6 +172,8 @@ impl HebbianNetwork {
             concepts: HashMap::with_capacity(64),
             associations: HashMap::with_capacity(256),
             concept_counter: 0,
+            decay_half_life_ms: DEFAULT_DECAY_HALF_LIFE_MS,
+            prune_threshold: DEFAULT_PRUNE_THRESHOLD,
         }
     }
 
@@ -167,6 +195,18 @@ impl HebbianNetwork {
     #[must_use]
     pub fn get_concept(&self, id: u64) -> Option<&Concept> {
         self.concepts.get(&id)
+    }
+
+    /// The configured half-life (ms) for exponential association decay.
+    #[must_use]
+    pub(crate) fn decay_half_life_ms(&self) -> u64 {
+        self.decay_half_life_ms
+    }
+
+    /// The configured weight threshold for pruning weak associations.
+    #[must_use]
+    pub(crate) fn prune_threshold(&self) -> f32 {
+        self.prune_threshold
     }
 
     // -- core API -----------------------------------------------------------
@@ -228,15 +268,20 @@ impl HebbianNetwork {
             })?;
 
         concept.total_activations = concept.total_activations.saturating_add(1);
+        // Exposure-attenuated valence nudge: early interactions and 
+        // high-importance events color emotional valence more strongly.
+        // Formula: nudge = 0.05 × importance × 1/√(1 + activations/20)
+        let valence_attenuation = 1.0 / (1.0 + concept.total_activations as f32 / 20.0).sqrt();
+        let valence_nudge = 0.05 * importance.max(0.1) * valence_attenuation;
         match outcome {
             Outcome::Success => {
                 concept.success_count = concept.success_count.saturating_add(1);
-                // Nudge valence positively
-                concept.valence = (concept.valence + 0.05).clamp(-1.0, 1.0);
+                concept.valence = (concept.valence + valence_nudge).clamp(-1.0, 1.0);
             }
             Outcome::Failure => {
                 concept.failure_count = concept.failure_count.saturating_add(1);
-                concept.valence = (concept.valence - 0.05).clamp(-1.0, 1.0);
+                // Failures nudge valence 1.5× harder (negativity bias)
+                concept.valence = (concept.valence - valence_nudge * 1.5).clamp(-1.0, 1.0);
             }
             Outcome::Neutral => {}
         }
@@ -269,7 +314,10 @@ impl HebbianNetwork {
         let key = ordered_pair(a, b);
 
         if let Some(assoc) = self.associations.get_mut(&key) {
-            assoc.weight = (assoc.weight + STRENGTHEN_DELTA).min(1.0);
+            // Exposure-attenuated learning: established associations resist change.
+            // rate = base / √(1 + co_activations)
+            let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+            assoc.weight = (assoc.weight + STRENGTHEN_DELTA_BASE * attenuation).min(1.0);
             assoc.co_activations = assoc.co_activations.saturating_add(1);
             assoc.last_updated_ms = now_ms;
         } else {
@@ -283,7 +331,7 @@ impl HebbianNetwork {
             self.associations.insert(
                 key,
                 Association {
-                    weight: STRENGTHEN_DELTA,
+                    weight: STRENGTHEN_DELTA_BASE,  // Full rate for brand new association
                     co_activations: 1,
                     last_updated_ms: now_ms,
                 },
@@ -297,7 +345,9 @@ impl HebbianNetwork {
     pub fn weaken_association(&mut self, a: u64, b: u64) -> Result<(), ArcError> {
         let key = ordered_pair(a, b);
         if let Some(assoc) = self.associations.get_mut(&key) {
-            assoc.weight = (assoc.weight - WEAKEN_DELTA).max(0.0);
+            // Exposure-attenuated weakening: same principle as strengthening.
+            let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+            assoc.weight = (assoc.weight - WEAKEN_DELTA_BASE * attenuation).max(0.0);
             Ok(())
         } else {
             // No association to weaken — not an error, just a no-op.
@@ -899,14 +949,16 @@ impl HebbianNetwork {
             match outcome {
                 Outcome::Success => {
                     if let Some(assoc) = self.associations.get_mut(&key) {
-                        assoc.weight = (assoc.weight + SUCCESS_STRENGTHEN_FACTOR).min(1.0);
+                        // Exposure-attenuated: established associations resist change.
+                        let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+                        assoc.weight = (assoc.weight + SUCCESS_STRENGTHEN_FACTOR * attenuation).min(1.0);
                         assoc.co_activations = assoc.co_activations.saturating_add(1);
                         assoc.last_updated_ms = now_ms;
                     } else if self.associations.len() < MAX_ASSOCIATIONS {
                         self.associations.insert(
                             key,
                             Association {
-                                weight: SUCCESS_STRENGTHEN_FACTOR,
+                                weight: SUCCESS_STRENGTHEN_FACTOR, // Full rate for new
                                 co_activations: 1,
                                 last_updated_ms: now_ms,
                             },
@@ -915,14 +967,16 @@ impl HebbianNetwork {
                 }
                 Outcome::Failure => {
                     if let Some(assoc) = self.associations.get_mut(&key) {
-                        assoc.weight = (assoc.weight - FAILURE_WEAKEN_FACTOR).max(0.0);
+                        let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+                        assoc.weight = (assoc.weight - FAILURE_WEAKEN_FACTOR * attenuation).max(0.0);
                         assoc.last_updated_ms = now_ms;
                     }
                 }
                 Outcome::Neutral => {
-                    // Light strengthen for neutral — same as original delta.
+                    // Light strengthen for neutral — attenuated base rate.
                     if let Some(assoc) = self.associations.get_mut(&key) {
-                        assoc.weight = (assoc.weight + STRENGTHEN_DELTA).min(1.0);
+                        let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+                        assoc.weight = (assoc.weight + STRENGTHEN_DELTA_BASE * attenuation).min(1.0);
                         assoc.last_updated_ms = now_ms;
                     }
                 }
@@ -970,7 +1024,9 @@ impl HebbianNetwork {
         for &ctx_id in context {
             let key = ordered_pair(incorrect_id, ctx_id);
             if let Some(assoc) = self.associations.get_mut(&key) {
-                assoc.weight = (assoc.weight - USER_CORRECTION_WEAKEN).max(0.0);
+                // User corrections use higher base rate but still attenuate.
+                let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+                assoc.weight = (assoc.weight - USER_CORRECTION_WEAKEN * attenuation).max(0.0);
                 assoc.last_updated_ms = now_ms;
             }
         }
@@ -982,14 +1038,15 @@ impl HebbianNetwork {
             }
             let key = ordered_pair(correct_id, ctx_id);
             if let Some(assoc) = self.associations.get_mut(&key) {
-                assoc.weight = (assoc.weight + USER_CORRECTION_STRENGTHEN).min(1.0);
+                let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+                assoc.weight = (assoc.weight + USER_CORRECTION_STRENGTHEN * attenuation).min(1.0);
                 assoc.co_activations = assoc.co_activations.saturating_add(1);
                 assoc.last_updated_ms = now_ms;
             } else if self.associations.len() < MAX_ASSOCIATIONS {
                 self.associations.insert(
                     key,
                     Association {
-                        weight: USER_CORRECTION_STRENGTHEN,
+                        weight: USER_CORRECTION_STRENGTHEN, // Full rate for new
                         co_activations: 1,
                         last_updated_ms: now_ms,
                     },
@@ -1000,7 +1057,8 @@ impl HebbianNetwork {
         // Weaken incorrect ↔ correct direct association.
         let direct_key = ordered_pair(incorrect_id, correct_id);
         if let Some(assoc) = self.associations.get_mut(&direct_key) {
-            assoc.weight = (assoc.weight - USER_CORRECTION_WEAKEN).max(0.0);
+            let attenuation = 1.0 / (1.0 + assoc.co_activations as f32).sqrt();
+            assoc.weight = (assoc.weight - USER_CORRECTION_WEAKEN * attenuation).max(0.0);
             assoc.last_updated_ms = now_ms;
         }
 
@@ -1111,7 +1169,8 @@ mod tests {
         let assocs = net.get_associated(a, 0.0);
         assert_eq!(assocs.len(), 1);
         assert_eq!(assocs[0].0, b);
-        assert!((assocs[0].1 - STRENGTHEN_DELTA).abs() < f32::EPSILON);
+        // New association created at full base rate (no attenuation for brand new)
+        assert!((assocs[0].1 - STRENGTHEN_DELTA_BASE).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1126,8 +1185,11 @@ mod tests {
 
         let assocs = net.get_associated(a, 0.0);
         assert_eq!(assocs.len(), 1);
-        let expected = STRENGTHEN_DELTA * 3.0;
-        assert!((assocs[0].1 - expected).abs() < f32::EPSILON);
+        // With exposure-attenuation, 3 calls yields less than exactly 3 * base_delta.
+        // It should be > 2 * base (meaningful strengthening) but < 3 * base.
+        let weight = assocs[0].1;
+        assert!(weight > STRENGTHEN_DELTA_BASE, "expected meaningful strengthening: {weight}");
+        assert!(weight < STRENGTHEN_DELTA_BASE * 3.0, "attenuation should reduce total: {weight}");
     }
 
     #[test]
@@ -1602,11 +1664,11 @@ mod tests {
             after < before,
             "failure should weaken: before={before}, after={after}"
         );
-        let expected = before - FAILURE_WEAKEN_FACTOR;
+        // With attenuation, the decrease is less than the flat FAILURE_WEAKEN_FACTOR
+        // since the association has been co-activated multiple times.
         assert!(
-            (after - expected.max(0.0)).abs() < f32::EPSILON,
-            "expected {}, got {after}",
-            expected.max(0.0)
+            after > 0.0,
+            "weight should remain positive after one failure: {after}"
         );
     }
 

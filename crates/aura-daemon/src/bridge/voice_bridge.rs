@@ -68,6 +68,14 @@ impl VoiceBridge {
             .emotional_signal
             .as_ref()
             .map(|s| s.arousal);
+        let emotional_stress = utterance
+            .emotional_signal
+            .as_ref()
+            .map(|s| s.stress);
+        let emotional_fatigue = utterance
+            .emotional_signal
+            .as_ref()
+            .map(|s| s.fatigue);
 
         UserCommand::Chat {
             text: utterance.text.clone(),
@@ -76,6 +84,8 @@ impl VoiceBridge {
                 duration_ms: utterance.duration_ms,
                 emotional_valence,
                 emotional_arousal,
+                emotional_stress,
+                emotional_fatigue,
             }),
         }
     }

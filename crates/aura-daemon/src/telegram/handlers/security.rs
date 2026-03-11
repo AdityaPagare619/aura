@@ -147,6 +147,8 @@ mod tests {
             audit: aud,
             queue: q,
             startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: None,
         }
     }
 

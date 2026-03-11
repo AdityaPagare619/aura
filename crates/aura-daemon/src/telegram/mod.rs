@@ -44,7 +44,10 @@ use rusqlite::Connection;
 use tokio::sync::mpsc;
 use tracing::{info, instrument, warn};
 
+use aura_types::config::AuraConfig;
 use aura_types::errors::AuraError;
+
+use crate::daemon_core::channels::UserCommandTx;
 
 use self::approval::PolicyGate;
 use self::audit::{AuditLog, AuditOutcome};
@@ -119,6 +122,13 @@ pub struct TelegramEngine {
     cancel_flag: Arc<AtomicBool>,
     /// Primary chat ID for unsolicited messages (alerts, approvals).
     primary_chat_id: i64,
+    /// Live AURA configuration snapshot — gives handlers access to real
+    /// personality, trust, power, and other config values.
+    aura_config: Option<AuraConfig>,
+    /// Sender half of the daemon's user-command channel. Handlers use this
+    /// to forward daemon-routed commands (AI, memory, agency) that reach
+    /// the fallback path instead of being intercepted by TelegramBridge.
+    user_command_tx: Option<UserCommandTx>,
 }
 
 impl TelegramEngine {
@@ -167,6 +177,8 @@ impl TelegramEngine {
             startup_time_ms,
             cancel_flag,
             primary_chat_id,
+            aura_config: None,
+            user_command_tx: None,
         })
     }
 
@@ -193,22 +205,250 @@ impl TelegramEngine {
     /// 3. Runs until the cancel flag is set.
     #[instrument(skip(self), name = "telegram_engine_run")]
     pub async fn run(&mut self) -> Result<(), AuraError> {
-        let (_tx, mut rx) = mpsc::channel::<TelegramUpdate>(256);
+        let (tx, mut rx) = mpsc::channel::<TelegramUpdate>(256);
 
         info!("Telegram engine starting main loop");
 
-        // Process incoming updates.
-        while let Some(update) = rx.recv().await {
-            if self.cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                info!("cancel flag set — stopping Telegram engine");
-                break;
+        // Destructure self into disjoint field borrows so we can run the
+        // poll loop (which borrows poller + queue) concurrently with the
+        // handler loop (which borrows the remaining fields).
+        let Self {
+            poller,
+            security,
+            audit,
+            queue,
+            policy_gate,
+            dialogue_mgr,
+            startup_time_ms,
+            cancel_flag,
+            primary_chat_id: _,
+            aura_config,
+            user_command_tx,
+        } = self;
+
+        let poll_future = poller.poll_loop(&tx, queue);
+
+        let handler_future = async {
+            while let Some(update) = rx.recv().await {
+                if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    info!("cancel flag set — stopping Telegram engine");
+                    break;
+                }
+
+                // Expire stale dialogues and approval requests.
+                dialogue_mgr.expire_stale();
+                policy_gate.expire_stale();
+
+                // ── Inline handle_update logic ──────────────────────────
+                let chat_id = update.chat_id;
+                let text = match &update.text {
+                    Some(t) => t.clone(),
+                    None => continue, // Ignore non-text messages.
+                };
+
+                // Check for active dialogue first.
+                if dialogue_mgr.has_active(chat_id) {
+                    use dialogue::DialogueOutcome;
+                    match dialogue_mgr.process_input(chat_id, &text) {
+                        DialogueOutcome::Continue(prompt) => {
+                            let _ = queue.enqueue(
+                                chat_id,
+                                &MessageContent::Text {
+                                    text: prompt,
+                                    parse_mode: Some("HTML".into()),
+                                },
+                                0,
+                                3600,
+                                3,
+                                None,
+                            );
+                        }
+                        DialogueOutcome::Completed { kind: _, responses } => {
+                            for resp in responses {
+                                let _ = queue.enqueue(
+                                    chat_id,
+                                    &MessageContent::Text {
+                                        text: resp,
+                                        parse_mode: None,
+                                    },
+                                    0,
+                                    3600,
+                                    3,
+                                    None,
+                                );
+                            }
+                        }
+                        DialogueOutcome::InvalidInput(hint) => {
+                            let _ = queue.enqueue(
+                                chat_id,
+                                &MessageContent::Text {
+                                    text: hint,
+                                    parse_mode: None,
+                                },
+                                0,
+                                3600,
+                                3,
+                                None,
+                            );
+                        }
+                        DialogueOutcome::TimedOut => {
+                            let _ = queue.enqueue(
+                                chat_id,
+                                &MessageContent::Text {
+                                    text: "Dialogue timed out.".into(),
+                                    parse_mode: None,
+                                },
+                                0,
+                                3600,
+                                3,
+                                None,
+                            );
+                        }
+                        DialogueOutcome::Cancelled => {
+                            let _ = queue.enqueue(
+                                chat_id,
+                                &MessageContent::Text {
+                                    text: "Dialogue cancelled.".into(),
+                                    parse_mode: None,
+                                },
+                                0,
+                                3600,
+                                3,
+                                None,
+                            );
+                        }
+                    }
+                    continue;
+                }
+
+                // Parse the command.
+                let cmd = TelegramCommand::parse(&text);
+                let audit_summary = cmd.audit_summary();
+                let required_perm = cmd.required_permission();
+                let is_unlock = matches!(cmd, TelegramCommand::Unlock { .. });
+
+                // Security check (layers 1–4).
+                match security.check(chat_id, required_perm, is_unlock) {
+                    Ok(()) => {
+                        let result = {
+                            let mut ctx = HandlerContext {
+                                chat_id,
+                                security,
+                                audit,
+                                queue,
+                                startup_time_ms: *startup_time_ms,
+                                config: aura_config.as_ref(),
+                                user_command_tx: user_command_tx.as_ref(),
+                            };
+                            handlers::dispatch(&cmd, &mut ctx)
+                        };
+
+                        match result {
+                            Ok(response) => {
+                                audit.record(chat_id, &audit_summary, AuditOutcome::Allowed);
+                                // Inline enqueue_response logic.
+                                match response {
+                                    HandlerResponse::Text(text) => {
+                                        let _ = queue.enqueue(
+                                            chat_id,
+                                            &MessageContent::Text { text, parse_mode: None },
+                                            0,
+                                            3600,
+                                            3,
+                                            None,
+                                        );
+                                    }
+                                    HandlerResponse::Html(text) => {
+                                        let _ = queue.enqueue(
+                                            chat_id,
+                                            &MessageContent::Text {
+                                                text,
+                                                parse_mode: Some("HTML".into()),
+                                            },
+                                            0,
+                                            3600,
+                                            3,
+                                            None,
+                                        );
+                                    }
+                                    HandlerResponse::Photo { data, caption } => {
+                                        let _ = queue.enqueue(
+                                            chat_id,
+                                            &MessageContent::Photo { data, caption },
+                                            0,
+                                            3600,
+                                            3,
+                                            None,
+                                        );
+                                    }
+                                    HandlerResponse::Voice { text } => {
+                                        let _ = queue.enqueue(
+                                            chat_id,
+                                            &MessageContent::Text {
+                                                text,
+                                                parse_mode: None,
+                                            },
+                                            1,
+                                            3600,
+                                            3,
+                                            Some("voice"),
+                                        );
+                                    }
+                                    HandlerResponse::Empty => {}
+                                }
+                            }
+                            Err(e) => {
+                                audit.record(
+                                    chat_id,
+                                    &audit_summary,
+                                    AuditOutcome::Failed(e.to_string()),
+                                );
+                                let _ = queue.enqueue(
+                                    chat_id,
+                                    &MessageContent::Text {
+                                        text: format!("Command failed: {e}"),
+                                        parse_mode: None,
+                                    },
+                                    0,
+                                    3600,
+                                    3,
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                    Err(sec_err) => {
+                        audit.record(
+                            chat_id,
+                            &audit_summary,
+                            AuditOutcome::Denied(sec_err.to_string()),
+                        );
+                        let _ = queue.enqueue(
+                            chat_id,
+                            &MessageContent::Text {
+                                text: format!("Access denied: {sec_err}"),
+                                parse_mode: None,
+                            },
+                            0,
+                            3600,
+                            3,
+                            None,
+                        );
+                    }
+                }
             }
+        };
 
-            // Expire stale dialogues and approval requests.
-            self.dialogue_mgr.expire_stale();
-            self.policy_gate.expire_stale();
-
-            self.handle_update(update).await;
+        // Run both futures concurrently. When either finishes, cancel the other.
+        tokio::select! {
+            poll_result = poll_future => {
+                if let Err(e) = poll_result {
+                    tracing::error!(error = %e, "Telegram poll loop exited with error");
+                }
+            }
+            _ = handler_future => {
+                tracing::info!("Telegram handler loop exited");
+            }
         }
 
         info!("Telegram engine stopped");
@@ -249,6 +489,8 @@ impl TelegramEngine {
                         audit: &mut self.audit,
                         queue: &self.queue,
                         startup_time_ms: self.startup_time_ms,
+                        config: self.aura_config.as_ref(),
+                        user_command_tx: self.user_command_tx.as_ref(),
                     };
                     handlers::dispatch(&cmd, &mut ctx)
                 };
@@ -480,6 +722,17 @@ impl TelegramEngine {
 
     pub fn dialogue_manager(&self) -> &DialogueManager {
         &self.dialogue_mgr
+    }
+
+    /// Inject the live AURA config snapshot so handlers can read real values.
+    pub fn set_aura_config(&mut self, config: AuraConfig) {
+        self.aura_config = Some(config);
+    }
+
+    /// Inject the user-command channel so fallback handlers can forward
+    /// commands to the cognitive pipeline.
+    pub fn set_user_command_tx(&mut self, tx: UserCommandTx) {
+        self.user_command_tx = Some(tx);
     }
 }
 

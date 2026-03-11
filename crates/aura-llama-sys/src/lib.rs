@@ -214,6 +214,16 @@ pub trait LlamaBackend: Send + Sync {
     ///
     /// Must be called before `sample_next()` to feed the prompt.
     fn eval(&self, ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<()>;
+
+    /// Get the log-probability of a specific token given the current logits state.
+    ///
+    /// Must be called after `sample_next()` or `eval()` while the logits buffer
+    /// is still valid (before the next decode call).
+    ///
+    /// Computes `log_softmax(logit[token])` = `logit[token] - log(sum(exp(logits)))`.
+    ///
+    /// Returns `None` on stub backends or if logits are unavailable.
+    fn get_token_logprob(&self, ctx: *mut LlamaContext, token: LlamaToken) -> Option<f32>;
 }
 
 // ─── Stub backend (desktop / host builds) ───────────────────────────────────
@@ -982,39 +992,59 @@ impl LlamaBackend for StubBackend {
         trace!(token_count = tokens.len(), "stub: eval (no-op)");
         Ok(())
     }
+
+    fn get_token_logprob(&self, _ctx: *mut LlamaContext, _token: LlamaToken) -> Option<f32> {
+        // Stub backend has no real logits — return None so confidence
+        // estimation falls back to the uninformative 0.5 prior.
+        None
+    }
 }
 
-// ─── Android FFI backend ────────────────────────────────────────────────────
+#[cfg(target_os = "android")]
+extern "C" {
+    fn llama_load_model_from_file(path: *const std::ffi::c_char, params: LlamaModelParams) -> *mut LlamaModel;
+    fn llama_new_context_with_model(model: *mut LlamaModel, params: LlamaContextParams) -> *mut LlamaContext;
+    fn llama_free_model(model: *mut LlamaModel);
+    fn llama_free(ctx: *mut LlamaContext);
+    fn llama_tokenize(
+        ctx: *mut LlamaContext,
+        text: *const std::ffi::c_char,
+        tokens: *mut LlamaToken,
+        n_max_tokens: i32,
+        add_bos: bool,
+    ) -> i32;
+    fn llama_token_to_piece(
+        model: *mut LlamaModel,
+        token: LlamaToken,
+        buf: *mut std::ffi::c_char,
+        length: i32,
+    ) -> i32;
+    fn llama_decode(
+        ctx: *mut LlamaContext,
+        batch: *const LlamaToken,
+        n_tokens: i32,
+        n_past: i32,
+    ) -> i32;
+    fn llama_get_logits(ctx: *mut LlamaContext) -> *mut f32;
+    fn llama_n_vocab(model: *mut LlamaModel) -> i32;
+    fn llama_token_eos(model: *mut LlamaModel) -> LlamaToken;
+    fn llama_token_bos(model: *mut LlamaModel) -> LlamaToken;
+}
 
-/// Runtime-loaded llama.cpp backend for Android.
+/// Statically-linked llama.cpp backend for Android.
 ///
-/// Uses `libloading` to dynamically load `libllama.so` at runtime.
-/// This avoids build-time linking issues and allows loading the library
-/// from the APK's native lib directory.
+/// Uses standard `extern "C"` blocks, as `build.rs` compiles `llama.cpp` directly.
 #[cfg(target_os = "android")]
 pub struct FfiBackend {
-    _lib: libloading::Library,
-    // Function pointers resolved from the loaded library
-    fn_load_model:
-        unsafe extern "C" fn(*const std::ffi::c_char, LlamaModelParams) -> *mut LlamaModel,
-    fn_new_context: unsafe extern "C" fn(*mut LlamaModel, LlamaContextParams) -> *mut LlamaContext,
-    fn_free_model: unsafe extern "C" fn(*mut LlamaModel),
-    fn_free_context: unsafe extern "C" fn(*mut LlamaContext),
-    fn_tokenize: unsafe extern "C" fn(
-        *mut LlamaContext,
-        *const std::ffi::c_char,
-        *mut LlamaToken,
-        i32,
-        bool,
-    ) -> i32,
-    fn_detokenize:
-        unsafe extern "C" fn(*mut LlamaModel, LlamaToken, *mut std::ffi::c_char, i32) -> i32,
-    fn_decode: unsafe extern "C" fn(*mut LlamaContext, *const LlamaToken, i32, i32) -> i32,
-    fn_get_logits: unsafe extern "C" fn(*mut LlamaContext) -> *mut f32,
-    fn_n_vocab: unsafe extern "C" fn(*mut LlamaModel) -> i32,
-    fn_token_eos: unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken,
-    fn_token_bos: unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken,
     model_ptr: std::sync::Mutex<Option<*mut LlamaModel>>,
+    /// Context pointer — stored so `Drop` can free it if the caller
+    /// doesn't call `free_model()` explicitly. Without this, the context
+    /// (which can be 500MB–4GB) leaks when the struct is dropped.
+    ctx_ptr: std::sync::Mutex<Option<*mut LlamaContext>>,
+    /// Tracks the number of tokens already evaluated in the context,
+    /// so multi-turn conversations advance the position instead of
+    /// always overwriting position 0.
+    n_past: std::sync::Mutex<i32>,
 }
 
 #[cfg(target_os = "android")]
@@ -1024,86 +1054,37 @@ unsafe impl Sync for FfiBackend {}
 
 #[cfg(target_os = "android")]
 impl FfiBackend {
-    /// Load the llama.cpp shared library from the given path.
-    ///
-    /// # Errors
-    /// Returns `BackendError::LibraryLoad` if the library cannot be loaded,
-    /// or `BackendError::SymbolResolution` if any required symbol is missing.
-    pub fn new(lib_path: &str) -> BackendResult<Self> {
-        info!(path = lib_path, "loading libllama.so via libloading");
+    pub fn new(_lib_path: &str) -> BackendResult<Self> {
+        info!("Statically-linked FFI backend initialized (lib_path argument ignored)");
+        Ok(Self {
+            model_ptr: std::sync::Mutex::new(None),
+            ctx_ptr: std::sync::Mutex::new(None),
+            n_past: std::sync::Mutex::new(0),
+        })
+    }
+}
 
-        let lib = unsafe { libloading::Library::new(lib_path) }
-            .map_err(|e| BackendError::LibraryLoad(format!("{}: {}", lib_path, e)))?;
-
-        // Resolve all required symbols
-        macro_rules! resolve {
-            ($name:expr, $type:ty) => {
-                *unsafe { lib.get::<$type>($name) }.map_err(|e| {
-                    BackendError::SymbolResolution(format!(
-                        "{}: {}",
-                        String::from_utf8_lossy($name),
-                        e
-                    ))
-                })?
-            };
+#[cfg(target_os = "android")]
+impl Drop for FfiBackend {
+    fn drop(&mut self) {
+        // Free context FIRST — it references the model internally,
+        // so freeing the model first would leave a dangling pointer
+        // in the context during llama_free().
+        let mut ctx_guard = self.ctx_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ctx) = ctx_guard.take() {
+            if !ctx.is_null() {
+                unsafe { llama_free(ctx) };
+                debug!("FfiBackend::drop freed context pointer");
+            }
         }
 
-        let backend = Self {
-            fn_load_model: resolve!(
-                b"llama_load_model_from_file\0",
-                unsafe extern "C" fn(*const std::ffi::c_char, LlamaModelParams) -> *mut LlamaModel
-            ),
-            fn_new_context: resolve!(
-                b"llama_new_context_with_model\0",
-                unsafe extern "C" fn(*mut LlamaModel, LlamaContextParams) -> *mut LlamaContext
-            ),
-            fn_free_model: resolve!(b"llama_free_model\0", unsafe extern "C" fn(*mut LlamaModel)),
-            fn_free_context: resolve!(b"llama_free\0", unsafe extern "C" fn(*mut LlamaContext)),
-            fn_tokenize: resolve!(
-                b"llama_tokenize\0",
-                unsafe extern "C" fn(
-                    *mut LlamaContext,
-                    *const std::ffi::c_char,
-                    *mut LlamaToken,
-                    i32,
-                    bool,
-                ) -> i32
-            ),
-            fn_detokenize: resolve!(
-                b"llama_token_to_piece\0",
-                unsafe extern "C" fn(
-                    *mut LlamaModel,
-                    LlamaToken,
-                    *mut std::ffi::c_char,
-                    i32,
-                ) -> i32
-            ),
-            fn_decode: resolve!(
-                b"llama_decode\0",
-                unsafe extern "C" fn(*mut LlamaContext, *const LlamaToken, i32, i32) -> i32
-            ),
-            fn_get_logits: resolve!(
-                b"llama_get_logits\0",
-                unsafe extern "C" fn(*mut LlamaContext) -> *mut f32
-            ),
-            fn_n_vocab: resolve!(
-                b"llama_n_vocab\0",
-                unsafe extern "C" fn(*mut LlamaModel) -> i32
-            ),
-            fn_token_eos: resolve!(
-                b"llama_token_eos\0",
-                unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken
-            ),
-            fn_token_bos: resolve!(
-                b"llama_token_bos\0",
-                unsafe extern "C" fn(*mut LlamaModel) -> LlamaToken
-            ),
-            model_ptr: std::sync::Mutex::new(None),
-            _lib: lib,
-        };
-
-        info!("libllama.so loaded successfully — all symbols resolved");
-        Ok(backend)
+        let mut guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(model) = guard.take() {
+            if !model.is_null() {
+                unsafe { llama_free_model(model) };
+                debug!("FfiBackend::drop freed model pointer");
+            }
+        }
     }
 }
 
@@ -1124,7 +1105,7 @@ impl LlamaBackend for FfiBackend {
         let c_path = CString::new(path)
             .map_err(|e| BackendError::ModelLoad(format!("invalid path: {}", e)))?;
 
-        let model = unsafe { (self.fn_load_model)(c_path.as_ptr(), model_params.clone()) };
+        let model = unsafe { llama_load_model_from_file(c_path.as_ptr(), model_params.clone()) };
         if model.is_null() {
             return Err(BackendError::ModelLoad(format!(
                 "llama_load_model_from_file returned null for: {}",
@@ -1132,30 +1113,33 @@ impl LlamaBackend for FfiBackend {
             )));
         }
 
-        let ctx = unsafe { (self.fn_new_context)(model, ctx_params.clone()) };
+        let ctx = unsafe { llama_new_context_with_model(model, ctx_params.clone()) };
         if ctx.is_null() {
             // Clean up the model we just loaded
-            unsafe { (self.fn_free_model)(model) };
+            unsafe { llama_free_model(model) };
             return Err(BackendError::ContextCreation(
                 "llama_new_context_with_model returned null".into(),
             ));
         }
 
         *self.model_ptr.lock().unwrap_or_else(|e| e.into_inner()) = Some(model);
+        *self.ctx_ptr.lock().unwrap_or_else(|e| e.into_inner()) = Some(ctx);
 
-        info!(path, "model loaded via FFI");
+        info!(path, "model loaded via static FFI");
         Ok((model, ctx))
     }
 
     fn free_model(&self, model: *mut LlamaModel, ctx: *mut LlamaContext) {
         if !ctx.is_null() {
-            unsafe { (self.fn_free_context)(ctx) };
+            unsafe { llama_free(ctx) };
         }
         if !model.is_null() {
-            unsafe { (self.fn_free_model)(model) };
+            unsafe { llama_free_model(model) };
         }
         *self.model_ptr.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        debug!("model freed via FFI");
+        *self.ctx_ptr.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.n_past.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+        debug!("model freed via static FFI");
     }
 
     fn tokenize(&self, ctx: *mut LlamaContext, text: &str) -> BackendResult<Vec<LlamaToken>> {
@@ -1166,7 +1150,7 @@ impl LlamaBackend for FfiBackend {
 
         // First call to get required buffer size
         let n_tokens =
-            unsafe { (self.fn_tokenize)(ctx, c_text.as_ptr(), std::ptr::null_mut(), 0, true) };
+            unsafe { llama_tokenize(ctx, c_text.as_ptr(), std::ptr::null_mut(), 0, true) };
         if n_tokens < 0 {
             return Err(BackendError::Tokenization(format!(
                 "llama_tokenize size query failed: {}",
@@ -1176,7 +1160,7 @@ impl LlamaBackend for FfiBackend {
 
         let mut tokens = vec![0i32; n_tokens as usize];
         let result = unsafe {
-            (self.fn_tokenize)(ctx, c_text.as_ptr(), tokens.as_mut_ptr(), n_tokens, true)
+            llama_tokenize(ctx, c_text.as_ptr(), tokens.as_mut_ptr(), n_tokens, true)
         };
         if result < 0 {
             return Err(BackendError::Tokenization(format!(
@@ -1186,7 +1170,7 @@ impl LlamaBackend for FfiBackend {
         }
 
         tokens.truncate(result as usize);
-        trace!(token_count = tokens.len(), "tokenized via FFI");
+        trace!(token_count = tokens.len(), "tokenized via static FFI");
         Ok(tokens)
     }
 
@@ -1200,7 +1184,7 @@ impl LlamaBackend for FfiBackend {
 
         for &token in tokens {
             let n = unsafe {
-                (self.fn_detokenize)(
+                llama_token_to_piece(
                     model,
                     token,
                     buf.as_mut_ptr() as *mut std::ffi::c_char,
@@ -1213,7 +1197,7 @@ impl LlamaBackend for FfiBackend {
             }
         }
 
-        trace!(text_len = result.len(), "detokenized via FFI");
+        trace!(text_len = result.len(), "detokenized via static FFI");
         Ok(result)
     }
 
@@ -1227,8 +1211,8 @@ impl LlamaBackend for FfiBackend {
         let model =
             model_guard.ok_or_else(|| BackendError::Generation("no model loaded".into()))?;
 
-        let n_vocab = unsafe { (self.fn_n_vocab)(model) } as usize;
-        let logits_ptr = unsafe { (self.fn_get_logits)(ctx) };
+        let n_vocab = unsafe { llama_n_vocab(model) } as usize;
+        let logits_ptr = unsafe { llama_get_logits(ctx) };
         if logits_ptr.is_null() {
             return Err(BackendError::Generation("logits pointer is null".into()));
         }
@@ -1339,7 +1323,7 @@ impl LlamaBackend for FfiBackend {
     fn eos_token(&self) -> LlamaToken {
         let guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
         match *guard {
-            Some(model) => unsafe { (self.fn_token_eos)(model) },
+            Some(model) => unsafe { llama_token_eos(model) },
             None => special_tokens::EOS,
         }
     }
@@ -1347,18 +1331,21 @@ impl LlamaBackend for FfiBackend {
     fn bos_token(&self) -> LlamaToken {
         let guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
         match *guard {
-            Some(model) => unsafe { (self.fn_token_bos)(model) },
+            Some(model) => unsafe { llama_token_bos(model) },
             None => special_tokens::BOS,
         }
     }
 
     fn eval(&self, ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> BackendResult<()> {
+        let mut n_past_guard = self.n_past.lock().unwrap_or_else(|e| e.into_inner());
+        let past = *n_past_guard;
+
         let result = unsafe {
-            (self.fn_decode)(
+            llama_decode(
                 ctx,
                 tokens.as_ptr(),
                 tokens.len() as i32,
-                0, // past token count = 0 for initial eval
+                past, // advance position for multi-turn context
             )
         };
 
@@ -1369,8 +1356,53 @@ impl LlamaBackend for FfiBackend {
             )));
         }
 
-        trace!(token_count = tokens.len(), "eval via FFI");
+        *n_past_guard += tokens.len() as i32;
+        trace!(token_count = tokens.len(), n_past = *n_past_guard, "eval via FFI");
         Ok(())
+    }
+
+    fn get_token_logprob(&self, ctx: *mut LlamaContext, token: LlamaToken) -> Option<f32> {
+        let model_guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        let model = (*model_guard)?;
+
+        let n_vocab = unsafe { llama_n_vocab(model) } as usize;
+        if n_vocab == 0 {
+            return None;
+        }
+
+        let logits_ptr = unsafe { llama_get_logits(ctx) };
+        if logits_ptr.is_null() {
+            return None;
+        }
+
+        let token_idx = token as usize;
+        if token_idx >= n_vocab {
+            return None;
+        }
+
+        // SAFETY: logits_ptr is non-null and points to n_vocab floats,
+        // valid until the next llama_decode call. token_idx is bounds-checked.
+        let logits = unsafe { std::slice::from_raw_parts(logits_ptr, n_vocab) };
+
+        // Numerically stable log_softmax:
+        //   log_softmax(x_i) = x_i - log(sum(exp(x_j)))
+        //                    = x_i - (max + log(sum(exp(x_j - max))))
+        let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if !max_logit.is_finite() {
+            return None;
+        }
+
+        let sum_exp: f64 = logits
+            .iter()
+            .map(|&l| ((l - max_logit) as f64).exp())
+            .sum();
+
+        if sum_exp <= 0.0 {
+            return None;
+        }
+
+        let log_softmax = (logits[token_idx] - max_logit) as f64 - sum_exp.ln();
+        Some(log_softmax as f32)
     }
 }
 
@@ -1632,6 +1664,14 @@ mod tests {
         let tokens = vec![special_tokens::BOS, 3, 7]; // BOS, "the", "settings"
         let result = stub.eval(std::ptr::null_mut(), &tokens);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn stub_get_token_logprob_returns_none() {
+        let stub = test_stub();
+        // Stub backend has no logits — should always return None
+        let result = stub.get_token_logprob(std::ptr::null_mut(), 3);
+        assert!(result.is_none(), "stub should return None for logprob");
     }
 
     #[test]

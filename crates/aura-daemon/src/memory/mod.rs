@@ -21,6 +21,7 @@
 //! - Consolidation cascades: micro ⊂ light ⊂ deep; emergency is its own path.
 
 pub mod archive;
+pub mod compaction;
 pub mod consolidation;
 pub mod embeddings;
 pub mod episodic;
@@ -30,17 +31,20 @@ pub mod importance;
 pub mod patterns;
 pub mod semantic;
 pub mod working;
+pub mod workflows;
 
 // Re-export key types for ergonomic use by the rest of the daemon.
 pub use archive::{ArchiveMemory, ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD};
+pub use compaction::ContextCompactor;
 pub use consolidation::{consolidate, ConsolidationLevel, ConsolidationReport};
-pub use embeddings::{cosine_similarity, embed, EMBED_DIM};
+pub use embeddings::{cosine_similarity, embed, jaccard_trigram_similarity, EMBED_DIM};
 pub use episodic::EpisodicMemory;
 pub use feedback::FeedbackLoop;
 pub use importance::calculate_importance;
 pub use patterns::PatternEngine;
 pub use semantic::SemanticMemory;
 pub use working::{WorkingMemory, WorkingResult, MAX_SLOTS};
+pub use workflows::WorkflowMemory;
 
 use std::path::Path;
 
@@ -101,6 +105,21 @@ impl std::fmt::Display for MemoryUsageReport {
 }
 
 // ---------------------------------------------------------------------------
+// PredictionResult
+// ---------------------------------------------------------------------------
+
+/// Result of a cross-tier prediction query.
+#[derive(Debug, Clone)]
+pub struct PredictionResult {
+    /// The predicted next action or event name.
+    pub predicted_action: String,
+    /// Confidence score [0.0, 1.0].
+    pub confidence: f32,
+    /// The intelligence tier that made the prediction.
+    pub source_tier: String, 
+}
+
+// ---------------------------------------------------------------------------
 // AuraMemory — the unified orchestrator
 // ---------------------------------------------------------------------------
 
@@ -125,6 +144,7 @@ pub struct AuraMemory {
     pub episodic: EpisodicMemory,
     pub semantic: SemanticMemory,
     pub archive: ArchiveMemory,
+    pub workflows: WorkflowMemory,
     pub pattern_engine: PatternEngine,
     pub feedback_loop: FeedbackLoop,
 }
@@ -147,6 +167,7 @@ impl AuraMemory {
         let episodic = EpisodicMemory::open(&data_dir.join("episodic.db"))?;
         let semantic = SemanticMemory::open(&data_dir.join("semantic.db"))?;
         let archive = ArchiveMemory::open(&data_dir.join("archive.db"))?;
+        let workflows = WorkflowMemory::open(&data_dir.join("workflows.db"))?;
         let working = WorkingMemory::new();
         let pattern_engine = PatternEngine::new();
         let feedback_loop = FeedbackLoop::new();
@@ -161,6 +182,7 @@ impl AuraMemory {
             episodic,
             semantic,
             archive,
+            workflows,
             pattern_engine,
             feedback_loop,
         })
@@ -171,6 +193,7 @@ impl AuraMemory {
         let episodic = EpisodicMemory::open_in_memory()?;
         let semantic = SemanticMemory::open_in_memory()?;
         let archive = ArchiveMemory::open_in_memory()?;
+        let workflows = WorkflowMemory::open_in_memory()?;
         let working = WorkingMemory::new();
         let pattern_engine = PatternEngine::new();
         let feedback_loop = FeedbackLoop::new();
@@ -182,6 +205,7 @@ impl AuraMemory {
             episodic,
             semantic,
             archive,
+            workflows,
             pattern_engine,
             feedback_loop,
         })
@@ -349,6 +373,80 @@ impl AuraMemory {
         );
 
         Ok(all_results)
+    }
+
+    // -----------------------------------------------------------------------
+    // Prediction — cross-tier next-action forecasting
+    // -----------------------------------------------------------------------
+
+    /// Predict the user's next action based on recent context and historical patterns.
+    ///
+    /// Aggregates predictions across memory tiers:
+    /// - **Workflows**: matches recent actions against established automation sequences.
+    /// - **Temporal Patterns**: checks the pattern engine for immediate A->B event correlates.
+    pub async fn predict_next_action(
+        &self,
+        current_context: &str,
+        recent_events: &[String],
+    ) -> Result<Vec<PredictionResult>, MemError> {
+        let mut predictions = Vec::new();
+
+        // 1. Workflow predictions (long sequences)
+        if let Ok(workflows) = self.workflows.get_all().await {
+            for (_id, wf) in workflows {
+                let seq_strings: Vec<String> = wf.sequence.iter().map(|a| format!("{:?}", a)).collect();
+                
+                // Simplistic prefix match for prediction matching
+                if !recent_events.is_empty() && seq_strings.len() > recent_events.len() {
+                    let mut is_prefix = true;
+                    for (i, ev) in recent_events.iter().enumerate() {
+                        // Very rough comparison, usually we'd want more semantically aware matching
+                        if i < seq_strings.len() && !seq_strings[i].contains(ev) && !ev.contains(&seq_strings[i]) {
+                            is_prefix = false;
+                            break;
+                        }
+                    }
+                    if is_prefix {
+                        let next_step = seq_strings[recent_events.len()].clone();
+                        let conf = (wf.frequency as f32 / 10.0).clamp(0.4, 0.95);
+                        predictions.push(PredictionResult {
+                            predicted_action: next_step,
+                            confidence: conf,
+                            source_tier: "Workflow".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Temporal Pattern Engine (immediate A->B)
+        if let Some(last_event) = recent_events.last() {
+            let temporal_preds = self.pattern_engine.predict_next_temporal(last_event);
+            for (next_event, conf) in temporal_preds {
+                predictions.push(PredictionResult {
+                    predicted_action: next_event,
+                    confidence: conf,
+                    source_tier: "TemporalPattern".to_string(),
+                });
+            }
+        }
+
+        // Sort by confidence descending
+        predictions.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Deduplicate by predicted_action
+        let mut unique: Vec<PredictionResult> = Vec::new();
+        for p in predictions {
+            if !unique.iter().any(|u| u.predicted_action == p.predicted_action) {
+                unique.push(p);
+            }
+        }
+        
+        // Contextual boost (if current_context contains clues, could boost related predictions - stub for M10)
+        let _ = current_context;
+
+        unique.truncate(5); // Return top 5 predictions
+        Ok(unique)
     }
 
     // -----------------------------------------------------------------------

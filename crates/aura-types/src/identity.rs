@@ -51,29 +51,67 @@ pub enum RelationshipStage {
     Soulmate,
 }
 
-impl RelationshipStage {
-    /// Determine relationship stage from trust value with hysteresis.
-    ///
-    /// When transitioning UP, uses the standard thresholds.
-    /// When transitioning DOWN, requires dropping 0.05 below the threshold
-    /// to prevent oscillation at boundaries.
+/// Multi-dimensional relationship metric tensor.
+/// Transcends the 1D 'trust' scalar into a robust four-factor cognitive alignment model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionTensor {
+    /// Pure statistical trust (success / total interactions)
+    pub reliability: f32,
+    /// Shared understanding and conceptual agreement
+    pub conceptual_alignment: f32,
+    /// Depth of personal context logically shared
+    pub context_depth: f32,
+    /// Harmonic resonance (mood and semantic alignment)
+    pub emotional_resonance: f32,
+}
+
+impl Default for InteractionTensor {
+    fn default() -> Self {
+        Self {
+            reliability: 0.1,
+            conceptual_alignment: 0.1,
+            context_depth: 0.0,
+            emotional_resonance: 0.5, // neutral start
+        }
+    }
+}
+
+impl InteractionTensor {
+    /// Compute the unified state cohesion using dynamic weighted dimensional fusion.
     #[must_use]
-    pub fn from_trust(trust: f32, current: Option<RelationshipStage>) -> RelationshipStage {
-        let t = trust.clamp(0.0, 1.0);
+    pub fn compute_cohesion(&self) -> f32 {
+        // Base weights for the architectural mapping: functionality (reliability) is core,
+        // but higher stages require depth and resonance.
+        (self.reliability * 0.4
+            + self.conceptual_alignment * 0.3
+            + self.context_depth * 0.2
+            + self.emotional_resonance * 0.1)
+            .clamp(0.0, 1.0)
+    }
+}
+
+impl RelationshipStage {
+    /// Determine relationship stage dynamically from the multi-dimensional interaction tensor.
+    ///
+    /// When transitioning UP, uses standard fused thresholds.
+    /// When transitioning DOWN, requires dropping 0.05 below the threshold to prevent oscillation.
+    #[must_use]
+    pub fn evaluate_stage(tensor: &InteractionTensor, current: Option<RelationshipStage>) -> RelationshipStage {
+        let cohesion = tensor.compute_cohesion();
 
         match current {
-            None => Self::from_trust_raw(t),
+            None => Self::from_cohesion_raw(cohesion),
             Some(current_stage) => {
-                let raw = Self::from_trust_raw(t);
+                let raw = Self::from_cohesion_raw(cohesion);
                 let raw_ord = Self::ordinal(&raw);
                 let cur_ord = Self::ordinal(&current_stage);
 
                 if raw_ord > cur_ord {
-                    // Upgrading — use standard thresholds.
+                    // Upgrading — use standard cohesion thresholds.
                     raw
                 } else if raw_ord < cur_ord {
                     // Downgrading — apply hysteresis (need to drop 0.05 further).
-                    let hysteresis_stage = Self::from_trust_raw((t + 0.05).min(1.0));
+                    let hysteresis_stage = Self::from_cohesion_raw((cohesion + 0.05).min(1.0));
                     let hyst_ord = Self::ordinal(&hysteresis_stage);
                     if hyst_ord < cur_ord {
                         raw
@@ -87,14 +125,14 @@ impl RelationshipStage {
         }
     }
 
-    fn from_trust_raw(t: f32) -> RelationshipStage {
-        if t >= 0.85 {
+    fn from_cohesion_raw(c: f32) -> RelationshipStage {
+        if c >= 0.85 {
             RelationshipStage::Soulmate
-        } else if t >= 0.60 {
+        } else if c >= 0.60 {
             RelationshipStage::CloseFriend
-        } else if t >= 0.35 {
+        } else if c >= 0.35 {
             RelationshipStage::Friend
-        } else if t >= 0.15 {
+        } else if c >= 0.15 {
             RelationshipStage::Acquaintance
         } else {
             RelationshipStage::Stranger
@@ -206,40 +244,49 @@ mod tests {
         assert!((traits.neuroticism - 0.5).abs() < f32::EPSILON);
     }
 
+    fn create_tensor(cohesion_target: f32) -> InteractionTensor {
+        InteractionTensor {
+            reliability: cohesion_target,
+            conceptual_alignment: cohesion_target,
+            context_depth: cohesion_target,
+            emotional_resonance: cohesion_target,
+        }
+    }
+
     #[test]
-    fn test_relationship_stage_from_trust_no_hysteresis() {
+    fn test_dynamic_relationship_stage_no_hysteresis() {
         assert_eq!(
-            RelationshipStage::from_trust(0.05, None),
+            RelationshipStage::evaluate_stage(&create_tensor(0.05), None),
             RelationshipStage::Stranger
         );
         assert_eq!(
-            RelationshipStage::from_trust(0.20, None),
+            RelationshipStage::evaluate_stage(&create_tensor(0.20), None),
             RelationshipStage::Acquaintance
         );
         assert_eq!(
-            RelationshipStage::from_trust(0.50, None),
+            RelationshipStage::evaluate_stage(&create_tensor(0.50), None),
             RelationshipStage::Friend
         );
         assert_eq!(
-            RelationshipStage::from_trust(0.70, None),
+            RelationshipStage::evaluate_stage(&create_tensor(0.70), None),
             RelationshipStage::CloseFriend
         );
         assert_eq!(
-            RelationshipStage::from_trust(0.90, None),
+            RelationshipStage::evaluate_stage(&create_tensor(0.90), None),
             RelationshipStage::Soulmate
         );
     }
 
     #[test]
-    fn test_relationship_hysteresis() {
+    fn test_dynamic_relationship_hysteresis() {
         // At exactly threshold 0.35, raw says Friend.
-        // If currently Friend and trust drops to 0.33, raw says Acquaintance.
+        // If currently Friend and cohesion drops to 0.33, raw says Acquaintance.
         // But with hysteresis, 0.33 + 0.05 = 0.38 => Friend, so no downgrade.
-        let stage = RelationshipStage::from_trust(0.33, Some(RelationshipStage::Friend));
+        let stage = RelationshipStage::evaluate_stage(&create_tensor(0.33), Some(RelationshipStage::Friend));
         assert_eq!(stage, RelationshipStage::Friend);
 
         // Drop to 0.28 — 0.28 + 0.05 = 0.33, raw says Acquaintance — downgrade.
-        let stage = RelationshipStage::from_trust(0.28, Some(RelationshipStage::Friend));
+        let stage = RelationshipStage::evaluate_stage(&create_tensor(0.28), Some(RelationshipStage::Friend));
         assert_eq!(stage, RelationshipStage::Acquaintance);
     }
 

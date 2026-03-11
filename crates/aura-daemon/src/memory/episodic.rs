@@ -439,6 +439,36 @@ impl EpisodicMemory {
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
     }
 
+    /// Get the N most recent full episodes.
+    /// Useful for clustering and analysis where context tags and full metadata are needed.
+    pub async fn get_recent_episodes(&self, limit: usize) -> Result<Vec<Episode>, MemError> {
+        let conn = self.conn.clone();
+        
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content, emotional_valence, importance, context_tags,
+                            timestamp_ms, access_count, last_access_ms, embedding
+                     FROM episodes
+                     ORDER BY id DESC LIMIT ?1",
+                )
+                .map_err(|e| MemError::QueryFailed(format!("recent query prepare failed: {}", e)))?;
+
+            let rows = stmt
+                .query_map(params![limit as i64], row_to_episode)
+                .map_err(|e| MemError::QueryFailed(format!("recent query failed: {}", e)))?;
+
+            let mut episodes = Vec::new();
+            for row in rows {
+                episodes.push(row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?);
+            }
+            Ok(episodes)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
+
     /// Estimate storage size in bytes.
     pub async fn storage_bytes(&self) -> Result<u64, MemError> {
         let conn = self.conn.clone();

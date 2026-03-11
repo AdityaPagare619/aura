@@ -24,6 +24,17 @@ const MAX_UPCOMING_CACHE: usize = 30;
 /// Maximum length for a contact name.
 const MAX_NAME_LEN: usize = 64;
 
+/// Default number of days to scan ahead for upcoming birthdays.
+pub(crate) const DEFAULT_SCAN_AHEAD_DAYS: u16 = 7;
+
+// ---------------------------------------------------------------------------
+// Serde default helpers
+// ---------------------------------------------------------------------------
+
+fn default_scan_ahead_days() -> u16 {
+    DEFAULT_SCAN_AHEAD_DAYS
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -58,6 +69,9 @@ pub struct BirthdayTracker {
     upcoming_cache: Vec<(u64, u16)>,
     /// Day-of-year when the last scan was performed (1–366).
     last_scan_day: u32,
+    /// Number of days ahead to scan for upcoming birthdays.
+    #[serde(default = "default_scan_ahead_days")]
+    scan_ahead_days: u16,
 }
 
 impl BirthdayTracker {
@@ -68,7 +82,14 @@ impl BirthdayTracker {
             birthdays: HashMap::with_capacity(64),
             upcoming_cache: Vec::with_capacity(MAX_UPCOMING_CACHE),
             last_scan_day: 0,
+            scan_ahead_days: DEFAULT_SCAN_AHEAD_DAYS,
         }
+    }
+
+    /// Configured number of days ahead to scan for upcoming birthdays.
+    #[must_use]
+    pub(crate) fn scan_ahead_days(&self) -> u16 {
+        self.scan_ahead_days
     }
 
     /// Register or update a birthday.

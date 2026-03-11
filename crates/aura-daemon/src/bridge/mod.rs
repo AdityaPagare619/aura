@@ -17,6 +17,7 @@
 //! by [`InputChannel::spawn`] allows the caller to monitor bridge health.
 
 pub mod router;
+pub mod system_api;
 pub mod telegram_bridge;
 pub mod voice_bridge;
 
@@ -136,6 +137,12 @@ pub fn spawn_bridge(
     let join_handle = tokio::spawn(async move { bridge.run(cmd_tx, response_rx).await });
     BridgeHandle { name, join_handle }
 }
+
+// ---------------------------------------------------------------------------
+// System API Bridge re-exports
+// ---------------------------------------------------------------------------
+
+pub use system_api::{SystemBridge, SystemBridgeError, SystemCommand, SystemResult};
 
 // ---------------------------------------------------------------------------
 // Tests

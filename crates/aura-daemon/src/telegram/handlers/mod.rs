@@ -13,8 +13,11 @@ pub mod memory;
 pub mod security;
 pub mod system;
 
+use aura_types::config::AuraConfig;
 use aura_types::errors::AuraError;
 use tracing::instrument;
+
+use crate::daemon_core::channels::{InputSource, UserCommand, UserCommandTx};
 
 use super::audit::AuditLog;
 use super::commands::TelegramCommand;
@@ -29,6 +32,10 @@ use super::voice_handler::{
 /// Shared mutable context passed to every handler.
 ///
 /// Handlers use this to read daemon state and enqueue outgoing messages.
+/// The `config` and `user_command_tx` fields give handlers access to the
+/// live [`AuraConfig`] (for reading real personality, trust, power settings)
+/// and the daemon's [`UserCommandTx`] channel (for forwarding commands to
+/// the cognitive pipeline when the TelegramBridge fallback path is hit).
 pub struct HandlerContext<'a> {
     /// Telegram chat ID of the requester.
     pub chat_id: i64,
@@ -40,6 +47,13 @@ pub struct HandlerContext<'a> {
     pub queue: &'a MessageQueue,
     /// Daemon startup time in epoch milliseconds.
     pub startup_time_ms: u64,
+    /// Live AURA configuration — `None` only in tests or when config is unavailable.
+    pub config: Option<&'a AuraConfig>,
+    /// Channel to forward commands to the daemon's cognitive pipeline.
+    /// Handlers that are fallbacks for daemon-routed commands (AI, memory,
+    /// agency) use `try_send()` here to forward the request.
+    /// `None` only in tests or when the channel is unavailable.
+    pub user_command_tx: Option<&'a UserCommandTx>,
 }
 
 // ─── Handler response ───────────────────────────────────────────────────────
@@ -110,6 +124,114 @@ impl HandlerResponse {
     }
 }
 
+// ─── Daemon routing ─────────────────────────────────────────────────────────
+
+/// Returns `true` for commands that should be forwarded to the daemon's
+/// cognitive pipeline (AI, memory, agency) rather than handled locally.
+///
+/// Mirrors the logic in [`TelegramBridge::is_daemon_routed`] — kept here
+/// as a standalone function so the handler dispatcher can make the same
+/// decision without depending on the bridge module.
+fn is_daemon_routed(cmd: &TelegramCommand) -> bool {
+    matches!(
+        cmd,
+        // AI commands — benefit from full pipeline context.
+        TelegramCommand::Ask { .. }
+            | TelegramCommand::Think { .. }
+            | TelegramCommand::Plan { .. }
+            | TelegramCommand::Explain { .. }
+            | TelegramCommand::Summarize { .. }
+            | TelegramCommand::Translate { .. }
+            // Memory commands — the daemon owns the memory system.
+            | TelegramCommand::Remember { .. }
+            | TelegramCommand::Recall { .. }
+            | TelegramCommand::Forget { .. }
+            // Agency commands — the daemon owns the execution engine.
+            | TelegramCommand::Do { .. }
+            | TelegramCommand::Open { .. }
+            | TelegramCommand::Send { .. }
+            | TelegramCommand::Call { .. }
+            | TelegramCommand::Schedule { .. }
+            | TelegramCommand::Screenshot
+            | TelegramCommand::Navigate { .. }
+            | TelegramCommand::Automate { .. }
+    )
+}
+
+/// Extract the text payload from a daemon-routed command so it can be
+/// sent as a [`UserCommand::Chat`] through the pipeline.
+fn command_to_text(cmd: &TelegramCommand) -> String {
+    match cmd {
+        TelegramCommand::Ask { question } => question.clone(),
+        TelegramCommand::Think { problem } => format!("[think] {problem}"),
+        TelegramCommand::Plan { goal } => format!("[plan] {goal}"),
+        TelegramCommand::Explain { topic } => format!("[explain] {topic}"),
+        TelegramCommand::Summarize { text } => format!("[summarize] {text}"),
+        TelegramCommand::Translate { text, target_lang } => {
+            format!("[translate:{target_lang}] {text}")
+        }
+        TelegramCommand::Remember { text } => format!("[remember] {text}"),
+        TelegramCommand::Recall { query } => format!("[recall] {query}"),
+        TelegramCommand::Forget { query } => format!("[forget] {query}"),
+        TelegramCommand::Do { instruction } => format!("[do] {instruction}"),
+        TelegramCommand::Open { app } => format!("[open] {app}"),
+        TelegramCommand::Send {
+            app,
+            contact,
+            message,
+        } => format!("[send:{app}:{contact}] {message}"),
+        TelegramCommand::Call { contact } => format!("[call] {contact}"),
+        TelegramCommand::Schedule { event, time } => format!("[schedule:{time}] {event}"),
+        TelegramCommand::Screenshot => "[screenshot]".to_string(),
+        TelegramCommand::Navigate { destination } => format!("[navigate] {destination}"),
+        TelegramCommand::Automate { routine } => format!("[automate] {routine}"),
+        // Non-routed commands should never reach here, but be safe.
+        other => format!("{other:?}"),
+    }
+}
+
+/// Attempt to forward a daemon-routed command through the [`UserCommandTx`]
+/// channel. Returns `Ok(Some(response))` if the command was forwarded (or
+/// if an error response was generated), or `Ok(None)` if the channel is
+/// unavailable and the caller should fall through to local handling.
+fn try_forward_to_daemon(
+    cmd: &TelegramCommand,
+    ctx: &HandlerContext<'_>,
+) -> Result<Option<HandlerResponse>, AuraError> {
+    let Some(tx) = ctx.user_command_tx else {
+        return Ok(None);
+    };
+
+    let text = command_to_text(cmd);
+    let user_cmd = UserCommand::Chat {
+        text,
+        source: InputSource::Telegram {
+            chat_id: ctx.chat_id,
+        },
+        voice_meta: None,
+    };
+
+    match tx.try_send(user_cmd) {
+        Ok(()) => {
+            tracing::debug!(chat_id = ctx.chat_id, cmd = ?cmd, "forwarded to daemon pipeline");
+            Ok(Some(HandlerResponse::Html(
+                "<i>Processing… response will arrive shortly.</i>".to_string(),
+            )))
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!(chat_id = ctx.chat_id, "daemon pipeline channel full");
+            Ok(Some(HandlerResponse::text(
+                "The daemon pipeline is busy. Please try again in a moment.",
+            )))
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            tracing::error!(chat_id = ctx.chat_id, "daemon pipeline channel closed");
+            // Fall through to local handler as graceful degradation.
+            Ok(None)
+        }
+    }
+}
+
 // ─── Dispatcher ─────────────────────────────────────────────────────────────
 
 /// Dispatch a parsed command to the correct category handler.
@@ -121,6 +243,18 @@ pub fn dispatch(
     cmd: &TelegramCommand,
     ctx: &mut HandlerContext<'_>,
 ) -> Result<HandlerResponse, AuraError> {
+    // ── Daemon routing ──────────────────────────────────────────────
+    // Commands that belong to the cognitive pipeline (AI, memory,
+    // agency) are forwarded via the UserCommandTx channel when
+    // available.  If the channel is unavailable or closed, we fall
+    // through to the local stub handlers as graceful degradation.
+    if is_daemon_routed(cmd) {
+        if let Some(response) = try_forward_to_daemon(cmd, ctx)? {
+            return Ok(response);
+        }
+        // Channel unavailable or closed — fall through to local handlers.
+    }
+
     match cmd {
         // ── Control ──────────────────────────────────────────────────
         TelegramCommand::Start => system::handle_start(ctx),
@@ -233,6 +367,8 @@ mod tests {
             audit,
             queue,
             startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: None,
         }
     }
 
@@ -285,6 +421,233 @@ mod tests {
                 assert!(text.contains("AURA Status"));
             }
             other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    // ── Daemon routing tests ────────────────────────────────────────
+
+    #[test]
+    fn test_is_daemon_routed_ai_commands() {
+        assert!(is_daemon_routed(&TelegramCommand::Ask {
+            question: "hi".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Think {
+            problem: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Plan {
+            goal: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Explain {
+            topic: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Summarize {
+            text: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Translate {
+            text: "x".into(),
+            target_lang: "en".into()
+        }));
+    }
+
+    #[test]
+    fn test_is_daemon_routed_memory_commands() {
+        assert!(is_daemon_routed(&TelegramCommand::Remember {
+            text: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Recall {
+            query: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Forget {
+            query: "x".into()
+        }));
+    }
+
+    #[test]
+    fn test_is_daemon_routed_agency_commands() {
+        assert!(is_daemon_routed(&TelegramCommand::Do {
+            instruction: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Open {
+            app: "x".into()
+        }));
+        assert!(is_daemon_routed(&TelegramCommand::Screenshot));
+        assert!(is_daemon_routed(&TelegramCommand::Navigate {
+            destination: "x".into()
+        }));
+    }
+
+    #[test]
+    fn test_is_not_daemon_routed() {
+        assert!(!is_daemon_routed(&TelegramCommand::Status));
+        assert!(!is_daemon_routed(&TelegramCommand::Help {
+            command: None
+        }));
+        assert!(!is_daemon_routed(&TelegramCommand::Lock));
+        assert!(!is_daemon_routed(&TelegramCommand::Personality));
+        assert!(!is_daemon_routed(&TelegramCommand::Perf));
+    }
+
+    #[test]
+    fn test_command_to_text_plain() {
+        let text = command_to_text(&TelegramCommand::Ask {
+            question: "what is Rust?".into(),
+        });
+        assert_eq!(text, "what is Rust?");
+    }
+
+    #[test]
+    fn test_command_to_text_prefixed() {
+        let text = command_to_text(&TelegramCommand::Think {
+            problem: "halting".into(),
+        });
+        assert_eq!(text, "[think] halting");
+
+        let text = command_to_text(&TelegramCommand::Plan {
+            goal: "world peace".into(),
+        });
+        assert_eq!(text, "[plan] world peace");
+
+        let text = command_to_text(&TelegramCommand::Translate {
+            text: "hello".into(),
+            target_lang: "es".into(),
+        });
+        assert_eq!(text, "[translate:es] hello");
+    }
+
+    #[test]
+    fn test_command_to_text_agency() {
+        let text = command_to_text(&TelegramCommand::Send {
+            app: "telegram".into(),
+            contact: "alice".into(),
+            message: "hi there".into(),
+        });
+        assert_eq!(text, "[send:telegram:alice] hi there");
+
+        let text = command_to_text(&TelegramCommand::Screenshot);
+        assert_eq!(text, "[screenshot]");
+    }
+
+    #[test]
+    fn test_try_forward_no_channel() {
+        // When user_command_tx is None, should return Ok(None) — fall through.
+        let mut security = SecurityGate::new(vec![42]);
+        let mut audit = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let queue = MessageQueue::open(db).unwrap();
+        let ctx = HandlerContext {
+            chat_id: 42,
+            security: &mut security,
+            audit: &mut audit,
+            queue: &queue,
+            startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: None,
+        };
+
+        let cmd = TelegramCommand::Ask {
+            question: "test".into(),
+        };
+        let result = try_forward_to_daemon(&cmd, &ctx).unwrap();
+        assert!(result.is_none(), "should fall through when no channel");
+    }
+
+    #[test]
+    fn test_try_forward_with_channel() {
+        // Create a real tokio mpsc channel and verify the command is forwarded.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<UserCommand>(8);
+        let mut security = SecurityGate::new(vec![42]);
+        let mut audit = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let queue = MessageQueue::open(db).unwrap();
+        let ctx = HandlerContext {
+            chat_id: 42,
+            security: &mut security,
+            audit: &mut audit,
+            queue: &queue,
+            startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: Some(&tx),
+        };
+
+        let cmd = TelegramCommand::Ask {
+            question: "what is Rust?".into(),
+        };
+        let result = try_forward_to_daemon(&cmd, &ctx).unwrap();
+        assert!(result.is_some(), "should return a response when forwarded");
+
+        // Verify the message was actually sent through the channel.
+        let received = rx.try_recv().expect("should have received a UserCommand");
+        match received {
+            UserCommand::Chat { text, source, .. } => {
+                assert_eq!(text, "what is Rust?");
+                match source {
+                    InputSource::Telegram { chat_id } => assert_eq!(chat_id, 42),
+                    other => panic!("expected Telegram source, got {other:?}"),
+                }
+            }
+            other => panic!("expected Chat command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_forwards_ask_to_daemon() {
+        // When a channel is available, /ask should be forwarded — not handled locally.
+        let (tx, _rx) = tokio::sync::mpsc::channel::<UserCommand>(8);
+        let mut security = SecurityGate::new(vec![42]);
+        let mut audit = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let queue = MessageQueue::open(db).unwrap();
+        let mut ctx = HandlerContext {
+            chat_id: 42,
+            security: &mut security,
+            audit: &mut audit,
+            queue: &queue,
+            startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: Some(&tx),
+        };
+
+        let cmd = TelegramCommand::Ask {
+            question: "test".into(),
+        };
+        let resp = dispatch(&cmd, &mut ctx).unwrap();
+        match resp {
+            HandlerResponse::Html(text) => {
+                assert!(
+                    text.contains("Processing"),
+                    "expected forwarding ack, got: {text}"
+                );
+            }
+            other => panic!("expected Html forwarding ack, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_falls_through_without_channel() {
+        // When no channel is available, /ask should fall through to the local stub.
+        let mut security = SecurityGate::new(vec![42]);
+        let mut audit = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let queue = MessageQueue::open(db).unwrap();
+        let mut ctx = test_ctx(&mut security, &mut audit, &queue);
+
+        let cmd = TelegramCommand::Ask {
+            question: "test fallback".into(),
+        };
+        let resp = dispatch(&cmd, &mut ctx).unwrap();
+        // Should get the local stub response, not a forwarding ack.
+        match &resp {
+            HandlerResponse::Html(_) | HandlerResponse::Text(_) => {
+                // The local ai::handle_ask stub should return something —
+                // just verify it didn't return the forwarding message.
+                if let Some(text) = resp.as_text() {
+                    assert!(
+                        !text.contains("Processing… response will arrive shortly"),
+                        "should NOT get forwarding ack when no channel: {text}"
+                    );
+                }
+            }
+            other => panic!("expected text response from stub, got {other:?}"),
         }
     }
 }

@@ -868,6 +868,838 @@ impl Default for IntelligentRetry {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// STRATEGIC FAILURE RECOVERY (Foundation 4)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ---------------------------------------------------------------------------
+// Constants — Strategic Recovery
+// ---------------------------------------------------------------------------
+
+/// Maximum escalation attempts per operation before giving up.
+const MAX_ESCALATIONS_PER_OPERATION: u32 = 3;
+
+/// Maximum operations tracked in the escalation map.
+const MAX_ESCALATION_OPERATIONS: usize = 128;
+
+/// Maximum entries in the recovery history.
+const MAX_RECOVERY_HISTORY: usize = 256;
+
+/// Maximum transient retry attempts before escalating to Strategic.
+const MAX_TRANSIENT_ATTEMPTS: u32 = 3;
+
+/// Battery level threshold below which we classify as Environmental.
+const CRITICAL_BATTERY_THRESHOLD: f32 = 0.05;
+
+/// Default wait time (ms) when restarting an environment target.
+const DEFAULT_RESTART_WAIT_MS: u64 = 5_000;
+
+// ---------------------------------------------------------------------------
+// BoundedVec<T> — bounded-capacity vector
+// ---------------------------------------------------------------------------
+
+/// A vector with a fixed maximum capacity. Evicts the oldest entry on overflow.
+///
+/// Used throughout the recovery system to ensure memory usage is bounded
+/// regardless of how long the daemon runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundedVec<T> {
+    inner: Vec<T>,
+    capacity: usize,
+}
+
+impl<T> BoundedVec<T> {
+    /// Create a new `BoundedVec` with the given maximum capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` is zero.
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "BoundedVec capacity must be > 0");
+        Self {
+            inner: Vec::with_capacity(capacity.min(64)),
+            capacity,
+        }
+    }
+
+    /// Push an item, evicting the oldest if at capacity.
+    pub fn push(&mut self, item: T) {
+        if self.inner.len() >= self.capacity {
+            self.inner.remove(0);
+        }
+        self.inner.push(item);
+    }
+
+    /// Number of items currently stored.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Whether the vector is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Iterate over the stored items.
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.inner.iter()
+    }
+
+    /// Maximum capacity.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FailureCategory — 5-category taxonomy (Foundation 4)
+// ---------------------------------------------------------------------------
+
+/// Five-category failure taxonomy for strategic recovery decisions.
+///
+/// Extends beyond the simpler `ErrorClass` (Transient/Structural/Fatal) to
+/// provide nuanced recovery paths:
+///
+/// | Category      | Recovery Strategy                                |
+/// |---------------|--------------------------------------------------|
+/// | Transient     | Retry with backoff, max 3, then escalate         |
+/// | Strategic     | Re-plan with LLM, try alternative approach       |
+/// | Environmental | Restart app/wait, retry once, then notify user   |
+/// | Capability    | Tell user what's needed ("I can't do X because Y") |
+/// | Safety        | STOP. Never retry. Log for review.               |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FailureCategory {
+    /// Network blip, app loading, timeout — retry with backoff.
+    Transient,
+    /// Wrong screen, button not found, UI changed — re-plan with LLM.
+    Strategic,
+    /// App crashed, no internet, low battery, no permission — restart/wait.
+    Environmental,
+    /// App not installed, API restricted, hardware missing — inform user.
+    Capability,
+    /// Policy gate blocked, boundary hit, ethical violation — halt immediately.
+    Safety,
+}
+
+impl std::fmt::Display for FailureCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FailureCategory::Transient => write!(f, "Transient"),
+            FailureCategory::Strategic => write!(f, "Strategic"),
+            FailureCategory::Environmental => write!(f, "Environmental"),
+            FailureCategory::Capability => write!(f, "Capability"),
+            FailureCategory::Safety => write!(f, "Safety"),
+        }
+    }
+}
+
+impl From<ErrorClass> for FailureCategory {
+    fn from(class: ErrorClass) -> Self {
+        match class {
+            ErrorClass::Transient => FailureCategory::Transient,
+            ErrorClass::Structural => FailureCategory::Strategic,
+            ErrorClass::Fatal => FailureCategory::Safety,
+        }
+    }
+}
+
+impl FailureCategory {
+    /// Whether this category is directly retryable with the same operation.
+    ///
+    /// Only `Transient` failures are safe to retry as-is.
+    #[must_use]
+    pub fn is_retryable(self) -> bool {
+        matches!(self, FailureCategory::Transient)
+    }
+
+    /// Whether recovery is possible (automatic or with replanning).
+    ///
+    /// `Transient`, `Strategic`, and `Environmental` are recoverable.
+    /// `Capability` and `Safety` require user intervention or halt.
+    #[must_use]
+    pub fn is_recoverable(self) -> bool {
+        matches!(
+            self,
+            FailureCategory::Transient
+                | FailureCategory::Strategic
+                | FailureCategory::Environmental
+        )
+    }
+
+    /// Whether the user should be notified about this failure.
+    ///
+    /// `Environmental`, `Capability`, and `Safety` failures warrant user awareness.
+    #[must_use]
+    pub fn requires_user_notification(self) -> bool {
+        matches!(
+            self,
+            FailureCategory::Environmental
+                | FailureCategory::Capability
+                | FailureCategory::Safety
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RecoverySeverity
+// ---------------------------------------------------------------------------
+
+/// Severity level for user-facing recovery notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RecoverySeverity {
+    /// Informational — the system is handling it.
+    Info,
+    /// Warning — user attention may be needed soon.
+    Warning,
+    /// Error — user action is needed.
+    Error,
+    /// Critical — immediate attention required, operation halted.
+    Critical,
+}
+
+impl std::fmt::Display for RecoverySeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RecoverySeverity::Info => write!(f, "INFO"),
+            RecoverySeverity::Warning => write!(f, "WARNING"),
+            RecoverySeverity::Error => write!(f, "ERROR"),
+            RecoverySeverity::Critical => write!(f, "CRITICAL"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RecoveryAction — what to do when a failure occurs
+// ---------------------------------------------------------------------------
+
+/// The specific recovery action to take in response to a categorized failure.
+///
+/// Each variant carries the data needed to execute the recovery step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecoveryAction {
+    /// Retry the same operation with exponential backoff.
+    RetryWithBackoff {
+        /// The backoff policy to use.
+        policy: RetryPolicy,
+    },
+    /// Re-plan the approach using the LLM/neocortex.
+    Replan {
+        /// Why replanning is needed.
+        reason: String,
+        /// Context to pass to the planner (e.g. what failed, what was tried).
+        context: String,
+    },
+    /// Restart an environment component (app, service) and wait.
+    RestartEnvironment {
+        /// What to restart (e.g. app package name, service identifier).
+        target: String,
+        /// How long to wait after restart before retrying (ms).
+        wait_ms: u64,
+    },
+    /// Notify the user about a situation requiring their attention.
+    NotifyUser {
+        /// Human-readable message for the user.
+        message: String,
+        /// How urgent this notification is.
+        severity: RecoverySeverity,
+    },
+    /// Halt all retry attempts and log for review. Used for Safety failures.
+    HaltAndLog {
+        /// Why the operation was halted.
+        reason: String,
+        /// The failure category that triggered the halt.
+        category: FailureCategory,
+    },
+    /// Escalate a Transient failure to Strategic after exhausting retries.
+    EscalateToStrategic {
+        /// The original category before escalation.
+        from_category: FailureCategory,
+        /// Context about what was tried before escalating.
+        context: String,
+    },
+    /// Try an alternative approach to achieve the same goal.
+    TryAlternative {
+        /// Description of the alternative to try.
+        alternative: String,
+        /// Why the original approach failed.
+        reason: String,
+    },
+}
+
+impl RecoveryAction {
+    /// Produce a short summary string for logging/history.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match self {
+            RecoveryAction::RetryWithBackoff { policy } => {
+                format!("retry(max={})", policy.max_retries)
+            }
+            RecoveryAction::Replan { reason, .. } => {
+                format!("replan: {reason}")
+            }
+            RecoveryAction::RestartEnvironment { target, wait_ms } => {
+                format!("restart({target}, wait={wait_ms}ms)")
+            }
+            RecoveryAction::NotifyUser { severity, message } => {
+                format!("notify[{severity}]: {message}")
+            }
+            RecoveryAction::HaltAndLog { category, reason } => {
+                format!("HALT[{category}]: {reason}")
+            }
+            RecoveryAction::EscalateToStrategic {
+                from_category,
+                context,
+            } => {
+                format!("escalate({from_category} → Strategic): {context}")
+            }
+            RecoveryAction::TryAlternative {
+                alternative,
+                reason,
+            } => {
+                format!("alternative({alternative}): {reason}")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EnvironmentSnapshot — current device/environment state
+// ---------------------------------------------------------------------------
+
+/// Snapshot of the device and environment state at the time of a failure.
+///
+/// Used by `classify_failure` to override text-based classification when
+/// the environment itself is the root cause.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentSnapshot {
+    /// Battery level (0.0 = empty, 1.0 = full).
+    pub battery_level: f32,
+    /// Whether a network connection is available.
+    pub network_available: bool,
+    /// Whether the target app is currently running.
+    pub target_app_running: bool,
+    /// Whether the screen is responsive to input.
+    pub screen_responsive: bool,
+    /// Whether the neocortex (LLM service) is alive and reachable.
+    pub neocortex_alive: bool,
+}
+
+impl Default for EnvironmentSnapshot {
+    fn default() -> Self {
+        Self {
+            battery_level: 1.0,
+            network_available: true,
+            target_app_running: true,
+            screen_responsive: true,
+            neocortex_alive: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RecoveryContext — full context for recovery decisions
+// ---------------------------------------------------------------------------
+
+/// Full context provided to the recovery decision engine.
+///
+/// Combines information about the operation, its failure history, and
+/// the current environment state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryContext {
+    /// The name/identifier of the failing operation.
+    pub operation: String,
+    /// Human-readable description of the goal being pursued.
+    pub goal_description: String,
+    /// How many attempts have been made (including the failed one).
+    pub attempt_count: u32,
+    /// Total time spent on this operation so far (ms).
+    pub time_elapsed_ms: u64,
+    /// The error message from the most recent failure.
+    pub last_error: String,
+    /// Classified failure category.
+    pub category: FailureCategory,
+    /// Current environment state.
+    pub environment_state: EnvironmentSnapshot,
+}
+
+// ---------------------------------------------------------------------------
+// RecoveryHistoryEntry — for learning from past recoveries
+// ---------------------------------------------------------------------------
+
+/// A single entry in the recovery history, recording what was tried and
+/// whether it succeeded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryHistoryEntry {
+    /// When the recovery action was taken (ms since epoch).
+    pub timestamp_ms: u64,
+    /// The operation that failed.
+    pub operation: String,
+    /// How the failure was categorized.
+    pub category: FailureCategory,
+    /// Summary of the recovery action that was taken.
+    pub action_taken: String,
+    /// Whether the recovery ultimately succeeded.
+    pub success: bool,
+}
+
+// ---------------------------------------------------------------------------
+// RecoveryStats — aggregate recovery statistics
+// ---------------------------------------------------------------------------
+
+/// Aggregate statistics about recovery attempts and outcomes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryStats {
+    /// Total number of recovery actions taken.
+    pub total_recoveries: u32,
+    /// Number of recovery actions that succeeded.
+    pub successful_recoveries: u32,
+    /// Per-category breakdown: category name → (total, successful).
+    pub by_category: HashMap<String, (u32, u32)>,
+}
+
+// ---------------------------------------------------------------------------
+// StrategicRecovery — the main orchestrator
+// ---------------------------------------------------------------------------
+
+/// Strategic Failure Recovery orchestrator.
+///
+/// Builds on top of `IntelligentRetry` to provide a 5-category failure
+/// taxonomy with per-category recovery strategies. The system:
+///
+/// 1. Classifies failures using both error message patterns and environment state
+/// 2. Determines the appropriate recovery action based on category and history
+/// 3. Tracks escalation counts to prevent infinite loops
+/// 4. Records recovery outcomes for learning
+///
+/// # Bounded Collections
+///
+/// - Escalation counts: bounded to `MAX_ESCALATION_OPERATIONS` (128) entries
+/// - Recovery history: bounded to `MAX_RECOVERY_HISTORY` (256) entries
+pub struct StrategicRecovery {
+    /// The underlying intelligent retry system (reused).
+    retry_system: IntelligentRetry,
+    /// Per-operation escalation counts, bounded to 128 entries.
+    escalation_counts: HashMap<String, u32>,
+    /// Bounded history of recovery actions and their outcomes.
+    recovery_history: BoundedVec<RecoveryHistoryEntry>,
+    /// Maximum escalations allowed per operation before giving up.
+    max_escalations_per_operation: u32,
+}
+
+impl StrategicRecovery {
+    /// Create a new `StrategicRecovery` orchestrator with default settings.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            retry_system: IntelligentRetry::new(),
+            escalation_counts: HashMap::with_capacity(32),
+            recovery_history: BoundedVec::new(MAX_RECOVERY_HISTORY),
+            max_escalations_per_operation: MAX_ESCALATIONS_PER_OPERATION,
+        }
+    }
+
+    /// Classify a failure into one of the five categories.
+    ///
+    /// Classification uses a two-phase approach:
+    /// 1. **Text-based**: pattern matching on the error message
+    /// 2. **Environment-based**: overrides from `EnvironmentSnapshot` state
+    ///
+    /// Environment state can override text classification when the root cause
+    /// is clearly environmental (e.g., a "timeout" when the network is down
+    /// is Environmental, not Transient).
+    #[must_use]
+    pub fn classify_failure(error: &str, env: &EnvironmentSnapshot) -> FailureCategory {
+        let lower = error.to_lowercase();
+
+        // Phase 1: Environment-based overrides (highest priority)
+        //
+        // These conditions indicate the environment itself is broken,
+        // regardless of what the error message says.
+        if env.battery_level < CRITICAL_BATTERY_THRESHOLD {
+            debug!(
+                battery = env.battery_level,
+                "classify: battery critically low → Environmental"
+            );
+            return FailureCategory::Environmental;
+        }
+
+        if !env.screen_responsive {
+            debug!("classify: screen unresponsive → Environmental");
+            return FailureCategory::Environmental;
+        }
+
+        // Network-down overrides transient-looking errors
+        if !env.network_available
+            && (lower.contains("timeout")
+                || lower.contains("connection")
+                || lower.contains("loading"))
+        {
+            debug!("classify: network down + transient error → Environmental");
+            return FailureCategory::Environmental;
+        }
+
+        // Neocortex down overrides strategic-looking errors when LLM is needed
+        if !env.neocortex_alive
+            && (lower.contains("plan")
+                || lower.contains("llm")
+                || lower.contains("model")
+                || lower.contains("replan"))
+        {
+            debug!("classify: neocortex dead + LLM-related error → Capability");
+            return FailureCategory::Capability;
+        }
+
+        // Phase 2: Text-based classification
+
+        // Safety — check first, these should never be retried
+        if lower.contains("policy")
+            || lower.contains("blocked")
+            || lower.contains("safety")
+            || lower.contains("denied by policy")
+            || lower.contains("ethical")
+            || lower.contains("boundary violation")
+        {
+            return FailureCategory::Safety;
+        }
+
+        // Capability — missing prerequisites
+        if lower.contains("not installed")
+            || lower.contains("unavailable")
+            || lower.contains("hardware")
+            || lower.contains("restricted")
+            || lower.contains("unsupported")
+            || lower.contains("api not available")
+        {
+            return FailureCategory::Capability;
+        }
+
+        // Environmental — external failures
+        if lower.contains("crashed")
+            || lower.contains("no internet")
+            || lower.contains("low battery")
+            || lower.contains("permission denied")
+            || lower.contains("app not responding")
+            || lower.contains("out of memory")
+        {
+            return FailureCategory::Environmental;
+        }
+
+        // Strategic — wrong approach, UI mismatch
+        if lower.contains("not found")
+            || lower.contains("wrong screen")
+            || lower.contains("element missing")
+            || lower.contains("unexpected state")
+            || lower.contains("ui changed")
+            || lower.contains("stale reference")
+        {
+            return FailureCategory::Strategic;
+        }
+
+        // Transient — temporary glitches (default for network-like errors)
+        if lower.contains("timeout")
+            || lower.contains("connection")
+            || lower.contains("loading")
+            || lower.contains("temporary")
+            || lower.contains("retry")
+            || lower.contains("rate limit")
+        {
+            return FailureCategory::Transient;
+        }
+
+        // Default: treat unknown errors as Strategic (try a different approach)
+        debug!(error, "classify: no pattern match → defaulting to Strategic");
+        FailureCategory::Strategic
+    }
+
+    /// Determine the appropriate recovery action for a given failure context.
+    ///
+    /// Implements the recovery decision tree from the spec:
+    ///
+    /// ```text
+    /// Transient  (attempt < 3)  → RetryWithBackoff
+    /// Transient  (attempt >= 3) → EscalateToStrategic
+    /// Strategic  (not exhausted) → Replan
+    /// Strategic  (exhausted)     → NotifyUser
+    /// Environmental (app issue)  → RestartEnvironment
+    /// Environmental (network)    → NotifyUser (waiting)
+    /// Environmental (battery)    → NotifyUser (battery)
+    /// Capability                 → NotifyUser (explain limitation)
+    /// Safety                     → HaltAndLog (NEVER retry)
+    /// ```
+    #[must_use]
+    pub fn determine_recovery(&self, ctx: &RecoveryContext) -> RecoveryAction {
+        match ctx.category {
+            FailureCategory::Transient => {
+                if ctx.attempt_count < MAX_TRANSIENT_ATTEMPTS {
+                    debug!(
+                        operation = %ctx.operation,
+                        attempt = ctx.attempt_count,
+                        "recovery: Transient → RetryWithBackoff"
+                    );
+                    RecoveryAction::RetryWithBackoff {
+                        policy: self.retry_system.suggested_policy(&ctx.operation),
+                    }
+                } else {
+                    info!(
+                        operation = %ctx.operation,
+                        attempt = ctx.attempt_count,
+                        "recovery: Transient exhausted → EscalateToStrategic"
+                    );
+                    RecoveryAction::EscalateToStrategic {
+                        from_category: FailureCategory::Transient,
+                        context: format!(
+                            "exhausted {} transient retries for '{}': {}",
+                            ctx.attempt_count, ctx.operation, ctx.last_error
+                        ),
+                    }
+                }
+            }
+
+            FailureCategory::Strategic => {
+                if self.should_escalate(&ctx.operation) {
+                    warn!(
+                        operation = %ctx.operation,
+                        "recovery: Strategic exhausted → NotifyUser"
+                    );
+                    RecoveryAction::NotifyUser {
+                        message: format!(
+                            "I've tried {} different approaches for '{}', but none worked. \
+                             Last error: {}. Goal: {}",
+                            self.escalation_count(&ctx.operation),
+                            ctx.operation,
+                            ctx.last_error,
+                            ctx.goal_description
+                        ),
+                        severity: RecoverySeverity::Error,
+                    }
+                } else {
+                    info!(
+                        operation = %ctx.operation,
+                        "recovery: Strategic → Replan"
+                    );
+                    RecoveryAction::Replan {
+                        reason: format!(
+                            "approach failed for '{}': {}",
+                            ctx.operation, ctx.last_error
+                        ),
+                        context: format!(
+                            "goal: {}, attempt: {}, elapsed: {}ms, error: {}",
+                            ctx.goal_description,
+                            ctx.attempt_count,
+                            ctx.time_elapsed_ms,
+                            ctx.last_error
+                        ),
+                    }
+                }
+            }
+
+            FailureCategory::Environmental => {
+                let env = &ctx.environment_state;
+
+                if env.battery_level < CRITICAL_BATTERY_THRESHOLD {
+                    warn!(
+                        battery = env.battery_level,
+                        "recovery: Environmental(battery) → NotifyUser"
+                    );
+                    return RecoveryAction::NotifyUser {
+                        message: format!(
+                            "Battery is critically low ({:.0}%). Cannot safely continue '{}'.",
+                            env.battery_level * 100.0,
+                            ctx.operation
+                        ),
+                        severity: RecoverySeverity::Critical,
+                    };
+                }
+
+                if !env.network_available {
+                    warn!("recovery: Environmental(network) → NotifyUser");
+                    return RecoveryAction::NotifyUser {
+                        message: format!(
+                            "No internet connection. Waiting to resume '{}'.",
+                            ctx.operation
+                        ),
+                        severity: RecoverySeverity::Warning,
+                    };
+                }
+
+                if !env.target_app_running || !env.screen_responsive {
+                    info!(
+                        operation = %ctx.operation,
+                        "recovery: Environmental(app) → RestartEnvironment"
+                    );
+                    return RecoveryAction::RestartEnvironment {
+                        target: ctx.operation.clone(),
+                        wait_ms: DEFAULT_RESTART_WAIT_MS,
+                    };
+                }
+
+                // Generic environmental issue
+                RecoveryAction::NotifyUser {
+                    message: format!(
+                        "Environmental issue encountered during '{}': {}",
+                        ctx.operation, ctx.last_error
+                    ),
+                    severity: RecoverySeverity::Warning,
+                }
+            }
+
+            FailureCategory::Capability => {
+                info!(
+                    operation = %ctx.operation,
+                    "recovery: Capability → NotifyUser"
+                );
+                RecoveryAction::NotifyUser {
+                    message: format!(
+                        "I can't complete '{}' because: {}. {}",
+                        ctx.operation,
+                        ctx.last_error,
+                        ctx.goal_description
+                    ),
+                    severity: RecoverySeverity::Error,
+                }
+            }
+
+            FailureCategory::Safety => {
+                warn!(
+                    operation = %ctx.operation,
+                    error = %ctx.last_error,
+                    "recovery: Safety → HaltAndLog (NEVER retry)"
+                );
+                RecoveryAction::HaltAndLog {
+                    reason: format!(
+                        "safety halt for '{}': {}",
+                        ctx.operation, ctx.last_error
+                    ),
+                    category: FailureCategory::Safety,
+                }
+            }
+        }
+    }
+
+    /// Record the outcome of a recovery action for learning.
+    ///
+    /// Updates both the recovery history and escalation counts.
+    /// On success, resets the escalation counter for the operation.
+    pub fn record_recovery_outcome(
+        &mut self,
+        operation: &str,
+        action: &RecoveryAction,
+        success: bool,
+        now_ms: u64,
+    ) {
+        // Determine category from the action
+        let category = match action {
+            RecoveryAction::RetryWithBackoff { .. } => FailureCategory::Transient,
+            RecoveryAction::Replan { .. } => FailureCategory::Strategic,
+            RecoveryAction::RestartEnvironment { .. } => FailureCategory::Environmental,
+            RecoveryAction::NotifyUser { .. } => FailureCategory::Environmental,
+            RecoveryAction::HaltAndLog { category, .. } => *category,
+            RecoveryAction::EscalateToStrategic { from_category, .. } => *from_category,
+            RecoveryAction::TryAlternative { .. } => FailureCategory::Strategic,
+        };
+
+        let entry = RecoveryHistoryEntry {
+            timestamp_ms: now_ms,
+            operation: operation.to_owned(),
+            category,
+            action_taken: action.summary(),
+            success,
+        };
+        self.recovery_history.push(entry);
+
+        if success {
+            self.reset_escalations(operation);
+            self.retry_system.handle_success(operation);
+            info!(operation, "recovery succeeded — escalation count reset");
+        } else {
+            // Increment escalation count (bounded map)
+            if self.escalation_counts.len() < MAX_ESCALATION_OPERATIONS
+                || self.escalation_counts.contains_key(operation)
+            {
+                let count = self
+                    .escalation_counts
+                    .entry(operation.to_owned())
+                    .or_insert(0);
+                *count = count.saturating_add(1);
+            }
+            debug!(
+                operation,
+                escalations = self.escalation_count(operation),
+                "recovery failed — escalation count incremented"
+            );
+        }
+    }
+
+    /// Check if an operation has exceeded its escalation limit.
+    ///
+    /// Returns `true` when the operation should stop trying and notify the user.
+    #[must_use]
+    pub fn should_escalate(&self, operation: &str) -> bool {
+        self.escalation_count(operation) >= self.max_escalations_per_operation
+    }
+
+    /// Get the current escalation count for an operation.
+    #[must_use]
+    pub fn escalation_count(&self, operation: &str) -> u32 {
+        self.escalation_counts.get(operation).copied().unwrap_or(0)
+    }
+
+    /// Reset escalation counter for an operation (e.g., after successful recovery).
+    pub fn reset_escalations(&mut self, operation: &str) {
+        self.escalation_counts.remove(operation);
+    }
+
+    /// Compute aggregate recovery statistics from the history.
+    #[must_use]
+    pub fn recovery_stats(&self) -> RecoveryStats {
+        let mut total: u32 = 0;
+        let mut successful: u32 = 0;
+        let mut by_category: HashMap<String, (u32, u32)> = HashMap::new();
+
+        for entry in self.recovery_history.iter() {
+            total = total.saturating_add(1);
+            if entry.success {
+                successful = successful.saturating_add(1);
+            }
+
+            let cat_key = entry.category.to_string();
+            let (cat_total, cat_success) =
+                by_category.entry(cat_key).or_insert((0, 0));
+            *cat_total = cat_total.saturating_add(1);
+            if entry.success {
+                *cat_success = cat_success.saturating_add(1);
+            }
+        }
+
+        RecoveryStats {
+            total_recoveries: total,
+            successful_recoveries: successful,
+            by_category,
+        }
+    }
+
+    /// Access the underlying `IntelligentRetry` system.
+    #[must_use]
+    pub fn retry_system(&self) -> &IntelligentRetry {
+        &self.retry_system
+    }
+
+    /// Mutable access to the underlying `IntelligentRetry` system.
+    pub fn retry_system_mut(&mut self) -> &mut IntelligentRetry {
+        &mut self.retry_system
+    }
+}
+
+impl Default for StrategicRecovery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1482,5 +2314,583 @@ mod tests {
 
         cb.record_success();
         assert_eq!(cb.consecutive_failures(), 0);
+    }
+
+    // ── Strategic failure recovery tests ────────────────────────────────
+
+    fn default_env() -> EnvironmentSnapshot {
+        EnvironmentSnapshot::default()
+    }
+
+    fn make_ctx(
+        operation: &str,
+        category: FailureCategory,
+        attempt: u32,
+        error: &str,
+        env: EnvironmentSnapshot,
+    ) -> RecoveryContext {
+        RecoveryContext {
+            operation: operation.to_owned(),
+            goal_description: "test goal".to_owned(),
+            attempt_count: attempt,
+            time_elapsed_ms: attempt as u64 * 1000,
+            last_error: error.to_owned(),
+            category,
+            environment_state: env,
+        }
+    }
+
+    // ── BoundedVec tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_bounded_vec_basic() {
+        let mut bv = BoundedVec::new(3);
+        assert!(bv.is_empty());
+        assert_eq!(bv.capacity(), 3);
+
+        bv.push(1);
+        bv.push(2);
+        bv.push(3);
+        assert_eq!(bv.len(), 3);
+
+        // Push beyond capacity — oldest evicted
+        bv.push(4);
+        assert_eq!(bv.len(), 3);
+        let items: Vec<_> = bv.iter().copied().collect();
+        assert_eq!(items, vec![2, 3, 4]);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity must be > 0")]
+    fn test_bounded_vec_zero_capacity() {
+        let _bv: BoundedVec<i32> = BoundedVec::new(0);
+    }
+
+    // ── FailureCategory tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_failure_category_display() {
+        assert_eq!(FailureCategory::Transient.to_string(), "Transient");
+        assert_eq!(FailureCategory::Strategic.to_string(), "Strategic");
+        assert_eq!(FailureCategory::Environmental.to_string(), "Environmental");
+        assert_eq!(FailureCategory::Capability.to_string(), "Capability");
+        assert_eq!(FailureCategory::Safety.to_string(), "Safety");
+    }
+
+    #[test]
+    fn test_failure_category_from_error_class() {
+        assert_eq!(
+            FailureCategory::from(ErrorClass::Transient),
+            FailureCategory::Transient
+        );
+        assert_eq!(
+            FailureCategory::from(ErrorClass::Structural),
+            FailureCategory::Strategic
+        );
+        assert_eq!(
+            FailureCategory::from(ErrorClass::Fatal),
+            FailureCategory::Safety
+        );
+    }
+
+    #[test]
+    fn test_failure_category_retryable() {
+        assert!(FailureCategory::Transient.is_retryable());
+        assert!(!FailureCategory::Strategic.is_retryable());
+        assert!(!FailureCategory::Environmental.is_retryable());
+        assert!(!FailureCategory::Capability.is_retryable());
+        assert!(!FailureCategory::Safety.is_retryable());
+    }
+
+    #[test]
+    fn test_failure_category_recoverable() {
+        assert!(FailureCategory::Transient.is_recoverable());
+        assert!(FailureCategory::Strategic.is_recoverable());
+        assert!(FailureCategory::Environmental.is_recoverable());
+        assert!(!FailureCategory::Capability.is_recoverable());
+        assert!(!FailureCategory::Safety.is_recoverable());
+    }
+
+    #[test]
+    fn test_failure_category_requires_notification() {
+        assert!(!FailureCategory::Transient.requires_user_notification());
+        assert!(!FailureCategory::Strategic.requires_user_notification());
+        assert!(FailureCategory::Environmental.requires_user_notification());
+        assert!(FailureCategory::Capability.requires_user_notification());
+        assert!(FailureCategory::Safety.requires_user_notification());
+    }
+
+    // ── classify_failure tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_classify_timeout_as_transient() {
+        let env = default_env();
+        assert_eq!(
+            StrategicRecovery::classify_failure("connection timeout", &env),
+            FailureCategory::Transient
+        );
+    }
+
+    #[test]
+    fn test_classify_not_found_as_strategic() {
+        let env = default_env();
+        assert_eq!(
+            StrategicRecovery::classify_failure("element missing on screen", &env),
+            FailureCategory::Strategic
+        );
+    }
+
+    #[test]
+    fn test_classify_crashed_as_environmental() {
+        let env = default_env();
+        assert_eq!(
+            StrategicRecovery::classify_failure("app crashed unexpectedly", &env),
+            FailureCategory::Environmental
+        );
+    }
+
+    #[test]
+    fn test_classify_not_installed_as_capability() {
+        let env = default_env();
+        assert_eq!(
+            StrategicRecovery::classify_failure("app not installed", &env),
+            FailureCategory::Capability
+        );
+    }
+
+    #[test]
+    fn test_classify_policy_as_safety() {
+        let env = default_env();
+        assert_eq!(
+            StrategicRecovery::classify_failure("denied by policy gate", &env),
+            FailureCategory::Safety
+        );
+    }
+
+    #[test]
+    fn test_classify_timeout_with_no_network_as_environmental() {
+        let env = EnvironmentSnapshot {
+            network_available: false,
+            ..default_env()
+        };
+        assert_eq!(
+            StrategicRecovery::classify_failure("connection timeout", &env),
+            FailureCategory::Environmental
+        );
+    }
+
+    #[test]
+    fn test_classify_low_battery_overrides_everything() {
+        let env = EnvironmentSnapshot {
+            battery_level: 0.02,
+            ..default_env()
+        };
+        // Even a safety-sounding error is classified as Environmental
+        // when battery is critically low
+        assert_eq!(
+            StrategicRecovery::classify_failure("some random error", &env),
+            FailureCategory::Environmental
+        );
+    }
+
+    #[test]
+    fn test_classify_screen_unresponsive_as_environmental() {
+        let env = EnvironmentSnapshot {
+            screen_responsive: false,
+            ..default_env()
+        };
+        assert_eq!(
+            StrategicRecovery::classify_failure("something failed", &env),
+            FailureCategory::Environmental
+        );
+    }
+
+    #[test]
+    fn test_classify_neocortex_dead_with_llm_error_as_capability() {
+        let env = EnvironmentSnapshot {
+            neocortex_alive: false,
+            ..default_env()
+        };
+        assert_eq!(
+            StrategicRecovery::classify_failure("failed to replan with LLM", &env),
+            FailureCategory::Capability
+        );
+    }
+
+    #[test]
+    fn test_classify_unknown_defaults_to_strategic() {
+        let env = default_env();
+        assert_eq!(
+            StrategicRecovery::classify_failure("xyzzy flurble happened", &env),
+            FailureCategory::Strategic
+        );
+    }
+
+    // ── determine_recovery tests ────────────────────────────────────────
+
+    #[test]
+    fn test_recovery_transient_low_attempt_retries() {
+        let sr = StrategicRecovery::new();
+        let ctx = make_ctx("fetch", FailureCategory::Transient, 1, "timeout", default_env());
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::RetryWithBackoff { .. } => {}
+            other => panic!("expected RetryWithBackoff, got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_transient_high_attempt_escalates() {
+        let sr = StrategicRecovery::new();
+        let ctx = make_ctx("fetch", FailureCategory::Transient, 5, "timeout", default_env());
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::EscalateToStrategic { from_category, .. } => {
+                assert_eq!(from_category, FailureCategory::Transient);
+            }
+            other => panic!("expected EscalateToStrategic, got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_strategic_replans() {
+        let sr = StrategicRecovery::new();
+        let ctx = make_ctx(
+            "click_button",
+            FailureCategory::Strategic,
+            1,
+            "element missing",
+            default_env(),
+        );
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::Replan { reason, context } => {
+                assert!(reason.contains("click_button"));
+                assert!(context.contains("element missing"));
+            }
+            other => panic!("expected Replan, got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_strategic_exhausted_notifies_user() {
+        let mut sr = StrategicRecovery::new();
+        // Exhaust escalations
+        for _ in 0..MAX_ESCALATIONS_PER_OPERATION {
+            let action = RecoveryAction::Replan {
+                reason: "test".into(),
+                context: "test".into(),
+            };
+            sr.record_recovery_outcome("nav", &action, false, 1000);
+        }
+        assert!(sr.should_escalate("nav"));
+
+        let ctx = make_ctx(
+            "nav",
+            FailureCategory::Strategic,
+            5,
+            "still failing",
+            default_env(),
+        );
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::NotifyUser { severity, .. } => {
+                assert_eq!(severity, RecoverySeverity::Error);
+            }
+            other => panic!("expected NotifyUser, got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_environmental_battery() {
+        let sr = StrategicRecovery::new();
+        let env = EnvironmentSnapshot {
+            battery_level: 0.02,
+            ..default_env()
+        };
+        let ctx = make_ctx("task", FailureCategory::Environmental, 1, "low battery", env);
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::NotifyUser { severity, message } => {
+                assert_eq!(severity, RecoverySeverity::Critical);
+                assert!(message.contains("Battery"));
+            }
+            other => panic!("expected NotifyUser(Critical), got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_environmental_no_network() {
+        let sr = StrategicRecovery::new();
+        let env = EnvironmentSnapshot {
+            network_available: false,
+            ..default_env()
+        };
+        let ctx = make_ctx("fetch", FailureCategory::Environmental, 1, "no internet", env);
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::NotifyUser { severity, message } => {
+                assert_eq!(severity, RecoverySeverity::Warning);
+                assert!(message.contains("internet"));
+            }
+            other => panic!("expected NotifyUser(Warning), got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_environmental_app_not_running() {
+        let sr = StrategicRecovery::new();
+        let env = EnvironmentSnapshot {
+            target_app_running: false,
+            ..default_env()
+        };
+        let ctx = make_ctx("click", FailureCategory::Environmental, 1, "app crashed", env);
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::RestartEnvironment { wait_ms, .. } => {
+                assert_eq!(wait_ms, DEFAULT_RESTART_WAIT_MS);
+            }
+            other => panic!("expected RestartEnvironment, got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_capability_notifies_user() {
+        let sr = StrategicRecovery::new();
+        let ctx = make_ctx(
+            "use_camera",
+            FailureCategory::Capability,
+            1,
+            "hardware not available",
+            default_env(),
+        );
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::NotifyUser { severity, message } => {
+                assert_eq!(severity, RecoverySeverity::Error);
+                assert!(message.contains("use_camera"));
+                assert!(message.contains("hardware not available"));
+            }
+            other => panic!("expected NotifyUser, got {}", other.summary()),
+        }
+    }
+
+    #[test]
+    fn test_recovery_safety_halts() {
+        let sr = StrategicRecovery::new();
+        let ctx = make_ctx(
+            "send_message",
+            FailureCategory::Safety,
+            1,
+            "denied by policy",
+            default_env(),
+        );
+        match sr.determine_recovery(&ctx) {
+            RecoveryAction::HaltAndLog { category, reason } => {
+                assert_eq!(category, FailureCategory::Safety);
+                assert!(reason.contains("send_message"));
+            }
+            other => panic!("expected HaltAndLog, got {}", other.summary()),
+        }
+    }
+
+    // ── Escalation and history tests ────────────────────────────────────
+
+    #[test]
+    fn test_escalation_count_starts_at_zero() {
+        let sr = StrategicRecovery::new();
+        assert_eq!(sr.escalation_count("anything"), 0);
+        assert!(!sr.should_escalate("anything"));
+    }
+
+    #[test]
+    fn test_escalation_increments_on_failure() {
+        let mut sr = StrategicRecovery::new();
+        let action = RecoveryAction::Replan {
+            reason: "test".into(),
+            context: "ctx".into(),
+        };
+        sr.record_recovery_outcome("op", &action, false, 1000);
+        assert_eq!(sr.escalation_count("op"), 1);
+        sr.record_recovery_outcome("op", &action, false, 2000);
+        assert_eq!(sr.escalation_count("op"), 2);
+    }
+
+    #[test]
+    fn test_escalation_resets_on_success() {
+        let mut sr = StrategicRecovery::new();
+        let action = RecoveryAction::Replan {
+            reason: "test".into(),
+            context: "ctx".into(),
+        };
+        sr.record_recovery_outcome("op", &action, false, 1000);
+        sr.record_recovery_outcome("op", &action, false, 2000);
+        assert_eq!(sr.escalation_count("op"), 2);
+
+        sr.record_recovery_outcome("op", &action, true, 3000);
+        assert_eq!(sr.escalation_count("op"), 0);
+    }
+
+    #[test]
+    fn test_recovery_stats_empty() {
+        let sr = StrategicRecovery::new();
+        let stats = sr.recovery_stats();
+        assert_eq!(stats.total_recoveries, 0);
+        assert_eq!(stats.successful_recoveries, 0);
+        assert!(stats.by_category.is_empty());
+    }
+
+    #[test]
+    fn test_recovery_stats_tracks_outcomes() {
+        let mut sr = StrategicRecovery::new();
+
+        let retry_action = RecoveryAction::RetryWithBackoff {
+            policy: RetryPolicy::default(),
+        };
+        let replan_action = RecoveryAction::Replan {
+            reason: "test".into(),
+            context: "ctx".into(),
+        };
+
+        sr.record_recovery_outcome("a", &retry_action, true, 1000);
+        sr.record_recovery_outcome("a", &retry_action, false, 2000);
+        sr.record_recovery_outcome("b", &replan_action, true, 3000);
+
+        let stats = sr.recovery_stats();
+        assert_eq!(stats.total_recoveries, 3);
+        assert_eq!(stats.successful_recoveries, 2);
+
+        // Transient category: 2 total, 1 successful
+        let transient = stats.by_category.get("Transient");
+        assert_eq!(transient, Some(&(2, 1)));
+
+        // Strategic category: 1 total, 1 successful
+        let strategic = stats.by_category.get("Strategic");
+        assert_eq!(strategic, Some(&(1, 1)));
+    }
+
+    #[test]
+    fn test_recovery_history_bounded() {
+        let mut sr = StrategicRecovery::new();
+        let action = RecoveryAction::RetryWithBackoff {
+            policy: RetryPolicy::default(),
+        };
+
+        for i in 0..(MAX_RECOVERY_HISTORY + 50) {
+            sr.record_recovery_outcome("op", &action, i % 2 == 0, i as u64);
+        }
+
+        let stats = sr.recovery_stats();
+        // Should be bounded to MAX_RECOVERY_HISTORY
+        assert!(stats.total_recoveries <= MAX_RECOVERY_HISTORY as u32);
+    }
+
+    #[test]
+    fn test_recovery_action_summary() {
+        let action = RecoveryAction::RetryWithBackoff {
+            policy: RetryPolicy::default(),
+        };
+        assert!(action.summary().contains("retry"));
+
+        let action = RecoveryAction::HaltAndLog {
+            reason: "safety stop".into(),
+            category: FailureCategory::Safety,
+        };
+        assert!(action.summary().contains("HALT"));
+        assert!(action.summary().contains("Safety"));
+    }
+
+    #[test]
+    fn test_strategic_recovery_default() {
+        let sr = StrategicRecovery::default();
+        assert_eq!(sr.escalation_count("anything"), 0);
+        assert_eq!(sr.recovery_stats().total_recoveries, 0);
+    }
+
+    #[test]
+    fn test_strategic_recovery_exposes_retry_system() {
+        let mut sr = StrategicRecovery::new();
+        // Access the underlying retry system
+        assert_eq!(sr.retry_system().tracked_operations(), 0);
+        sr.retry_system_mut()
+            .register_alternatives("op", vec!["alt1".into()]);
+        // Verify it persists
+        assert_eq!(sr.retry_system().tracked_operations(), 0); // no failures yet
+    }
+
+    #[test]
+    fn test_recovery_severity_display() {
+        assert_eq!(RecoverySeverity::Info.to_string(), "INFO");
+        assert_eq!(RecoverySeverity::Warning.to_string(), "WARNING");
+        assert_eq!(RecoverySeverity::Error.to_string(), "ERROR");
+        assert_eq!(RecoverySeverity::Critical.to_string(), "CRITICAL");
+    }
+
+    #[test]
+    fn test_environment_snapshot_default() {
+        let env = EnvironmentSnapshot::default();
+        assert!((env.battery_level - 1.0).abs() < f32::EPSILON);
+        assert!(env.network_available);
+        assert!(env.target_app_running);
+        assert!(env.screen_responsive);
+        assert!(env.neocortex_alive);
+    }
+
+    #[test]
+    fn test_classify_safety_keywords() {
+        let env = default_env();
+        // All safety keywords should classify as Safety
+        for keyword in &["policy violation", "action blocked", "safety concern", "ethical issue"] {
+            assert_eq!(
+                StrategicRecovery::classify_failure(keyword, &env),
+                FailureCategory::Safety,
+                "expected Safety for '{keyword}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_capability_keywords() {
+        let env = default_env();
+        for keyword in &["feature unavailable", "hardware missing", "api restricted"] {
+            assert_eq!(
+                StrategicRecovery::classify_failure(keyword, &env),
+                FailureCategory::Capability,
+                "expected Capability for '{keyword}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_full_recovery_lifecycle() {
+        // Simulate: transient fails 3x → escalates → strategic replan succeeds
+        let mut sr = StrategicRecovery::new();
+        let env = default_env();
+
+        // 3 transient retries
+        for attempt in 0..MAX_TRANSIENT_ATTEMPTS {
+            let ctx = make_ctx("fetch_data", FailureCategory::Transient, attempt, "timeout", env.clone());
+            let action = sr.determine_recovery(&ctx);
+            match &action {
+                RecoveryAction::RetryWithBackoff { .. } => {}
+                other => panic!("attempt {attempt}: expected retry, got {}", other.summary()),
+            }
+            sr.record_recovery_outcome("fetch_data", &action, false, attempt as u64 * 1000);
+        }
+
+        // 4th attempt → escalates
+        let ctx = make_ctx("fetch_data", FailureCategory::Transient, MAX_TRANSIENT_ATTEMPTS, "timeout", env.clone());
+        let action = sr.determine_recovery(&ctx);
+        match &action {
+            RecoveryAction::EscalateToStrategic { .. } => {}
+            other => panic!("expected escalation, got {}", other.summary()),
+        }
+
+        // Now handle as strategic — should replan
+        let ctx = make_ctx("fetch_data", FailureCategory::Strategic, 4, "wrong approach", env.clone());
+        let action = sr.determine_recovery(&ctx);
+        match &action {
+            RecoveryAction::Replan { .. } => {}
+            other => panic!("expected replan, got {}", other.summary()),
+        }
+
+        // Replan succeeds
+        sr.record_recovery_outcome("fetch_data", &action, true, 5000);
+        assert_eq!(sr.escalation_count("fetch_data"), 0);
+
+        let stats = sr.recovery_stats();
+        assert!(stats.successful_recoveries >= 1);
     }
 }

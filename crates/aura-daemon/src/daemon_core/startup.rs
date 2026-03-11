@@ -26,7 +26,7 @@ use rusqlite::Connection;
 use crate::arc::ArcManager;
 use crate::bridge::router::RouterHandle;
 use crate::bridge::BridgeHandle;
-use crate::daemon_core::channels::DaemonChannels;
+use crate::daemon_core::channels::{DaemonChannels, InputSource};
 use crate::daemon_core::checkpoint::{load_checkpoint, DaemonCheckpoint};
 use crate::daemon_core::onboarding::OnboardingEngine;
 use crate::execution::cycle::CycleDetector;
@@ -198,6 +198,10 @@ pub struct DaemonState {
     pub cancel_flag: Arc<AtomicBool>,
     /// Onboarding status detected at startup.
     pub onboarding_status: OnboardingStatus,
+    /// Tracks the [`InputSource`] of the most recent System2 dispatch so the
+    /// `ConversationReply` handler can route the response back to the correct
+    /// bridge (voice, Telegram, etc.) instead of always using `Direct`.
+    pub last_system2_source: Option<InputSource>,
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +383,7 @@ pub fn startup(config: AuraConfig) -> Result<(DaemonState, StartupReport), Start
         startup_time_ms: total_ms,
         cancel_flag,
         onboarding_status,
+        last_system2_source: None,
     };
 
     Ok((state, report))

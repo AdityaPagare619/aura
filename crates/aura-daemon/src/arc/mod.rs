@@ -34,6 +34,8 @@ use tracing::{debug, info, instrument, warn};
 
 use aura_types::errors::{AuraError, MemError};
 
+use crate::memory::AuraMemory;
+
 // ---------------------------------------------------------------------------
 // Core enums — canonical definitions (§8.2)
 // ---------------------------------------------------------------------------
@@ -365,6 +367,67 @@ impl ArcManager {
     #[must_use]
     pub fn uptime_secs(&self) -> u64 {
         self.created_at.elapsed().as_secs()
+    }
+
+    /// Run a dream consolidation cycle wired to episodic memory.
+    ///
+    /// 1. Fetch recent episodes from `AuraMemory`.
+    /// 2. Feed them into the `DreamingEngine::consolidate_with_episodes`.
+    /// 3. Write resulting insights back as new episodic entries tagged
+    ///    `["dream_insight", "consolidated"]`.
+    ///
+    /// Returns the episodic IDs of the stored dream insights.
+    #[instrument(name = "dream_consolidation", skip(self, memory))]
+    pub async fn run_dream_consolidation(
+        &mut self,
+        memory: &AuraMemory,
+        now_ms: u64,
+    ) -> Result<Vec<u64>, AuraError> {
+        // Step 1: Read recent episodes from episodic memory.
+        let episodes = memory.episodic.get_recent_episodes(50).await?;
+        info!(
+            episode_count = episodes.len(),
+            "fetched recent episodes for dream consolidation"
+        );
+
+        // Step 2: Run the sync consolidation with episode data.
+        let new_insights = self
+            .learning
+            .dreaming
+            .consolidate_with_episodes(&episodes, now_ms);
+
+        if new_insights.is_empty() {
+            debug!("dream consolidation produced no new insights");
+            return Ok(Vec::new());
+        }
+
+        // Step 3: Persist each insight back to episodic memory.
+        let mut stored_ids = Vec::with_capacity(new_insights.len());
+        for insight in &new_insights {
+            let content = format!(
+                "[dream_insight] {} (confidence: {:.0}%, actions: {})",
+                insight.description,
+                insight.confidence * 100.0,
+                insight.related_actions.join(", "),
+            );
+            let tags = vec![
+                "dream_insight".to_string(),
+                "consolidated".to_string(),
+            ];
+            // Dream insights are emotionally neutral with moderate importance.
+            let id = memory
+                .store_episodic(content, 0.0, insight.confidence, tags, now_ms)
+                .await?;
+            stored_ids.push(id);
+        }
+
+        info!(
+            insights = new_insights.len(),
+            stored = stored_ids.len(),
+            "dream insights persisted to episodic memory"
+        );
+
+        Ok(stored_ids)
     }
 }
 

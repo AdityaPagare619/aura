@@ -28,15 +28,16 @@
 //! ```
 
 pub mod audit;
+pub mod boundaries;
 pub mod emergency;
 pub mod gate;
 pub mod rules;
 pub mod sandbox;
 
-#[cfg(test)]
 pub mod wiring;
 
 pub use audit::{AuditEntry, AuditLevel, AuditLog};
+pub use boundaries::{BoundaryContext, BoundaryDecision, BoundaryLevel, BoundaryReasoner};
 pub use emergency::{EmergencyReason, EmergencyState, EmergencyStop};
 pub use gate::{PolicyDecision, PolicyGate, RateLimiter};
 pub use rules::{PolicyRule, RuleEffect};

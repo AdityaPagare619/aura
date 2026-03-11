@@ -23,7 +23,10 @@ pub struct EtgEdge {
     pub action: ActionType,
     pub success_count: u32,
     pub fail_count: u32,
-    pub avg_duration_ms: u32,
+    /// Running mean of duration in milliseconds (Welford's algorithm)
+    pub avg_duration_ms: f32,
+    /// Sum of squares of differences from the current mean (Welford's algorithm)
+    pub m2_duration_ms: f32,
     pub last_used_ms: u64,
 }
 
@@ -52,6 +55,34 @@ impl EtgEdge {
         let days = elapsed_ms as f64 / 86_400_000.0;
         let freshness = 2.0_f64.powf(-days / 14.0) as f32;
         raw * freshness
+    }
+
+    /// Update duration statistics using Welford's online algorithm.
+    /// This provides rigorous variance and standard deviation bounds for execution predictions.
+    pub fn record_success(&mut self, duration_ms: u32, timestamp_ms: u64) {
+        self.success_count += 1;
+        self.last_used_ms = timestamp_ms;
+        
+        let count = self.success_count as f32;
+        let x = duration_ms as f32;
+        let delta = x - self.avg_duration_ms;
+        self.avg_duration_ms += delta / count;
+        let delta2 = x - self.avg_duration_ms;
+        self.m2_duration_ms += delta * delta2;
+    }
+
+    pub fn record_failure(&mut self, timestamp_ms: u64) {
+        self.fail_count += 1;
+        self.last_used_ms = timestamp_ms;
+    }
+
+    /// Compute the standard deviation of execution time.
+    #[must_use]
+    pub fn duration_std_dev(&self) -> f32 {
+        if self.success_count < 2 {
+            return 0.0;
+        }
+        (self.m2_duration_ms / (self.success_count - 1) as f32).sqrt()
     }
 }
 
@@ -99,7 +130,8 @@ mod tests {
             action: ActionType::Tap { x: 100, y: 200 },
             success_count: 9,
             fail_count: 1,
-            avg_duration_ms: 200,
+            avg_duration_ms: 200.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 1_700_000_000_000,
         };
         assert!((edge.reliability() - 0.9).abs() < f32::EPSILON);
@@ -113,7 +145,8 @@ mod tests {
             action: ActionType::Back,
             success_count: 0,
             fail_count: 0,
-            avg_duration_ms: 0,
+            avg_duration_ms: 0.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 0,
         };
         assert!((edge.reliability() - 0.0).abs() < f32::EPSILON);
@@ -150,10 +183,13 @@ mod tests {
     #[test]
     fn test_effective_reliability_fresh_edge() {
         let edge = EtgEdge {
-            action: "tap".to_string(),
+            from_node: 1,
+            to_node: 2,
+            action: ActionType::Back,
             success_count: 9,
             fail_count: 1,
-            avg_duration_ms: 200,
+            avg_duration_ms: 200.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 1_000_000,
         };
         // Fresh edge (1ms ago): effective ≈ raw
@@ -167,10 +203,13 @@ mod tests {
         let now_ms: u64 = 1_700_000_000_000;
         let twenty_eight_days_ago = now_ms - (28 * 86_400_000); // 2 half-lives
         let edge = EtgEdge {
-            action: "tap".to_string(),
+            from_node: 1,
+            to_node: 2,
+            action: ActionType::Back,
             success_count: 9,
             fail_count: 1,
-            avg_duration_ms: 200,
+            avg_duration_ms: 200.0,
+            m2_duration_ms: 0.0,
             last_used_ms: twenty_eight_days_ago,
         };
         let raw = edge.reliability(); // 0.9
@@ -178,5 +217,33 @@ mod tests {
         // After 28 days (2 × 14-day half-life): effective ≈ raw × 0.25
         assert!(effective < raw * 0.30, "expected decay, got {effective}");
         assert!(effective > raw * 0.20, "too much decay, got {effective}");
+    }
+
+    #[test]
+    fn test_welford_variance() {
+        let mut edge = EtgEdge {
+            from_node: 1,
+            to_node: 2,
+            action: ActionType::Back,
+            success_count: 0,
+            fail_count: 0,
+            avg_duration_ms: 0.0,
+            m2_duration_ms: 0.0,
+            last_used_ms: 0,
+        };
+        
+        edge.record_success(100, 10);
+        edge.record_success(120, 20);
+        edge.record_success(80, 30);
+        
+        // Mean should be exactly 100
+        assert!((edge.avg_duration_ms - 100.0).abs() < f32::EPSILON);
+        
+        // Variance computation: data=[100, 120, 80], mean=100
+        // sum_sq_diff = 0^2 + 20^2 + (-20)^2 = 0 + 400 + 400 = 800
+        assert!((edge.m2_duration_ms - 800.0).abs() < f32::EPSILON);
+        
+        // std_dev = sqrt(800 / 2) = sqrt(400) = 20
+        assert!((edge.duration_std_dev() - 20.0).abs() < f32::EPSILON);
     }
 }

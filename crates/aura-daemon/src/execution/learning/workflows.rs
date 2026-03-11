@@ -27,7 +27,7 @@ pub struct ExecutionTrace {
     pub timestamp_ms: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowPattern {
     pub sequence: Vec<ActionType>,
     pub frequency: u32,

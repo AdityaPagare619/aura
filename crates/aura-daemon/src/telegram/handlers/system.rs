@@ -249,6 +249,8 @@ mod tests {
                 .unwrap()
                 .as_millis() as u64
                 - 60_000, // 1 minute ago
+            config: None,
+            user_command_tx: None,
         }
     }
 

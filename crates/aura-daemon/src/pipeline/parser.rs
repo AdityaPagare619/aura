@@ -684,37 +684,107 @@ impl DialogueState {
 const SAFETY_CRITICAL_INTENTS: &[&str] =
     &["call_make", "message_send", "file_share", "settings_toggle"];
 
-/// Confidence threshold below which a safety-critical command should not be executed
-/// without user confirmation.
-const SAFETY_AMBIGUITY_THRESHOLD: f32 = 0.60;
+/// Irreversible risk weight — used as a multiplier on the required confidence.
+/// Higher values = more confirmation needed.
+fn intent_risk_weight(intent: &NluIntent) -> f32 {
+    match intent {
+        // Irreversible: sending messages, making calls, sharing files
+        NluIntent::CallMake { .. } => 1.5,
+        NluIntent::MessageSend { .. } => 1.4,
+        NluIntent::FileShare { .. } => 1.3,
+        // State-changing but partially reversible
+        NluIntent::SettingsToggle { .. } => 1.2,
+        NluIntent::AlarmSet { .. } => 1.1,
+        NluIntent::TimerSet { .. } => 1.0,
+        NluIntent::ReminderCreate { .. } => 1.1,
+        NluIntent::CalendarEvent { .. } => 1.2,
+        // Fully reversible or read-only
+        NluIntent::AppOpen { .. } | NluIntent::AppSwitch { .. } => 0.7,
+        NluIntent::SearchWeb { .. } | NluIntent::SearchDevice { .. } => 0.6,
+        NluIntent::NavigateBack | NluIntent::NavigateHome => 0.5,
+        NluIntent::ScrollScreen { .. } => 0.4,
+        NluIntent::NotificationRead => 0.5,
+        NluIntent::ScreenshotTake => 0.6,
+        NluIntent::VolumeSet { .. } | NluIntent::BrightnessSet { .. } => 0.8,
+        NluIntent::ClipboardCopy { .. } | NluIntent::ClipboardPaste => 0.6,
+        // Negated commands: getting a negation wrong is doubly bad because
+        // the system would execute the opposite of what the user intended.
+        NluIntent::Negated { original, .. } => intent_risk_weight(original) * 1.3,
+        // Conversation and unknown are inherently safe
+        NluIntent::Conversation { .. } => 0.3,
+        NluIntent::Unknown { .. } => 0.5,
+    }
+}
 
-/// Confidence threshold below which ANY command warrants a clarification question.
-const GENERAL_AMBIGUITY_THRESHOLD: f32 = 0.40;
+/// Reliability bonus for the parse method.
+/// Pattern matching is deterministic and highly reliable; LLM parsing is noisy.
+fn method_reliability_bonus(method: ParseMethod) -> f32 {
+    match method {
+        ParseMethod::Pattern => 0.20,      // High reliability, lower threshold needed
+        ParseMethod::Hybrid => 0.10,       // Mixed reliability
+        ParseMethod::Llm => 0.0,           // No bonus — need full confidence
+        ParseMethod::KeywordFallback => -0.05, // Penalty — degraded mode
+    }
+}
 
-/// Check if an intent is safety-critical and the confidence is too low to proceed
-/// without user confirmation.
+/// Risk-proportional ambiguity detection.
 ///
-/// Returns `Some(clarification_question)` if ambiguous, `None` if safe to proceed.
-fn check_ambiguity(intent: &NluIntent, confidence: f32) -> Option<String> {
-    // Very low confidence for any command → ask.
-    if confidence < GENERAL_AMBIGUITY_THRESHOLD {
-        return Some(format!(
-            "I'm not sure I understood correctly. Did you mean: {:?}? Please confirm or rephrase.",
+/// Instead of two flat global thresholds, the required confidence adapts to:
+///
+/// 1. **Action risk**: Irreversible actions (calls, messages) need higher
+///    confidence than reversible ones (opening an app, scrolling).
+/// 2. **Parse method reliability**: Pattern-matched intents have a built-in
+///    reliability bonus; LLM-parsed intents do not.
+/// 3. **Negation state**: Negated intents require elevated confidence because
+///    a misdetected negation executes the opposite of user intent.
+///
+/// The required confidence formula:
+/// ```text
+/// required = base_threshold * risk_weight - method_bonus
+/// ```
+///
+/// Where `base_threshold = 0.45` is the neutral midpoint, calibrated so that
+/// a standard reversible action parsed by pattern match needs ~0.11 confidence
+/// (almost always passes), while an irreversible action parsed by LLM needs
+/// ~0.67 (requires strong signal).
+///
+/// Returns `Some(clarification_question)` if ambiguous, `None` if safe.
+fn check_ambiguity(intent: &NluIntent, confidence: f32, method: ParseMethod) -> Option<String> {
+    const BASE_THRESHOLD: f32 = 0.45;
+
+    let risk = intent_risk_weight(intent);
+    let method_bonus = method_reliability_bonus(method);
+    let required_confidence = (BASE_THRESHOLD * risk - method_bonus).clamp(0.10, 0.90);
+
+    if confidence >= required_confidence {
+        return None; // Safe to proceed
+    }
+
+    // Determine clarification style based on how far below threshold we are
+    let gap = required_confidence - confidence;
+    let is_safety_critical = intent.tool_name()
+        .map(|t| SAFETY_CRITICAL_INTENTS.contains(&t))
+        .unwrap_or(false);
+
+    if gap > 0.25 || confidence < 0.20 {
+        // Very low confidence — generic clarification
+        Some(format!(
+            "I'm not sure I understood correctly. Did you mean: {}? Please confirm or rephrase.",
             intent_description(intent)
-        ));
+        ))
+    } else if is_safety_critical {
+        // Close but safety-critical — targeted confirmation
+        Some(format!(
+            "Just to be safe — did you want me to {}? Please confirm.",
+            intent_description(intent)
+        ))
+    } else {
+        // Moderately uncertain — soft clarification
+        Some(format!(
+            "I think you want me to {}. Is that right?",
+            intent_description(intent)
+        ))
     }
-
-    // Safety-critical intents need higher confidence.
-    if let Some(tool) = intent.tool_name() {
-        if SAFETY_CRITICAL_INTENTS.contains(&tool) && confidence < SAFETY_AMBIGUITY_THRESHOLD {
-            return Some(format!(
-                "Just to be safe — did you want me to {}? Please confirm.",
-                intent_description(intent)
-            ));
-        }
-    }
-
-    None
 }
 
 /// Generate a human-readable description of an intent for clarification prompts.
@@ -1137,7 +1207,7 @@ impl CommandParser {
 
         // Stage 8: Ambiguity detection — ask user if confidence is too low.
         if result.clarification.is_none() {
-            if let Some(question) = check_ambiguity(&result.intent, result.confidence) {
+            if let Some(question) = check_ambiguity(&result.intent, result.confidence, result.parse_method) {
                 warn!(
                     confidence = result.confidence,
                     intent = ?result.intent,

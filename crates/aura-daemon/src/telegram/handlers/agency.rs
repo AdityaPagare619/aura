@@ -1,8 +1,17 @@
 //! Agency command handlers: /do, /open, /send, /call, /schedule, /screenshot, /navigate, /automate.
 //!
-//! These commands trigger real-world actions on the Android device via the
-//! daemon's execution pipeline. They require Action permission level and
-//! many will route through the Last Mile Approval system before execution.
+//! These commands are **daemon-routed** — when the execution pipeline is
+//! available, `dispatch()` in `mod.rs` forwards them via [`UserCommandTx`]
+//! and these handlers are never called.
+//!
+//! The functions below are **fallback handlers**: they execute only when the
+//! daemon channel is unavailable. Agency commands are the MOST DANGEROUS
+//! category — they control the physical device (phone calls, app launches,
+//! message sending). The fallback handlers must:
+//!
+//! 1. **NEVER execute any action.** Only the daemon with PolicyGate can.
+//! 2. **Be honest** — never claim an action was queued or is pending.
+//! 3. **Log the attempt** — so the action can be reviewed when the daemon comes online.
 
 use aura_types::errors::AuraError;
 use tracing::instrument;
@@ -11,139 +20,222 @@ use super::{HandlerContext, HandlerResponse};
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
-/// `/do <instruction>` — Execute an instruction on the device.
-#[instrument(skip(_ctx))]
+/// `/do <instruction>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: This handler NEVER executes device actions. Only the daemon
+/// with PolicyGate verification can execute instructions.
+#[instrument(skip(ctx))]
 pub fn handle_do(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     instruction: &str,
 ) -> Result<HandlerResponse, AuraError> {
     if instruction.is_empty() {
         return Ok(HandlerResponse::text("Usage: /do <instruction>"));
     }
 
-    // TODO: Route through Last Mile Approval, then to executor.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        instruction = truncate(instruction, 100),
+        "Agency fallback: /do reached local handler — execution engine unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Execute</b>\n\n<i>{}</i>\n\n\
-         Routing through approval pipeline...\n\
-         You may receive a confirmation request.",
-        escape_html(truncate(instruction, 500))
+        "<b>Execution Engine Unavailable</b>\n\n\
+         Instruction: <i>{}</i>\n\n\
+         This action requires AURA's verified execution engine with \
+         PolicyGate approval. The engine is currently offline or starting up.\n\n\
+         No action was taken. Please retry when the daemon is fully running.",
+        escape_html(truncate(instruction, 500)),
     )))
 }
 
-/// `/open <app>` — Open an application.
-#[instrument(skip(_ctx))]
-pub fn handle_open(_ctx: &HandlerContext<'_>, app: &str) -> Result<HandlerResponse, AuraError> {
+/// `/open <app>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: App launches require the daemon's A11y service integration.
+#[instrument(skip(ctx))]
+pub fn handle_open(ctx: &HandlerContext<'_>, app: &str) -> Result<HandlerResponse, AuraError> {
     if app.is_empty() {
         return Ok(HandlerResponse::text("Usage: /open <app>"));
     }
 
-    // TODO: Send intent to open app via A11y service.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        app,
+        "Agency fallback: /open reached local handler — execution engine unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Open App</b>\n\nOpening: <code>{}</code>\n\n\
-         <i>App launch command queued.</i>",
-        escape_html(app)
+        "<b>Execution Engine Unavailable</b>\n\n\
+         App: <code>{}</code>\n\n\
+         App launches require the daemon's execution engine and A11y service. \
+         The engine is currently offline or starting up.\n\n\
+         No action was taken. Please retry when the daemon is fully running.",
+        escape_html(app),
     )))
 }
 
-/// `/send <app> <contact> <message>` — Send a message via an app.
-#[instrument(skip(_ctx, message))]
+/// `/send <app> <contact> <message>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: Sending messages is a HIGH-RISK action. The fallback handler
+/// must NEVER attempt to send anything. Only the daemon with Last Mile
+/// Approval can execute this.
+#[instrument(skip(ctx, message))]
 pub fn handle_send(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     app: &str,
     contact: &str,
     message: &str,
 ) -> Result<HandlerResponse, AuraError> {
-    // This is a high-risk action — will require Last Mile Approval.
-    // TODO: Route through approval with full context.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        app,
+        contact,
+        "Agency fallback: /send reached local handler — execution engine unavailable (HIGH-RISK blocked)"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Send Message</b>\n\n\
+        "<b>Execution Engine Unavailable</b>\n\n\
          App: <code>{}</code>\n\
          To: <code>{}</code>\n\
          Message: <i>{}</i>\n\n\
-         Pending approval...",
+         Sending messages is a high-risk action that requires AURA's \
+         verified execution engine with Last Mile Approval.\n\
+         The engine is currently offline or starting up.\n\n\
+         <b>No message was sent.</b> Please retry when the daemon is fully running.",
         escape_html(app),
         escape_html(contact),
-        escape_html(truncate(message, 200))
+        escape_html(truncate(message, 200)),
     )))
 }
 
-/// `/call <contact>` — Make a phone call.
-#[instrument(skip(_ctx))]
-pub fn handle_call(_ctx: &HandlerContext<'_>, contact: &str) -> Result<HandlerResponse, AuraError> {
+/// `/call <contact>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: Phone calls are a HIGH-RISK action. Never execute from fallback.
+#[instrument(skip(ctx))]
+pub fn handle_call(ctx: &HandlerContext<'_>, contact: &str) -> Result<HandlerResponse, AuraError> {
     if contact.is_empty() {
         return Ok(HandlerResponse::text("Usage: /call <contact>"));
     }
 
-    // High-risk action: requires approval.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        contact,
+        "Agency fallback: /call reached local handler — execution engine unavailable (HIGH-RISK blocked)"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Phone Call</b>\n\nCalling: <code>{}</code>\n\n\
-         Pending approval...",
-        escape_html(contact)
+        "<b>Execution Engine Unavailable</b>\n\n\
+         Contact: <code>{}</code>\n\n\
+         Phone calls are a high-risk action that requires AURA's \
+         verified execution engine with Last Mile Approval.\n\
+         The engine is currently offline or starting up.\n\n\
+         <b>No call was placed.</b> Please retry when the daemon is fully running.",
+        escape_html(contact),
     )))
 }
 
-/// `/schedule <event> <time>` — Schedule an event.
-#[instrument(skip(_ctx))]
+/// `/schedule <event> <time>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: Scheduling requires the daemon's cron system and PolicyGate.
+#[instrument(skip(ctx))]
 pub fn handle_schedule(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     event: &str,
     time: &str,
 ) -> Result<HandlerResponse, AuraError> {
-    // TODO: Parse time and create calendar event via cron system.
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        event = truncate(event, 100),
+        time,
+        "Agency fallback: /schedule reached local handler — execution engine unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Schedule</b>\n\n\
+        "<b>Execution Engine Unavailable</b>\n\n\
          Event: <i>{}</i>\n\
          Time: <code>{}</code>\n\n\
-         <i>Scheduling pipeline not yet wired to cron.</i>",
+         Scheduling requires the daemon's cron system and PolicyGate. \
+         The engine is currently offline or starting up.\n\n\
+         <b>No event was scheduled.</b> Please retry when the daemon is fully running.",
         escape_html(event),
-        escape_html(time)
+        escape_html(time),
     )))
 }
 
-/// `/screenshot` — Capture the screen.
-#[instrument(skip(_ctx))]
-pub fn handle_screenshot(_ctx: &HandlerContext<'_>) -> Result<HandlerResponse, AuraError> {
-    // TODO: Capture screen via A11y service and send as photo.
-    // Would enqueue a Photo message content.
+/// `/screenshot` — Fallback when the execution engine is unavailable.
+///
+/// Screenshots require the A11y service running in the daemon process.
+#[instrument(skip(ctx))]
+pub fn handle_screenshot(ctx: &HandlerContext<'_>) -> Result<HandlerResponse, AuraError> {
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        "Agency fallback: /screenshot reached local handler — execution engine unavailable"
+    );
+
     Ok(HandlerResponse::Html(
-        "<b>Screenshot</b>\n\n\
-         <i>Screen capture not yet wired to A11y service.</i>\n\
-         The screenshot will be sent as a photo when available."
+        "<b>Execution Engine Unavailable</b>\n\n\
+         Screen capture requires the daemon's A11y service integration. \
+         The engine is currently offline or starting up.\n\n\
+         No screenshot was captured. Please retry when the daemon is fully running."
             .to_string(),
     ))
 }
 
-/// `/navigate <destination>` — Navigate somewhere.
-#[instrument(skip(_ctx))]
+/// `/navigate <destination>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: Navigation launches an external app — requires PolicyGate.
+#[instrument(skip(ctx))]
 pub fn handle_navigate(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     destination: &str,
 ) -> Result<HandlerResponse, AuraError> {
     if destination.is_empty() {
         return Ok(HandlerResponse::text("Usage: /navigate <destination>"));
     }
 
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        destination = truncate(destination, 100),
+        "Agency fallback: /navigate reached local handler — execution engine unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Navigate</b>\n\nDestination: <i>{}</i>\n\n\
-         <i>Navigation intent queued. Opening maps...</i>",
-        escape_html(truncate(destination, 300))
+        "<b>Execution Engine Unavailable</b>\n\n\
+         Destination: <i>{}</i>\n\n\
+         Navigation requires the daemon's execution engine to launch maps. \
+         The engine is currently offline or starting up.\n\n\
+         No action was taken. Please retry when the daemon is fully running.",
+        escape_html(truncate(destination, 300)),
     )))
 }
 
-/// `/automate <routine>` — Run an automation routine.
-#[instrument(skip(_ctx))]
+/// `/automate <routine>` — Fallback when the execution engine is unavailable.
+///
+/// SAFETY: Automation routines execute multiple device actions — they
+/// absolutely require the daemon's PolicyGate for safety.
+#[instrument(skip(ctx))]
 pub fn handle_automate(
-    _ctx: &HandlerContext<'_>,
+    ctx: &HandlerContext<'_>,
     routine: &str,
 ) -> Result<HandlerResponse, AuraError> {
     if routine.is_empty() {
         return Ok(HandlerResponse::text("Usage: /automate <routine>"));
     }
 
+    tracing::warn!(
+        chat_id = ctx.chat_id,
+        routine = truncate(routine, 100),
+        "Agency fallback: /automate reached local handler — execution engine unavailable"
+    );
+
     Ok(HandlerResponse::Html(format!(
-        "<b>Automate</b>\n\nRoutine: <code>{}</code>\n\n\
-         <i>Automation engine not yet wired. Routine queued.</i>",
-        escape_html(truncate(routine, 300))
+        "<b>Execution Engine Unavailable</b>\n\n\
+         Routine: <code>{}</code>\n\n\
+         Automation routines execute multiple device actions and require \
+         the daemon's verified execution engine with PolicyGate approval.\n\
+         The engine is currently offline or starting up.\n\n\
+         No action was taken. Please retry when the daemon is fully running.",
+        escape_html(truncate(routine, 300)),
     )))
 }
 
@@ -189,6 +281,8 @@ mod tests {
             audit: aud,
             queue: q,
             startup_time_ms: 1_700_000_000_000,
+            config: None,
+            user_command_tx: None,
         }
     }
 
@@ -207,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn test_do_valid() {
+    fn test_do_fallback_never_executes() {
         let mut sec = SecurityGate::new(vec![42]);
         let mut aud = AuditLog::new(100);
         let db = Connection::open_in_memory().unwrap();
@@ -216,15 +310,19 @@ mod tests {
 
         match handle_do(&ctx, "turn on wifi").unwrap() {
             HandlerResponse::Html(html) => {
-                assert!(html.contains("Execute"));
+                assert!(html.contains("Execution Engine Unavailable"));
                 assert!(html.contains("turn on wifi"));
+                assert!(html.contains("No action was taken"));
+                // Must NOT contain misleading action language.
+                assert!(!html.contains("Routing through approval"));
+                assert!(!html.contains("queued"));
             }
             other => panic!("expected Html, got {other:?}"),
         }
     }
 
     #[test]
-    fn test_send_message() {
+    fn test_send_fallback_never_sends() {
         let mut sec = SecurityGate::new(vec![42]);
         let mut aud = AuditLog::new(100);
         let db = Connection::open_in_memory().unwrap();
@@ -233,9 +331,81 @@ mod tests {
 
         match handle_send(&ctx, "whatsapp", "John", "Hello there").unwrap() {
             HandlerResponse::Html(html) => {
-                assert!(html.contains("Send Message"));
+                assert!(html.contains("Execution Engine Unavailable"));
                 assert!(html.contains("whatsapp"));
                 assert!(html.contains("John"));
+                assert!(html.contains("No message was sent"));
+            }
+            other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_call_fallback_never_calls() {
+        let mut sec = SecurityGate::new(vec![42]);
+        let mut aud = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let q = MessageQueue::open(db).unwrap();
+        let ctx = make_ctx(&mut sec, &mut aud, &q);
+
+        match handle_call(&ctx, "+1234567890").unwrap() {
+            HandlerResponse::Html(html) => {
+                assert!(html.contains("Execution Engine Unavailable"));
+                assert!(html.contains("+1234567890"));
+                assert!(html.contains("No call was placed"));
+            }
+            other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_screenshot_fallback_honest() {
+        let mut sec = SecurityGate::new(vec![42]);
+        let mut aud = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let q = MessageQueue::open(db).unwrap();
+        let ctx = make_ctx(&mut sec, &mut aud, &q);
+
+        match handle_screenshot(&ctx).unwrap() {
+            HandlerResponse::Html(html) => {
+                assert!(html.contains("Execution Engine Unavailable"));
+                assert!(html.contains("No screenshot was captured"));
+            }
+            other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_schedule_fallback_honest() {
+        let mut sec = SecurityGate::new(vec![42]);
+        let mut aud = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let q = MessageQueue::open(db).unwrap();
+        let ctx = make_ctx(&mut sec, &mut aud, &q);
+
+        match handle_schedule(&ctx, "Team meeting", "3pm tomorrow").unwrap() {
+            HandlerResponse::Html(html) => {
+                assert!(html.contains("Execution Engine Unavailable"));
+                assert!(html.contains("Team meeting"));
+                assert!(html.contains("No event was scheduled"));
+            }
+            other => panic!("expected Html, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_automate_fallback_honest() {
+        let mut sec = SecurityGate::new(vec![42]);
+        let mut aud = AuditLog::new(100);
+        let db = Connection::open_in_memory().unwrap();
+        let q = MessageQueue::open(db).unwrap();
+        let ctx = make_ctx(&mut sec, &mut aud, &q);
+
+        match handle_automate(&ctx, "morning_routine").unwrap() {
+            HandlerResponse::Html(html) => {
+                assert!(html.contains("Execution Engine Unavailable"));
+                assert!(html.contains("morning_routine"));
+                assert!(html.contains("No action was taken"));
             }
             other => panic!("expected Html, got {other:?}"),
         }

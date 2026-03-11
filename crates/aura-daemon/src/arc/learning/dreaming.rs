@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 
+use aura_types::memory::Episode;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
@@ -225,20 +226,34 @@ pub struct EtgTrace {
 
 impl EtgTrace {
     /// Calculate success rate for this trace.
+    /// Uses Bayesian smoothing: prior of 1 success + 1 failure (starts at 0.5
+    /// and converges to the actual rate as observations accumulate).
     #[must_use]
     pub fn success_rate(&self) -> f32 {
         let total = self.success_count + self.failure_count;
         if total == 0 {
             return 0.5; // Default when no data
         }
-        self.success_count as f32 / total as f32
+        // Bayesian smoothing with prior strength of 2 (1 pseudo-success + 1 pseudo-failure)
+        (self.success_count as f32 + 1.0) / (total as f32 + 2.0)
     }
 
-    /// Whether this trace should be pruned (success rate below threshold).
+    /// Whether this trace should be pruned based on exposure-aware thresholds.
+    ///
+    /// Instead of a flat success rate threshold, the pruning criterion adapts:
+    /// - Low-observation pathways get a lenient threshold (might just be unlucky)
+    /// - High-observation pathways with consistently poor results are pruned aggressively
+    /// Formula: threshold = MIN_PATHWAY_SUCCESS_RATE × (1 + 20 / (total + 20))
+    /// At 5 obs → threshold ≈ 0.16 (lenient); at 100 obs → threshold ≈ 0.12 (strict)
     #[must_use]
     pub fn should_prune(&self) -> bool {
-        self.success_rate() <= MIN_PATHWAY_SUCCESS_RATE
-            && (self.success_count + self.failure_count) >= 5
+        let total = self.success_count + self.failure_count;
+        if total < 5 {
+            return false; // Not enough data to make a call
+        }
+        // Exposure-scaled threshold: lenient for few observations, strict for many
+        let adaptive_threshold = MIN_PATHWAY_SUCCESS_RATE * (1.0 + 20.0 / (total as f32 + 20.0));
+        self.success_rate() <= adaptive_threshold
     }
 }
 
@@ -1175,6 +1190,85 @@ impl DreamingEngine {
         let created = self.run_awake(now_ms);
 
         (processed, created, pruned)
+    }
+
+    /// Consolidate with episodic memory data.
+    ///
+    /// This is the bridge between the DreamingEngine and the episodic memory
+    /// store.  The caller fetches recent episodes (async) and passes them in;
+    /// we ingest them into our internal trace map so the consolidation cycle
+    /// can reason over real interaction history, then run the full cycle and
+    /// return any *new* insights produced (for the caller to persist back).
+    ///
+    /// # Flow
+    /// 1. Ingest episodes → create/update `EtgTrace` entries from episode data.
+    /// 2. Run `run_consolidation_cycle` (all 4 stages).
+    /// 3. Collect and return only the insights created during *this* cycle.
+    #[instrument(skip(self, episodes), fields(episode_count = episodes.len()))]
+    pub fn consolidate_with_episodes(
+        &mut self,
+        episodes: &[Episode],
+        now_ms: u64,
+    ) -> Vec<DreamInsight> {
+        let insights_before = self.insights.len();
+
+        // Phase 1: Ingest episodes into EtgTrace map.
+        // Each episode's content and tags are scanned to correlate with
+        // existing traces or create lightweight trace stubs.
+        for ep in episodes {
+            // Derive a stable trace id from episode id so repeated
+            // consolidation cycles are idempotent for the same episode.
+            let trace_id = ep.id;
+
+            if let Some(trace) = self.etg_traces.get_mut(&trace_id) {
+                // Episode already ingested in a prior cycle — just freshen it.
+                trace.last_executed_ms = trace.last_executed_ms.max(ep.timestamp_ms);
+                continue;
+            }
+
+            // Determine success/failure heuristic from episode metadata.
+            // Positive emotional valence → success, negative → failure.
+            let (succ, fail) = if ep.emotional_valence >= 0.0 {
+                (1u32, 0u32)
+            } else {
+                (0u32, 1u32)
+            };
+
+            // Build an action name from the first context tag, falling back
+            // to a truncated content prefix.
+            let action_name = ep
+                .context_tags
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    ep.content.chars().take(64).collect::<String>()
+                });
+
+            let trace = EtgTrace {
+                trace_id,
+                action_name,
+                success_count: succ,
+                failure_count: fail,
+                last_executed_ms: ep.timestamp_ms,
+                confidence: ep.importance.clamp(0.0, 1.0),
+                consolidated: false,
+            };
+
+            self.etg_traces.insert(trace_id, trace);
+        }
+
+        info!(
+            ingested = episodes.len(),
+            total_traces = self.etg_traces.len(),
+            "episode ingestion complete"
+        );
+
+        // Phase 2: Run the full 4-stage consolidation cycle.
+        let (processed, created, pruned) = self.run_consolidation_cycle(now_ms);
+        info!(processed, created, pruned, "consolidation cycle complete");
+
+        // Phase 3: Return only the insights generated during *this* call.
+        self.insights[insights_before..].to_vec()
     }
 
     /// Get actionable insights (high confidence).

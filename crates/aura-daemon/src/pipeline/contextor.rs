@@ -340,7 +340,15 @@ impl Contextor {
     // Internal: token budget computation
     // -----------------------------------------------------------------------
 
-    /// Compute the token budget based on event importance and gate decision.
+    /// Compute the token budget via continuous linear interpolation.
+    ///
+    /// Instead of step-function thresholds that create discontinuous jumps
+    /// at arbitrary boundaries (0.35, 0.65, 0.90), we linearly interpolate
+    /// between the minimum and maximum budget based on the event's importance
+    /// score. This provides proportional context allocation: a score of 0.5
+    /// gets roughly half the maximum budget.
+    ///
+    /// Emergency bypass events always receive the full emergency budget.
     fn compute_token_budget(&self, scored: &ScoredEvent) -> usize {
         if let Some(override_budget) = self.config.token_budget_override {
             return override_budget;
@@ -349,35 +357,27 @@ impl Contextor {
         match scored.gate_decision {
             GateDecision::EmergencyBypass => TOKEN_BUDGET_EMERGENCY,
             _ => {
-                let s = scored.score_total;
-                if s >= 0.90 {
-                    TOKEN_BUDGET_EMERGENCY
-                } else if s >= 0.65 {
-                    TOKEN_BUDGET_HIGH
-                } else if s >= 0.35 {
-                    TOKEN_BUDGET_MEDIUM
-                } else {
-                    TOKEN_BUDGET_LOW
-                }
+                // Continuous interpolation: budget = low + score * (emergency - low)
+                let s = scored.score_total.clamp(0.0, 1.0);
+                let budget = TOKEN_BUDGET_LOW as f32
+                    + s * (TOKEN_BUDGET_EMERGENCY as f32 - TOKEN_BUDGET_LOW as f32);
+                budget as usize
             }
         }
     }
 
-    /// Determine max results per tier based on event importance.
+    /// Determine max results per tier via continuous interpolation.
+    ///
+    /// Mirrors `compute_token_budget` — linearly scales the number of memory
+    /// results to retrieve based on event importance, avoiding discrete jumps.
     fn max_results_for_importance(&self, scored: &ScoredEvent) -> usize {
         match scored.gate_decision {
             GateDecision::EmergencyBypass => MAX_RESULTS_EMERGENCY,
             _ => {
-                let s = scored.score_total;
-                if s >= 0.90 {
-                    MAX_RESULTS_EMERGENCY
-                } else if s >= 0.65 {
-                    MAX_RESULTS_HIGH
-                } else if s >= 0.35 {
-                    MAX_RESULTS_MEDIUM
-                } else {
-                    MAX_RESULTS_LOW
-                }
+                let s = scored.score_total.clamp(0.0, 1.0);
+                let results = MAX_RESULTS_LOW as f32
+                    + s * (MAX_RESULTS_EMERGENCY as f32 - MAX_RESULTS_LOW as f32);
+                (results as usize).max(MAX_RESULTS_LOW)
             }
         }
     }
@@ -545,20 +545,34 @@ impl Contextor {
 
     /// Build user context from the identity subsystem.
     ///
-    /// For events from `UserCommand` source, we look up the "primary" user.
-    /// For other sources, user context may not be applicable.
+    /// Derives the user ID from the event source rather than hardcoding.
+    /// For `UserCommand` events, the user is the device owner ("primary").
+    /// For notification events, the user is the sender (extracted from entities).
+    /// For system events, no user context is applicable.
     fn build_user_context(
         &self,
-        _scored: &ScoredEvent,
+        scored: &ScoredEvent,
         relationships: &RelationshipTracker,
         personality: &Personality,
     ) -> Option<UserContext> {
-        // For now, use "primary" as the default user ID.
-        // In a full implementation, the event would carry the user ID.
-        let user_id = "primary";
+        // Derive user ID from event source and content.
+        let user_id = match scored.parsed.source {
+            EventSource::UserCommand => "primary".to_owned(),
+            EventSource::Notification => {
+                // Try to extract sender from entities; fall back to "primary"
+                scored
+                    .parsed
+                    .entities
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "primary".to_owned())
+            }
+            // System events (screen changes, sensor data) don't have a user
+            _ => return None,
+        };
 
-        let relationship = relationships.get_relationship(user_id);
-        let directness = relationships.directness_for_user(user_id);
+        let relationship = relationships.get_relationship(&user_id);
+        let directness = relationships.directness_for_user(&user_id);
         let style = personality.response_style();
         let traits = &personality.traits;
 
@@ -582,7 +596,7 @@ impl Contextor {
             .collect();
 
         Some(UserContext {
-            user_id: user_id.to_owned(),
+            user_id,
             relationship_stage: stage_str,
             trust_level: trust,
             directness,
@@ -714,17 +728,26 @@ impl RankedMemory {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Compute recency factor: 1.0 for "just now", decaying to 0.0 over
-/// [`RECENCY_WINDOW_MS`]. Memories older than the window get 0.0.
+/// Compute recency factor via exponential decay with a half-life model.
+///
+/// Instead of linear decay with a hard cutoff at [`RECENCY_WINDOW_MS`],
+/// this uses `exp(-ln(2) * age / half_life)` which:
+/// - Returns 1.0 for age = 0 (just now)
+/// - Returns 0.5 for age = RECENCY_WINDOW_MS (the "half-life")
+/// - Smoothly approaches 0.0 for very old memories (no hard cutoff)
+///
+/// This eliminates the artificial discontinuity where a 59min memory
+/// scored 0.02 but a 61min memory scored 0.0 under linear decay.
 fn compute_recency(memory_ts: u64, now_ms: u64) -> f32 {
     if memory_ts >= now_ms {
         return 1.0;
     }
     let age_ms = now_ms - memory_ts;
-    if age_ms >= RECENCY_WINDOW_MS {
-        return 0.0;
-    }
-    1.0 - (age_ms as f32 / RECENCY_WINDOW_MS as f32)
+    // Half-life = RECENCY_WINDOW_MS (1 hour). At 1 hour, recency = 0.5.
+    // At 2 hours, recency = 0.25. At 3 hours, recency = 0.125. Smooth decay.
+    let half_life = RECENCY_WINDOW_MS as f64;
+    let decay = (-std::f64::consts::LN_2 * age_ms as f64 / half_life).exp();
+    decay as f32
 }
 
 /// Deduplicate memories by content. If the same content appears from

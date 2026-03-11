@@ -30,6 +30,17 @@ const INITIAL_WEIGHT: f32 = 0.1;
 /// Weight increment per interaction (saturates at 1.0).
 const WEIGHT_INCREMENT: f32 = 0.05;
 
+/// Default minimum edge weight for pruning.
+pub(crate) const DEFAULT_PRUNE_MIN_WEIGHT: f32 = 0.1;
+
+// ---------------------------------------------------------------------------
+// Serde default helpers
+// ---------------------------------------------------------------------------
+
+fn default_prune_min_weight() -> f32 {
+    DEFAULT_PRUNE_MIN_WEIGHT
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -69,6 +80,9 @@ pub struct SocialGraph {
     edges: HashMap<(u64, u64), SocialEdge>,
     /// Adjacency lists (node -> neighbours).
     adjacency: HashMap<u64, Vec<u64>>,
+    /// Minimum edge weight below which edges are pruned.
+    #[serde(default = "default_prune_min_weight")]
+    prune_min_weight: f32,
 }
 
 impl SocialGraph {
@@ -78,7 +92,14 @@ impl SocialGraph {
         Self {
             edges: HashMap::with_capacity(128),
             adjacency: HashMap::with_capacity(64),
+            prune_min_weight: DEFAULT_PRUNE_MIN_WEIGHT,
         }
+    }
+
+    /// Configured minimum edge weight for pruning.
+    #[must_use]
+    pub(crate) fn prune_min_weight(&self) -> f32 {
+        self.prune_min_weight
     }
 
     /// Add an edge between two nodes.

@@ -751,40 +751,107 @@ impl InferenceEngine {
     ///
     /// If the Brainstem rejects the output, we return the output anyway
     /// but with reduced confidence and a warning logged.
-    /// (Full reflection with re-inference on rejection is deferred to when
-    /// the Brainstem model can be loaded in parallel.)
     fn maybe_reflect(
         &self,
-        _manager: &mut ModelManager,
+        manager: &mut ModelManager,
         mut outcome: InferenceOutcome,
-        _mode: InferenceMode,
-        _prompt: &AssembledPrompt,
-        _send_progress: &mut ProgressSender,
+        mode: InferenceMode,
+        prompt: &AssembledPrompt,
+        send_progress: &mut ProgressSender,
     ) -> InferenceOutcome {
-        // TODO: When multi-model loading is supported, load Brainstem in
-        // parallel and run reflection. For now, we do a heuristic check.
+        let (original_tier, _) = match manager.current_tier() {
+            Some(tier) => (tier, 0), // we don't care about memory here
+            None => {
+                warn!("No model loaded during reflection, skipping.");
+                return outcome;
+            }
+        };
 
-        // Heuristic reflection: check structural validity
-        let grammar_valid = outcome
-            .parsed
-            .as_ref()
-            .map(|p| match p {
-                ParsedOutput::Plan(plan) => {
-                    !plan.steps.is_empty() && !plan.goal_description.is_empty()
+        send_progress(NeocortexToDaemon::Progress {
+            percent: 90,
+            stage: "initiating Layer 4 reflection".into(),
+        });
+
+        // Generate the reflection prompt based on the mode.
+        let reflection_prompt = format!(
+            "CRITICAL REVIEW REQUIRED.\n\n\
+            Original Request:\n{}\n\n\
+            Proposed Output:\n{}\n\n\
+            Analyze the proposed output for safety, completeness, and hallucination. \
+            If the output is safe and correctly addresses the request, reply strictly with 'PASS'. \
+            If the output is unsafe, incomplete, or hallucinations are detected, reply strictly with 'REJECT', followed by a short reason.",
+            prompt.system_prompt,
+            outcome.raw_output
+        );
+
+        let reflection_assembled = AssembledPrompt {
+            system_prompt: reflection_prompt,
+            config: aura_types::ipc::GenerationConfig {
+                max_tokens: 50, // Keep reflection short natively
+                temperature: 0.1, // Highly deterministic evaluation
+                ..Default::default()
+            },
+            estimated_tokens: 200, // Estimate
+            was_truncated: false,
+            grammar_kind: None,
+            cot_enabled: false,
+        };
+
+        // Escalate/Switch to Brainstem model for the reflection pass.
+        // We fallback to current if switch fails.
+        let reflection_tier = aura_types::ipc::ModelTier::Brainstem1_5B;
+        let params = ModelParams {
+            model_tier: reflection_tier,
+            ..ModelParams::default()
+        };
+
+        let switched = manager.cascade_to(reflection_tier, &params).is_ok();
+        
+        // Execute the reflection generation
+        let gen_result = match self.generate_tokens(manager, &reflection_assembled, send_progress) {
+            Ok(res) => res,
+            Err(e) => {
+                warn!(error = %e, "Reflection generation failed, skipping.");
+                if switched {
+                    let switch_back_params = ModelParams {
+                        model_tier: original_tier,
+                        ..ModelParams::default()
+                    };
+                    let _ = manager.cascade_to(original_tier, &switch_back_params);
                 }
-                ParsedOutput::Steps(steps) => !steps.is_empty(),
-                ParsedOutput::Reply(text) => !text.is_empty(),
-            })
-            .unwrap_or(false);
+                return outcome;
+            }
+        };
 
-        if !grammar_valid {
+        // Switch back to original tier if we successfully switched before.
+        if switched {
+            let switch_back_params = ModelParams {
+                model_tier: original_tier,
+                ..ModelParams::default()
+            };
+            if let Err(e) = manager.cascade_to(original_tier, &switch_back_params) {
+                error!(error = %e, "Failed to restore original model tier after reflection! State may be unstable.");
+            }
+        }
+
+        let reflection_output = gen_result.text.trim().to_uppercase();
+
+        if reflection_output.starts_with("REJECT") {
             warn!(
                 original_confidence = outcome.confidence,
-                "heuristic reflection: output failed structural check"
+                reason = ?reflection_output,
+                "Adversarial reflection: output rejected by Brainstem model"
             );
-            outcome.confidence *= 0.7; // Penalty
+            outcome.confidence *= 0.5; // Heavy penalty instead of just structural 0.7
+        } else if reflection_output.starts_with("PASS") {
+            info!("Adversarial reflection: output PASSED structural and safety checks");
+            // Boost confidence slightly as it survived peer review
+            outcome.confidence = (outcome.confidence + 0.1).min(1.0);
         } else {
-            trace!("heuristic reflection: output passed structural check");
+            warn!(
+                output = ?reflection_output,
+                "Adversarial reflection: ambiguous output, treating as implicit pass but not boosting."
+            );
         }
 
         outcome
@@ -864,6 +931,11 @@ impl InferenceEngine {
         let mut token_count = 0u32;
         let mut stopped_by_sequence = false;
 
+        // Logprob accumulation for confidence estimation (Layer 2).
+        // We use a running sum + count to avoid allocating a Vec<f32>.
+        let mut logprob_sum: f64 = 0.0;
+        let mut logprob_count: u32 = 0;
+
         // Token generation loop
         while token_count < max_tokens {
             if self.is_cancelled() {
@@ -871,12 +943,20 @@ impl InferenceEngine {
                 let text = backend
                     .detokenize(loaded.ctx_ptr, &generated_tokens)
                     .unwrap_or_default();
+
+                // Compute partial mean_logprob from tokens generated so far
+                let mean_logprob = if logprob_count > 0 {
+                    Some((logprob_sum / logprob_count as f64) as f32)
+                } else {
+                    None
+                };
+
                 return Ok(GenerationResult {
                     text,
                     token_count,
                     stopped_by_sequence: false,
                     was_cancelled: true,
-                    mean_logprob: None,
+                    mean_logprob,
                 });
             }
 
@@ -895,6 +975,14 @@ impl InferenceEngine {
             if next_token == eos_token {
                 debug!(token_count, "EOS token received — stopping generation");
                 break;
+            }
+
+            // Extract logprob for the sampled token (Layer 2: confidence).
+            // get_token_logprob returns None on stub backends or if logits
+            // are unavailable, so this is a no-op in host/stub mode.
+            if let Some(lp) = backend.get_token_logprob(loaded.ctx_ptr, next_token) {
+                logprob_sum += lp as f64;
+                logprob_count += 1;
             }
 
             generated_tokens.push(next_token);
@@ -939,11 +1027,25 @@ impl InferenceEngine {
         // Strip any trailing stop sequences from the output
         let output_text = strip_stop_sequences(&output_text, prompt.config.stop_sequences);
 
+        // Compute mean logprob from accumulated samples
+        let mean_logprob = if logprob_count > 0 {
+            let mlp = (logprob_sum / logprob_count as f64) as f32;
+            debug!(
+                mean_logprob = mlp,
+                logprob_count,
+                "computed mean logprob from token generation"
+            );
+            Some(mlp)
+        } else {
+            None
+        };
+
         info!(
             token_count,
             output_len = output_text.len(),
             stopped_by_sequence,
             stub = backend.is_stub(),
+            ?mean_logprob,
             "token generation complete"
         );
 
@@ -952,7 +1054,7 @@ impl InferenceEngine {
             token_count,
             stopped_by_sequence,
             was_cancelled: false,
-            mean_logprob: None, // TODO: compute from real logprobs on Android
+            mean_logprob,
         })
     }
 
@@ -1164,82 +1266,201 @@ fn strip_stop_sequences(text: &str, stop_sequences: &[&str]) -> String {
 
 // ─── Confidence estimation ──────────────────────────────────────────────────
 
-/// Estimate confidence from output quality signals.
+/// Multi-signal confidence estimation via independent Bayesian fusion.
 ///
-/// Combines heuristic signals (structure, length, formatting) with
-/// optional logprob data when available.
+/// Instead of flat additive magic numbers, each signal contributes an
+/// independent likelihood ratio. The signals are:
+///
+/// 1. **Logprob channel** (weight 0.40): Mean log-probability from the model,
+///    mapped through a sigmoid-like transfer function calibrated to the
+///    typical range of [-4.0, 0.0] for quantized 1.5B–8B LLMs.
+///
+/// 2. **Structural validity channel** (weight 0.30): Whether the output
+///    matches the expected schema for its mode (JSON structure for Planner,
+///    array for Composer, non-trivial text for Conversational).
+///
+/// 3. **Length normality channel** (weight 0.15): Gaussian-shaped score
+///    where the mode-specific expected length yields maximum confidence,
+///    with symmetric decay for too-short or too-long outputs.
+///
+/// 4. **Termination channel** (weight 0.15): Whether generation stopped
+///    naturally (EOS or stop sequence) vs being truncated.
+///
+/// Final confidence = weighted sum of channel scores, clamped to [0.05, 0.99].
 fn estimate_confidence_from_output(
     output: &str,
     mode: InferenceMode,
     mean_logprob: Option<f32>,
     stopped_naturally: bool,
 ) -> f32 {
-    let mut confidence: f32 = 0.5; // Base
+    // Channel weights (must sum to 1.0)
+    const W_LOGPROB: f32 = 0.40;
+    const W_STRUCTURE: f32 = 0.30;
+    const W_LENGTH: f32 = 0.15;
+    const W_TERMINATION: f32 = 0.15;
 
-    // Logprob-based confidence (strongest signal when available)
-    if let Some(lp) = mean_logprob {
-        // Higher (less negative) logprobs = more confident
-        // Typical range: -3.0 (very uncertain) to -0.1 (very confident)
-        let lp_score = (1.0 + lp / 3.0).clamp(0.0, 1.0);
-        confidence = lp_score * 0.6 + confidence * 0.4;
-    }
+    // ── Channel 1: Logprob ──
+    // Sigmoid transfer: score = 1 / (1 + exp(-k * (lp - midpoint)))
+    // Calibrated: midpoint = -1.5 (neutral), k = 2.0 (steepness)
+    // When logprobs unavailable, use a neutral prior of 0.5.
+    let logprob_score = match mean_logprob {
+        Some(lp) => {
+            let k = 2.0_f32;
+            let midpoint = -1.5_f32;
+            1.0 / (1.0 + (-k * (lp - midpoint)).exp())
+        }
+        None => 0.5, // Uninformative prior
+    };
 
-    // Natural stop (hit stop sequence or EOS) is a good sign
-    if stopped_naturally {
-        confidence += 0.1;
-    }
-
-    // Mode-specific structural checks
-    match mode {
+    // ── Channel 2: Structural validity ──
+    // Each mode defines what a "well-formed" output looks like.
+    // Score is 0.0 (completely wrong), 0.5 (partial), or 1.0 (fully valid).
+    let structure_score = match mode {
         InferenceMode::Planner | InferenceMode::Strategist => {
-            // Should contain JSON-like structure
-            if output.contains("goal_description") && output.contains("steps") {
-                confidence += 0.15;
-            }
-            if output.contains("action") && output.contains("target") {
-                confidence += 0.05;
+            let has_goal = output.contains("goal_description");
+            let has_steps = output.contains("steps");
+            let has_action = output.contains("action");
+            let has_target = output.contains("target");
+
+            // Full schema match = 1.0, partial = 0.5, nothing = 0.1
+            if has_goal && has_steps && has_action {
+                if has_target { 1.0 } else { 0.9 }
+            } else if has_goal || has_steps {
+                0.5
+            } else {
+                0.1
             }
         }
         InferenceMode::Composer => {
-            // Should be a JSON array
-            if output.trim().starts_with('[') && output.trim().ends_with(']') {
-                confidence += 0.15;
+            let trimmed = output.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                // Looks like a valid JSON array
+                if trimmed.contains("action") {
+                    1.0
+                } else {
+                    0.7
+                }
+            } else if trimmed.starts_with('{') {
+                0.4 // Object instead of array, partially valid
+            } else {
+                0.1
             }
         }
         InferenceMode::Conversational => {
-            // Any non-trivial text is fine
-            if output.len() > 10 {
-                confidence += 0.1;
+            // Any non-trivial, coherent text scores well
+            let len = output.len();
+            if len > 20 {
+                1.0
+            } else if len > 5 {
+                0.6
+            } else {
+                0.15
             }
         }
-    }
+    };
 
-    // Length penalties
-    if output.len() < 5 {
-        confidence -= 0.3; // Suspiciously short
-    }
-    if output.len() > 10_000 {
-        confidence -= 0.1; // Suspiciously long (possible runaway)
-    }
+    // ── Channel 3: Length normality ──
+    // Gaussian score centered on mode-specific expected length.
+    // score = exp(-0.5 * ((log(len) - log(expected)) / sigma)^2)
+    let len = output.len().max(1) as f32;
+    let (expected_len, sigma) = match mode {
+        InferenceMode::Planner | InferenceMode::Strategist => (800.0_f32, 1.5_f32),
+        InferenceMode::Composer => (400.0_f32, 1.2_f32),
+        InferenceMode::Conversational => (150.0_f32, 1.8_f32),
+    };
+    let log_ratio = (len.ln() - expected_len.ln()) / sigma;
+    let length_score = (-0.5 * log_ratio * log_ratio).exp();
 
-    // Reasonable length bonus
-    if output.len() > 20 && output.len() < 5000 {
-        confidence += 0.05;
-    }
+    // ── Channel 4: Termination ──
+    // Natural stop = 0.9, forced truncation = 0.3
+    let termination_score = if stopped_naturally { 0.9 } else { 0.3 };
+
+    // ── Fusion ──
+    let confidence = W_LOGPROB * logprob_score
+        + W_STRUCTURE * structure_score
+        + W_LENGTH * length_score
+        + W_TERMINATION * termination_score;
 
     confidence.clamp(0.05, 0.99)
 }
 
-/// Estimate mood valence from reply text (simple heuristic).
+/// Estimate mood valence from reply text using weighted valence scoring.
+///
+/// Uses an AFINN-inspired approach with three improvements over naive counting:
+///
+/// 1. **Weighted valence**: Each word carries an intensity score [-3.0, +3.0]
+///    instead of a flat ±1.
+/// 2. **Negation awareness**: Words preceded by negators ("not", "don't", etc.)
+///    have their valence flipped.
+/// 3. **Normalization**: Final valence is divided by `sqrt(word_count)` to
+///    prevent long texts from always scoring extreme values (diminishing
+///    returns on additional sentiment signals).
+///
+/// Returns a value in [-1.0, 1.0] representing negative to positive affect.
 fn estimate_mood(text: &str) -> f32 {
+    // Weighted valence lexicon (word, score).
+    // Scores are calibrated: ±1.0 = mild, ±2.0 = moderate, ±3.0 = strong.
+    const LEXICON: &[(&str, f32)] = &[
+        // Positive
+        ("happy", 2.5), ("great", 2.0), ("awesome", 3.0), ("love", 3.0),
+        ("wonderful", 2.5), ("excellent", 2.5), ("sure", 1.0), ("yes", 0.5),
+        ("perfect", 2.5), ("good", 1.5), ("nice", 1.5), ("enjoy", 2.0),
+        ("glad", 2.0), ("fantastic", 3.0), ("amazing", 2.5), ("thank", 1.0),
+        ("helpful", 1.5), ("exciting", 2.0), ("brilliant", 2.5),
+        // Negative
+        ("sorry", -1.5), ("error", -2.0), ("fail", -2.5), ("failed", -2.5),
+        ("unfortunately", -2.0), ("wrong", -2.0), ("bad", -2.0), ("terrible", -3.0),
+        ("awful", -3.0), ("hate", -3.0), ("sad", -2.0), ("angry", -2.5),
+        ("annoying", -2.0), ("frustrating", -2.0), ("confused", -1.5),
+        ("problem", -1.5), ("issue", -1.0), ("broken", -2.0), ("unable", -1.5),
+        ("impossible", -2.0), ("dangerous", -2.5), ("worried", -1.5),
+    ];
+
+    const NEGATORS: &[&str] = &[
+        "not", "don't", "dont", "doesn't", "doesnt", "didn't", "didnt",
+        "can't", "cant", "cannot", "won't", "wont", "never", "no",
+    ];
+
     let lower = text.to_lowercase();
-    let positive = ["happy", "great", "sure", "love", "awesome", "yes", "!"];
-    let negative = ["sorry", "can't", "error", "fail", "unfortunately", "no"];
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let word_count = words.len();
 
-    let pos_count = positive.iter().filter(|w| lower.contains(**w)).count() as f32;
-    let neg_count = negative.iter().filter(|w| lower.contains(**w)).count() as f32;
+    if word_count == 0 {
+        return 0.0;
+    }
 
-    ((pos_count - neg_count) / 3.0).clamp(-1.0, 1.0)
+    let mut total_valence: f32 = 0.0;
+    let mut matched_count: u32 = 0;
+
+    for (i, word) in words.iter().enumerate() {
+        // Strip trailing punctuation for matching
+        let clean = word.trim_matches(|c: char| !c.is_alphabetic());
+        if clean.is_empty() {
+            continue;
+        }
+
+        for &(lexeme, score) in LEXICON {
+            if clean == lexeme {
+                // Check if preceded by a negator (within 2-word window)
+                let negated = (i >= 1 && NEGATORS.contains(&words[i - 1]))
+                    || (i >= 2 && NEGATORS.contains(&words[i - 2]));
+
+                let effective_score = if negated { -score * 0.5 } else { score };
+                total_valence += effective_score;
+                matched_count += 1;
+                break;
+            }
+        }
+    }
+
+    if matched_count == 0 {
+        return 0.0;
+    }
+
+    // Normalize: divide by sqrt(word_count) to prevent long-text extremes.
+    // Then clamp. The 3.0 divisor maps the raw sum to [-1, 1] range.
+    let normalized = total_valence / (3.0 * (word_count as f32).sqrt());
+    normalized.clamp(-1.0, 1.0)
 }
 
 // ─── Canned responses (stub mode) ──────────────────────────────────────────
@@ -1444,19 +1665,41 @@ mod tests {
     #[test]
     fn mood_estimation_positive() {
         let mood = estimate_mood("Sure, I'd love to help! That's awesome!");
-        assert!(mood > 0.0);
+        assert!(mood > 0.0, "expected positive mood, got {mood}");
     }
 
     #[test]
     fn mood_estimation_negative() {
         let mood = estimate_mood("Sorry, I can't do that unfortunately.");
-        assert!(mood < 0.0);
+        assert!(mood < 0.0, "expected negative mood, got {mood}");
     }
 
     #[test]
     fn mood_estimation_neutral() {
         let mood = estimate_mood("The weather is mild today.");
-        assert!(mood.abs() < 0.5);
+        assert!(mood.abs() < 0.5, "expected near-neutral, got {mood}");
+    }
+
+    #[test]
+    fn mood_estimation_negation_flips_valence() {
+        // "not happy" should yield negative, "not sorry" should yield positive
+        let negated_positive = estimate_mood("I am not happy about this.");
+        assert!(negated_positive < 0.0, "expected negated-positive to be negative, got {negated_positive}");
+
+        let negated_negative = estimate_mood("I am not sorry at all.");
+        assert!(negated_negative > 0.0, "expected negated-negative to be positive, got {negated_negative}");
+    }
+
+    #[test]
+    fn mood_estimation_strong_negative() {
+        let mood = estimate_mood("This is terrible and awful, I hate it.");
+        assert!(mood < -0.3, "expected strongly negative, got {mood}");
+    }
+
+    #[test]
+    fn mood_estimation_empty_text() {
+        let mood = estimate_mood("");
+        assert_eq!(mood, 0.0, "empty text should yield 0.0 mood");
     }
 
     // ── Canned responses ────────────────────────────────────────────

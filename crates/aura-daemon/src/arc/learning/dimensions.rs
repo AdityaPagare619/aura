@@ -310,22 +310,6 @@ impl DimensionDiscovery {
                 entry.joint_count += 1;
                 entry.total += 1;
             }
-            // Also track individual feature counts
-            for j in 0..keys.len() {
-                if i == j {
-                    continue;
-                }
-                let pair_key = if keys[i] < keys[j] {
-                    format!("{}||{}", keys[i], keys[j])
-                } else {
-                    format!("{}||{}", keys[j], keys[i])
-                };
-                if let Some(entry) = self.cooccurrences.get_mut(&pair_key) {
-                    if keys[i] == entry.feature_a || keys[i] == entry.feature_b {
-                        // Already counted
-                    }
-                }
-            }
         }
 
         // Update individual counts for all relevant pairs
@@ -337,9 +321,6 @@ impl DimensionDiscovery {
             }
             if has_b {
                 entry.count_b += 1;
-            }
-            if !has_a && !has_b {
-                entry.total += 1;
             }
         }
 

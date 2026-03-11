@@ -22,11 +22,13 @@ const MAX_ACTIVE_AUTOMATIONS: usize = 16;
 /// Maximum number of action descriptors per automation.
 const MAX_ACTIONS_PER_AUTOMATION: usize = 20;
 
-/// Minimum observations before a pattern is considered a routine.
+/// Minimum observations before a pattern is considered a routine (baseline).
+/// The confidence formula adapts beyond this threshold using timing variance.
 const MIN_OBSERVATIONS_FOR_ROUTINE: u32 = 3;
 
-/// Time tolerance for pattern matching (minutes).
-const TIME_TOLERANCE_MINUTES: u8 = 30;
+/// Default time tolerance for pattern matching (hours, used as fallback).
+/// Actual tolerance adapts per-routine based on observed timing variance.
+const TIME_TOLERANCE_HOURS_DEFAULT: u16 = 1;
 
 /// Maximum observation entries retained (prevents unbounded growth).
 const MAX_OBSERVATIONS: usize = 512;
@@ -248,7 +250,8 @@ impl RoutineManager {
 
     /// Detect whether observations for the given action hash form a routine.
     ///
-    /// Pattern rule: same action at same time (+-30 min) on 3+ distinct days.
+    /// Pattern rule: same action at approximately the same time on 3+ distinct days.
+    /// Time tolerance and confidence adapt based on observed timing variance.
     fn detect_pattern(
         &mut self,
         action_hash: u64,
@@ -256,8 +259,35 @@ impl RoutineManager {
         hour: u8,
         _day_of_week: u8,
     ) -> Result<(), ArcError> {
-        // Count observations of this action within time tolerance.
-        let mut matching_days: u8 = 0; // bitmask
+        // --- Phase 1: Compute timing statistics for this action ---
+        // Collect all observation hours for this action.
+        let obs_hours: Vec<f32> = self.observations
+            .iter()
+            .filter(|obs| obs.action_hash == action_hash)
+            .map(|obs| obs.hour as f32)
+            .collect();
+
+        if obs_hours.is_empty() {
+            return Ok(());
+        }
+
+        // Online mean and variance of observation hours.
+        let n = obs_hours.len() as f32;
+        let mean_hour = obs_hours.iter().sum::<f32>() / n;
+        let variance = if obs_hours.len() > 1 {
+            obs_hours.iter().map(|h| (h - mean_hour).powi(2)).sum::<f32>() / (n - 1.0)
+        } else {
+            0.0
+        };
+        let std_dev = variance.sqrt();
+
+        // Adaptive time tolerance: tighter for consistent routines, looser for variable ones.
+        // tolerance = max(1, ceil(2 × σ_hours))
+        let adaptive_tolerance = (2.0 * std_dev).ceil().max(1.0) as u16;
+        let time_tolerance = adaptive_tolerance.min(TIME_TOLERANCE_HOURS_DEFAULT * 3); // cap at 3× default
+
+        // --- Phase 2: Count matching observations using adaptive tolerance ---
+        let mut matching_days: u8 = 0;
         let mut hour_sum: f32 = 0.0;
         let mut match_count: u32 = 0;
 
@@ -265,11 +295,9 @@ impl RoutineManager {
             if obs.action_hash != action_hash {
                 continue;
             }
-            // Check time tolerance.
             let hour_diff = (obs.hour as i16 - hour as i16).unsigned_abs();
-            // Handle wrap-around (e.g., 23 and 0 are 1 hour apart).
             let circular_diff = hour_diff.min(24 - hour_diff);
-            if circular_diff <= TIME_TOLERANCE_MINUTES as u16 / 60 + 1 {
+            if circular_diff <= time_tolerance {
                 matching_days |= 1 << obs.day_of_week;
                 hour_sum += obs.hour as f32;
                 match_count += 1;
@@ -287,7 +315,18 @@ impl RoutineManager {
             hour as f32
         };
 
-        // Check if we already have this routine.
+        // --- Phase 3: Multi-factor confidence ---
+        // Factor 1: Day coverage (what fraction of the week is covered)
+        let day_coverage = (distinct_days as f32 / 7.0).min(1.0);
+        // Factor 2: Observation saturation (diminishing returns after ~10 observations)
+        let count_saturation = 1.0 - 1.0 / (1.0 + match_count as f32 / 5.0);
+        // Factor 3: Timing consistency (lower variance = higher confidence)
+        // A routine with σ=0 gets consistency=1.0; σ=2 hours gets ~0.33
+        let timing_consistency = 1.0 / (1.0 + std_dev);
+        
+        let confidence = (day_coverage * count_saturation * timing_consistency).clamp(0.0, 1.0);
+
+        // --- Phase 4: Update or create routine ---
         if let Some(existing) = self
             .detected_routines
             .iter_mut()
@@ -296,15 +335,13 @@ impl RoutineManager {
             existing.times_observed = match_count;
             existing.avg_time_of_day = avg_hour;
             existing.days_active = matching_days;
-            existing.confidence =
-                (distinct_days as f32 / 7.0).min(1.0) * (match_count as f32 / 10.0).min(1.0);
-            debug!(hash = action_hash, times = match_count, "routine updated");
+            existing.confidence = confidence;
+            debug!(hash = action_hash, times = match_count, confidence, "routine updated");
             return Ok(());
         }
 
         // Create new routine.
         if self.detected_routines.len() >= MAX_DETECTED_ROUTINES {
-            // Evict lowest-confidence routine.
             if let Some((idx, _)) =
                 self.detected_routines
                     .iter()
@@ -319,14 +356,12 @@ impl RoutineManager {
             }
         }
 
-        let confidence =
-            (distinct_days as f32 / 7.0).min(1.0) * (match_count as f32 / 10.0).min(1.0);
-
         info!(
             hash = action_hash,
             days = distinct_days,
             confidence,
-            "new routine detected"
+            std_dev,
+            "new routine detected (variance-adaptive)"
         );
 
         self.detected_routines.push(DetectedRoutine {

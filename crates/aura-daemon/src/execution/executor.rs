@@ -28,13 +28,15 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::execution::cycle::{CycleDetector, CycleTier};
 use crate::execution::etg::EtgStore;
-use crate::execution::monitor::{ExecutionMonitor, InvariantViolation};
+use crate::execution::monitor::{EnhancedMonitor, ExecutionMonitor, InvariantViolation, MonitorDecision};
+use crate::execution::retry::{ErrorClass, IntelligentRetry, RetryStrategy};
 use crate::screen::actions::ScreenProvider;
 use crate::screen::selector::resolve_target;
 use crate::screen::verifier::{
     hash_action, hash_screen_state, verify_action, ExpectedChange, VerificationResult,
 };
 use crate::screen::anti_bot::AntiBot;
+use crate::policy::sandbox::{ContainmentLevel, Sandbox};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -76,18 +78,22 @@ pub enum ExecutionOutcome {
     },
 }
 
-/// Result of a single step execution (internal tracking).
+/// Result of a single step execution.
+///
+/// Previously private, blocking the feedback loop from reading execution
+/// results outside `executor.rs`. Made `pub(crate)` so that the feedback
+/// loop, planner, and ARC subsystems can inspect step outcomes.
 #[derive(Debug, Clone)]
-struct StepResult {
+pub(crate) struct StepResult {
     /// Whether the step succeeded.
-    success: bool,
+    pub(crate) success: bool,
     /// Verification result from before/after comparison.
     #[allow(dead_code)]
-    verification: Option<VerificationResult>,
+    pub(crate) verification: Option<VerificationResult>,
     /// How many retries were needed.
-    retries_used: u8,
+    pub(crate) retries_used: u8,
     /// Duration of this step in ms.
-    duration_ms: u64,
+    pub(crate) duration_ms: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,16 +114,24 @@ pub struct Executor {
     anti_bot: AntiBot,
     /// 4-tier cycle detector.
     cycle_detector: CycleDetector,
-    /// Execution monitor with 10 invariants.
-    monitor: ExecutionMonitor,
+    /// Enhanced execution monitor: base invariants + deviation tracking + resources.
+    enhanced_monitor: EnhancedMonitor,
+    /// Intelligent retry with circuit breaker and failure classification.
+    intelligent_retry: IntelligentRetry,
     /// Element-Transition Graph for learning.
     etg: EtgStore,
+    /// Action sandbox — containment and isolation for per-action safety checks.
+    /// Defense-in-depth: sandbox is checked AFTER PolicyGate, BEFORE execution.
+    action_sandbox: Sandbox,
 }
 
 impl std::fmt::Debug for Executor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Executor")
             .field("max_steps", &self.max_steps)
+            .field("enhanced_monitor", &self.enhanced_monitor)
+            .field("intelligent_retry", &self.intelligent_retry)
+            .field("action_sandbox", &"Sandbox { .. }")
             .finish_non_exhaustive()
     }
 }
@@ -128,6 +142,9 @@ impl std::fmt::Debug for Executor {
 
 impl Executor {
     /// Create a new executor with all subsystems.
+    ///
+    /// The `monitor` is wrapped in an `EnhancedMonitor` which provides
+    /// deviation tracking, resource monitoring, and post-execution analysis.
     pub fn new(
         max_steps: u32,
         anti_bot: AntiBot,
@@ -139,8 +156,10 @@ impl Executor {
             max_steps,
             anti_bot,
             cycle_detector,
-            monitor,
+            enhanced_monitor: EnhancedMonitor::new(monitor),
+            intelligent_retry: IntelligentRetry::new(),
             etg,
+            action_sandbox: Sandbox::new(),
         }
     }
 
@@ -150,8 +169,10 @@ impl Executor {
             max_steps: 200,
             anti_bot: AntiBot::normal(),
             cycle_detector: CycleDetector::new(),
-            monitor: ExecutionMonitor::normal(),
+            enhanced_monitor: EnhancedMonitor::normal(),
+            intelligent_retry: IntelligentRetry::new(),
             etg: EtgStore::in_memory(),
+            action_sandbox: Sandbox::new(),
         }
     }
 
@@ -161,8 +182,10 @@ impl Executor {
             max_steps: 50,
             anti_bot: AntiBot::safety(),
             cycle_detector: CycleDetector::new(),
-            monitor: ExecutionMonitor::safety(),
+            enhanced_monitor: EnhancedMonitor::new(ExecutionMonitor::safety()),
+            intelligent_retry: IntelligentRetry::new(),
             etg: EtgStore::in_memory(),
+            action_sandbox: Sandbox::new(),
         }
     }
 
@@ -172,8 +195,10 @@ impl Executor {
             max_steps: 500,
             anti_bot: AntiBot::power(),
             cycle_detector: CycleDetector::new(),
-            monitor: ExecutionMonitor::power(),
+            enhanced_monitor: EnhancedMonitor::new(ExecutionMonitor::power()),
+            intelligent_retry: IntelligentRetry::new(),
             etg: EtgStore::in_memory(),
+            action_sandbox: Sandbox::new(),
         }
     }
 }
@@ -232,7 +257,8 @@ impl Executor {
         }
 
         // Initialize monitoring for this task
-        self.monitor.start_task();
+        self.enhanced_monitor.base.start_task();
+        self.enhanced_monitor.load_plan(step_count);
 
         let mut steps_executed: u32 = 0;
 
@@ -240,9 +266,33 @@ impl Executor {
             let step_num = step_idx as u32;
 
             // Check task-level invariants before each step
-            if let Some(violation) = self.monitor.check_invariants() {
+            if let Some(violation) = self.enhanced_monitor.base.check_invariants() {
                 let elapsed_ms = task_start.elapsed().as_millis() as u64;
                 return Ok(self.handle_invariant_violation(violation, step_num, elapsed_ms));
+            }
+
+            // Check enhanced monitor (deviation + resources) before each step
+            match self.enhanced_monitor.evaluate() {
+                MonitorDecision::Abort { reason } => {
+                    let elapsed_ms = task_start.elapsed().as_millis() as u64;
+                    warn!(step = step_num, reason = %reason, "enhanced monitor abort");
+                    return Ok(ExecutionOutcome::Failed {
+                        step: step_num,
+                        reason,
+                        elapsed_ms,
+                    });
+                }
+                MonitorDecision::Replan { reason } => {
+                    // Log replan suggestion; without Neocortex IPC we continue
+                    // but record it so the monitor tracks the deviation.
+                    warn!(step = step_num, reason = %reason, "enhanced monitor suggests replan");
+                    self.enhanced_monitor.base.record_replan();
+                }
+                MonitorDecision::Throttle => {
+                    debug!(step = step_num, "enhanced monitor throttle — adding 500ms delay");
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+                MonitorDecision::Continue => {}
             }
 
             // Execute the step through the full pipeline
@@ -252,6 +302,23 @@ impl Executor {
             {
                 Ok(result) => {
                     steps_executed += 1;
+
+                    // Track progress in enhanced monitor
+                    let expected_time_ms = step.timeout_ms as u64;
+                    if result.success {
+                        self.enhanced_monitor.record_step_progress(
+                            step_num,
+                            result.duration_ms,
+                            expected_time_ms,
+                        );
+                    } else {
+                        self.enhanced_monitor.record_step_failure(
+                            step_num,
+                            result.duration_ms,
+                            expected_time_ms,
+                        );
+                    }
+
                     debug!(
                         step = step_num,
                         success = result.success,
@@ -262,6 +329,12 @@ impl Executor {
                 }
                 Err(StepFailure::Abort(reason)) => {
                     let elapsed_ms = task_start.elapsed().as_millis() as u64;
+                    // Record failure in enhanced monitor
+                    self.enhanced_monitor.record_step_failure(
+                        step_num,
+                        elapsed_ms,
+                        step.timeout_ms as u64,
+                    );
                     warn!(step = step_num, reason = %reason, "plan aborted");
                     return Ok(ExecutionOutcome::Failed {
                         step: step_num,
@@ -295,6 +368,18 @@ impl Executor {
         }
 
         let elapsed_ms = task_start.elapsed().as_millis() as u64;
+
+        // Final evaluation from enhanced monitor
+        let final_decision = self.enhanced_monitor.evaluate();
+        if let MonitorDecision::Abort { reason } = final_decision {
+            warn!(reason = %reason, "enhanced monitor abort at plan completion");
+            return Ok(ExecutionOutcome::Failed {
+                step: steps_executed,
+                reason,
+                elapsed_ms,
+            });
+        }
+
         info!(steps_executed, elapsed_ms, "plan completed successfully");
 
         Ok(ExecutionOutcome::Success {
@@ -317,8 +402,15 @@ impl Executor {
         task_start: Instant,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StepResult, StepFailure>> + 'a>> {
         Box::pin(async move {
-        self.monitor.start_step();
+        self.enhanced_monitor.base.start_step();
         let step_start = Instant::now();
+
+        // Step key for intelligent retry tracking
+        let step_key = step
+            .label
+            .as_deref()
+            .unwrap_or("unnamed")
+            .to_owned();
 
         // Determine max retries from failure strategy
         let max_retries = match &step.on_failure {
@@ -330,13 +422,25 @@ impl Executor {
         let mut last_error: Option<String> = None;
 
         for attempt in 0..=max_retries {
+            // Circuit breaker check via intelligent retry
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if !self.intelligent_retry.should_attempt(&step_key, now_ms) {
+                return Err(StepFailure::Abort(format!(
+                    "circuit breaker open for step '{}'",
+                    step_key
+                )));
+            }
+
             if attempt > 0 {
-                self.monitor.record_retry();
+                self.enhanced_monitor.base.record_retry();
                 debug!(step = step_num, attempt, "retrying step");
             }
 
             // Check step-level invariants (fast check each attempt)
-            if let Some(violation) = self.monitor.check_step_invariants() {
+            if let Some(violation) = self.enhanced_monitor.base.check_step_invariants() {
                 let elapsed_ms = task_start.elapsed().as_millis() as u64;
                 let _outcome = self.handle_invariant_violation(violation, step_num, elapsed_ms);
                 return Err(StepFailure::Abort(format!(
@@ -348,6 +452,8 @@ impl Executor {
             match self.execute_step_attempt(step, step_num, screen).await {
                 Ok(result) if result.success => {
                     let duration_ms = step_start.elapsed().as_millis() as u64;
+                    // Record success in intelligent retry
+                    self.intelligent_retry.handle_success(&step_key);
                     return Ok(StepResult {
                         success: true,
                         verification: result.verification,
@@ -381,6 +487,45 @@ impl Executor {
                     tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
                     last_error = Some(format!("rate limited for {}ms", wait_ms));
                 }
+                Err(AttemptError::SandboxDenied(reason)) => {
+                    // Sandbox denial is non-retryable — abort immediately.
+                    // Fail-secure: never retry a denied action.
+                    return Err(StepFailure::Abort(format!(
+                        "sandbox containment denied action: {reason}"
+                    )));
+                }
+            }
+
+            // Consult intelligent retry for failure classification and strategy
+            if let Some(ref error_msg) = last_error {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let strategy = self.intelligent_retry.handle_failure(
+                    &step_key,
+                    error_msg,
+                    |e: &String| classify_step_error(e),
+                    now_ms,
+                    attempt as u32,
+                );
+                match strategy {
+                    RetryStrategy::Abort { reason } => {
+                        return Err(StepFailure::Abort(reason));
+                    }
+                    RetryStrategy::UseAlternative { alternative } => {
+                        // Log the suggestion; runtime step-switching is not yet
+                        // supported, so we fall through to the normal failure strategy.
+                        warn!(
+                            step = step_num,
+                            alt = %alternative,
+                            "intelligent retry suggests alternative path"
+                        );
+                    }
+                    RetryStrategy::RetryWithBackoff => {
+                        // Continue with next attempt in the loop
+                    }
+                }
             }
         }
 
@@ -407,6 +552,60 @@ impl Executor {
 
         // ── Stage 2: Resolve target (if action needs one) ──
         let action = self.resolve_action_target(step, screen)?;
+
+        // ── Stage 2.5: Sandbox containment check (defense-in-depth) ──
+        // Classify the resolved action and enforce containment level.
+        // This runs AFTER PolicyGate (checked at the task level in main_loop)
+        // and BEFORE anti-bot/execution — defense-in-depth.
+        let containment = self.action_sandbox.classify(&action);
+        match containment {
+            ContainmentLevel::Forbidden => {
+                // L3: REFUSE — action must never execute.  Fail-secure.
+                tracing::error!(
+                    target: "SECURITY",
+                    level = %containment,
+                    action = ?action,
+                    step = step_num,
+                    "sandbox REFUSED action — L3:Forbidden"
+                );
+                return Err(AttemptError::SandboxDenied(format!(
+                    "action classified as {containment} at step {step_num}"
+                )));
+            }
+            ContainmentLevel::Restricted => {
+                // L2: Preview + confirm — the executor cannot await user
+                // input, so we DENY here (fail-secure).  Task-level L2
+                // confirmation is handled in `main_loop.rs` where the
+                // event loop can send a Telegram prompt and wait for
+                // `/allow` or `/deny`.  If execution reaches here it
+                // means the action was not pre-approved at the task level.
+                tracing::warn!(
+                    target: "SECURITY",
+                    level = %containment,
+                    action = ?action,
+                    step = step_num,
+                    "sandbox DENIED action — L2:Restricted requires confirmation \
+                     (executor cannot await; fail-secure)"
+                );
+                return Err(AttemptError::SandboxDenied(format!(
+                    "action classified as {containment} at step {step_num} — \
+                     confirmation not available at execution level (fail-secure)"
+                )));
+            }
+            ContainmentLevel::Monitored => {
+                // L1: Execute + log — audit trail for monitored actions.
+                tracing::debug!(
+                    target: "SECURITY",
+                    level = %containment,
+                    action = ?action,
+                    step = step_num,
+                    "sandbox: action monitored at L1"
+                );
+            }
+            ContainmentLevel::Direct => {
+                // L0: Auto-approve — trusted action, no special handling.
+            }
+        }
 
         // ── Stage 3: Anti-bot rate limiting ──
         match self.anti_bot.check_action(&action) {
@@ -487,7 +686,7 @@ impl Executor {
                 }
                 CycleTier::Strategic => {
                     // Strategic: would need replan from Neocortex
-                    self.monitor.record_replan();
+                    self.enhanced_monitor.base.record_replan();
                     // For now, we don't have IPC to Neocortex, so we continue
                     // and let the monitor's replan limit catch runaway replans
                 }
@@ -501,7 +700,7 @@ impl Executor {
         }
 
         // ── Stage 9: Check invariants ──
-        if let Some(violation) = self.monitor.check_invariants() {
+        if let Some(violation) = self.enhanced_monitor.base.check_invariants() {
             warn!(?violation, step = step_num, "invariant violation during step");
             // Don't abort here — return the step result and let the main loop handle it
         }
@@ -535,7 +734,7 @@ impl Executor {
         if let Some(ref target) = step.target {
             if let Some(resolved) = resolve_target(&after_tree, target, DEFAULT_MAX_FALLBACK_DEPTH)
             {
-                self.monitor.record_fallback_depth(resolved.level as u32);
+                self.enhanced_monitor.base.record_fallback_depth(resolved.level as u32);
             }
         }
 
@@ -706,11 +905,11 @@ impl Executor {
 }
 
 // ---------------------------------------------------------------------------
-// Internal error types (not exposed)
+// Internal error types (pub(crate) for feedback loop visibility)
 // ---------------------------------------------------------------------------
 
 /// Error from a single step (after all retries).
-enum StepFailure {
+pub(crate) enum StepFailure {
     /// Abort the entire plan.
     Abort(String),
     /// Step was skipped per FailureStrategy::Skip.
@@ -725,22 +924,46 @@ enum StepFailure {
 }
 
 /// Error from a single attempt within a step.
-enum AttemptError {
+pub(crate) enum AttemptError {
     TargetNotFound(String),
     ActionFailed(String),
     ScreenUnavailable(aura_types::errors::ScreenError),
     RateLimited(u64),
+    /// Action was denied by the sandbox containment system.
+    /// This is a hard deny — retrying will not help.
+    SandboxDenied(String),
 }
 
 /// Intermediate result from a single attempt (before retry logic).
-struct StepAttemptResult {
-    success: bool,
-    verification: Option<VerificationResult>,
+pub(crate) struct StepAttemptResult {
+    pub(crate) success: bool,
+    pub(crate) verification: Option<VerificationResult>,
 }
 
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
+
+/// Classify a step error string into an `ErrorClass` for intelligent retry.
+///
+/// Classification heuristic:
+/// - "not found" / "target" → `Structural` (UI changed, retry won't help)
+/// - "timeout" / "rate limit" / "transient" → `Transient` (safe to retry)
+/// - everything else → `Fatal`
+fn classify_step_error(error: &String) -> ErrorClass {
+    let lower = error.to_lowercase();
+    if lower.contains("not found") || lower.contains("target") {
+        ErrorClass::Structural
+    } else if lower.contains("timeout")
+        || lower.contains("rate limit")
+        || lower.contains("transient")
+        || lower.contains("rate limited")
+    {
+        ErrorClass::Transient
+    } else {
+        ErrorClass::Fatal
+    }
+}
 
 /// Map ActionType variant to a u8 discriminant for `hash_action()`.
 fn action_type_discriminant(action: &ActionType) -> u8 {

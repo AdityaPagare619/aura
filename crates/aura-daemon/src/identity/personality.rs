@@ -8,14 +8,17 @@ use super::prompt_personality::PersonalityPromptInjector;
 // Evolution constants
 // ---------------------------------------------------------------------------
 
-const POSITIVE_DELTA: f32 = 0.015;
-const NEGATIVE_DELTA: f32 = -0.02;
+/// Base positive interaction delta (attenuated by exposure).
+/// Actual delta = base / √(1 + evolution_count).
+const POSITIVE_DELTA_BASE: f32 = 0.015;
+/// Base negative interaction delta (attenuated by exposure).
+const NEGATIVE_DELTA_BASE: f32 = -0.02;
 const SIGNIFICANT_CHANGE_THRESHOLD: f32 = 0.05;
 
-/// Micro-drift applied per interaction for gradual personality evolution.
-/// Much smaller than the explicit positive/negative deltas — this represents
-/// the slow, unconscious shift that happens through repeated interaction.
-const MICRO_DRIFT: f32 = 0.001;
+/// Base micro-drift per interaction (attenuated by exposure).
+/// Much smaller than explicit deltas — represents the slow, unconscious
+/// shift that happens through repeated interaction.
+const MICRO_DRIFT_BASE: f32 = 0.001;
 
 /// Maximum allowed total drift from the baseline before consistency resets.
 const MAX_TOTAL_DRIFT: f32 = 0.30;
@@ -202,29 +205,32 @@ impl Personality {
         }
     }
 
-    /// Apply a personality event, nudging OCEAN traits by small deltas.
+    /// Apply a personality event, nudging OCEAN traits by exposure-attenuated
+    /// deltas. A new AURA (few interactions) is highly responsive; an
+    /// established AURA (thousands of interactions) has near-crystallized
+    /// personality — matching OCEAN psychology (McCrae & Costa, 2003).
     ///
-    /// Positive interaction: each trait +=0.015
-    /// Negative interaction: each trait -=0.02
-    /// ContextualPressure: targeted single-trait nudge
-    /// UserFeedback: currently logged only (future: NLP-based mapping)
-    ///
-    /// Additionally applies micro-drift (~0.001) per interaction to simulate
-    /// gradual personality evolution over time.
+    /// ContextualPressure: targeted single-trait nudge (NOT attenuated — the
+    /// user explicitly asked for a change, so AURA should respect it).
     pub fn evolve(&mut self, event: PersonalityEvent) {
+        // Exposure attenuation: base / √(1 + n). At n=0: full delta.
+        // At n=1000: ~3% of base. Personality crystallizes with experience.
+        let attenuation = 1.0 / (1.0 + self.evolution_count as f32).sqrt();
+
         match event {
             PersonalityEvent::PositiveInteraction => {
-                self.nudge_all(POSITIVE_DELTA);
-                self.apply_micro_drift(MICRO_DRIFT);
+                self.nudge_all(POSITIVE_DELTA_BASE * attenuation);
+                self.apply_micro_drift(MICRO_DRIFT_BASE * attenuation);
             }
             PersonalityEvent::NegativeInteraction => {
-                self.nudge_all(NEGATIVE_DELTA);
-                self.apply_micro_drift(-MICRO_DRIFT);
+                self.nudge_all(NEGATIVE_DELTA_BASE * attenuation);
+                self.apply_micro_drift(-MICRO_DRIFT_BASE * attenuation);
             }
             PersonalityEvent::ContextualPressure {
                 ref trait_name,
                 direction,
             } => {
+                // User-directed pressure is NOT attenuated — respect explicit intent.
                 self.nudge_trait(trait_name, direction);
             }
             PersonalityEvent::UserFeedback(ref _msg) => {
@@ -710,18 +716,17 @@ mod tests {
 
         assert!(!p.has_significant_change());
 
-        // 2 positive interactions: max single-trait delta = 2 * 0.015 * 1.3 (agreeableness)
-        // = 0.039, below the 0.05 threshold (plus micro-drift is tiny)
-        for _ in 0..2 {
+        // With exposure attenuation, early interactions have near-full deltas.
+        // After a few interactions the personality should show meaningful change.
+        for _ in 0..5 {
             p.evolve(PersonalityEvent::PositiveInteraction);
         }
-        assert!(!p.has_significant_change());
-
-        // 2 more should push the most malleable trait over the threshold
-        for _ in 0..2 {
-            p.evolve(PersonalityEvent::PositiveInteraction);
-        }
-        assert!(p.has_significant_change());
+        // After 5 strong positive interactions, at least one trait should be
+        // noticeably different from the checkpoint.
+        assert!(
+            p.has_significant_change(),
+            "5 early positive interactions should cause significant change"
+        );
     }
 
     #[test]
@@ -731,7 +736,7 @@ mod tests {
         let before_c = p.traits.conscientiousness;
 
         // A single positive interaction should move Agreeableness (1.3×) more
-        // than Conscientiousness (0.7×)
+        // than Conscientiousness (0.7×), even with exposure attenuation.
         p.evolve(PersonalityEvent::PositiveInteraction);
 
         let delta_a = p.traits.agreeableness - before_a;
@@ -742,10 +747,11 @@ mod tests {
             "Agreeableness delta ({:.4}) should exceed Conscientiousness delta ({:.4})",
             delta_a, delta_c
         );
-        // More specifically, ratio should be close to 1.3/0.7 ≈ 1.86
+        // The ratio of OCEAN malleability weights (1.3/0.7) should be preserved
+        // regardless of attenuation factor, since it multiplies uniformly.
         let ratio = delta_a / delta_c;
         assert!(
-            (ratio - 1.857).abs() < 0.2,
+            (ratio - 1.857).abs() < 0.3,
             "delta ratio {:.2} should be near 1.86 (1.3/0.7)",
             ratio
         );

@@ -28,8 +28,8 @@ use crate::arc::ArcError;
 /// Maximum sleep records retained.
 const MAX_SLEEP_RECORDS: usize = 365;
 
-/// Ideal sleep duration in hours.
-const IDEAL_SLEEP_HOURS: f64 = 7.5;
+/// Default ideal sleep duration (used until AURA learns the user's pattern).
+const DEFAULT_IDEAL_SLEEP_HOURS: f64 = 7.5;
 
 /// Minimum acceptable sleep duration in hours.
 const MIN_ACCEPTABLE_HOURS: f64 = 6.0;
@@ -37,9 +37,8 @@ const MIN_ACCEPTABLE_HOURS: f64 = 6.0;
 /// Maximum useful sleep duration in hours (above this is diminishing returns).
 const MAX_USEFUL_HOURS: f64 = 9.0;
 
-/// Ideal sleep onset time: 22:30 (as seconds from midnight).
-#[allow(dead_code)] // Reserved for future onset quality scoring.
-const IDEAL_ONSET_SECS: i64 = 22 * 3600 + 30 * 60;
+/// Default sleep onset time (22:30) — used until AURA learns the user's pattern.
+const DEFAULT_ONSET_SECS: i64 = 22 * 3600 + 30 * 60;
 
 /// Tolerance for onset time consistency (1 hour).
 const ONSET_CONSISTENCY_TOLERANCE: f64 = 3600.0;
@@ -57,8 +56,14 @@ const W_DISTURBANCE: f32 = 0.10;
 /// Consecutive late-night usage days to flag as concern.
 const LATE_NIGHT_CONCERN_DAYS: usize = 3;
 
-/// "Late night" threshold: 23:00 (as seconds from midnight).
-const LATE_NIGHT_THRESHOLD_SECS: i64 = 23 * 3600;
+/// Default "late night" threshold (23:00) — until user's pattern is learned.
+const DEFAULT_LATE_NIGHT_THRESHOLD_SECS: i64 = 23 * 3600;
+
+/// EMA alpha for learning user's sleep parameters.
+const SLEEP_EMA_ALPHA: f64 = 0.15;
+
+/// Minimum sleep records before adaptive parameters take effect.
+const MIN_RECORDS_FOR_ADAPTATION: usize = 5;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,6 +131,10 @@ impl SleepRecord {
 // ---------------------------------------------------------------------------
 
 /// Tracks sleep records and computes quality scores.
+///
+/// The tracker learns the user's personal sleep parameters (ideal duration,
+/// onset time) through exponential moving averages of actual sleep data.
+/// Until enough data accumulates, defaults are used.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SleepTracker {
     /// Ring buffer of sleep records.
@@ -135,6 +144,10 @@ pub struct SleepTracker {
     late_night_streak: u16,
     /// Last day index with late-night usage.
     last_late_night_day: i64,
+    /// Learned ideal sleep duration (EMA of actual user sleep hours).
+    learned_ideal_hours: f64,
+    /// Learned onset time of day in seconds from midnight (EMA).
+    learned_onset_secs: f64,
 }
 
 impl SleepTracker {
@@ -146,10 +159,38 @@ impl SleepTracker {
             cursor: 0,
             late_night_streak: 0,
             last_late_night_day: 0,
+            learned_ideal_hours: DEFAULT_IDEAL_SLEEP_HOURS,
+            learned_onset_secs: DEFAULT_ONSET_SECS as f64,
+        }
+    }
+
+    /// The ideal sleep hours this tracker has learned for the user.
+    #[must_use]
+    pub fn ideal_hours(&self) -> f64 {
+        if self.records.len() < MIN_RECORDS_FOR_ADAPTATION {
+            DEFAULT_IDEAL_SLEEP_HOURS
+        } else {
+            self.learned_ideal_hours
+        }
+    }
+
+    /// The late-night threshold derived from the user's learned onset time.
+    /// 1 hour before the user's learned bedtime = "late night".
+    #[must_use]
+    fn late_night_threshold_secs(&self) -> i64 {
+        if self.records.len() < MIN_RECORDS_FOR_ADAPTATION {
+            DEFAULT_LATE_NIGHT_THRESHOLD_SECS
+        } else {
+            // 1 hour before learned onset: if user sleeps at 01:00, late = 00:00.
+            let onset = self.learned_onset_secs as i64;
+            (onset - 3600).rem_euclid(86400)
         }
     }
 
     /// Record a sleep session.
+    ///
+    /// Also updates the learned ideal sleep hours and onset time via EMA,
+    /// so AURA gradually learns the user's personal sleep pattern.
     pub fn record(&mut self, record: SleepRecord) -> Result<(), ArcError> {
         if record.wake_at <= record.onset_at {
             return Err(ArcError::DomainError {
@@ -158,9 +199,22 @@ impl SleepTracker {
             });
         }
 
+        // Update learned parameters via EMA.
+        let dur = record.sleep_duration_hours();
+        let onset_tod = {
+            let raw = record.onset_time_of_day() as f64;
+            // Handle wrap-around: if after midnight, treat as late-night.
+            if raw < 12.0 * 3600.0 { raw + 86400.0 } else { raw }
+        };
+        self.learned_ideal_hours =
+            SLEEP_EMA_ALPHA * dur + (1.0 - SLEEP_EMA_ALPHA) * self.learned_ideal_hours;
+        self.learned_onset_secs =
+            SLEEP_EMA_ALPHA * onset_tod + (1.0 - SLEEP_EMA_ALPHA) * self.learned_onset_secs;
+
         debug!(
-            duration_h = record.sleep_duration_hours(),
+            duration_h = dur,
             efficiency = record.efficiency(),
+            learned_ideal = self.learned_ideal_hours,
             "sleep recorded"
         );
 
@@ -175,9 +229,13 @@ impl SleepTracker {
     }
 
     /// Record late-night device usage event.
+    ///
+    /// Uses the user's learned onset time to determine "late night" rather
+    /// than a hardcoded 23:00 threshold.
     pub fn record_late_night_usage(&mut self, timestamp: i64) {
         let time_of_day = timestamp.rem_euclid(86400);
-        if time_of_day >= LATE_NIGHT_THRESHOLD_SECS {
+        let threshold = self.late_night_threshold_secs();
+        if time_of_day >= threshold {
             let day_index = timestamp / 86400;
             if day_index == self.last_late_night_day + 1 || self.last_late_night_day == 0 {
                 self.late_night_streak += 1;
@@ -230,7 +288,10 @@ impl SleepTracker {
         total.clamp(0.0, 1.0)
     }
 
-    /// Duration sub-score: how close average sleep is to ideal.
+    /// Duration sub-score: how close average sleep is to the user's learned ideal.
+    ///
+    /// Uses `self.ideal_hours()` which is an EMA of the user's actual sleep.
+    /// Until enough data accumulates, falls back to the default (7.5h).
     fn duration_score(&self, records: &[&SleepRecord]) -> f32 {
         let avg_hours: f64 = records
             .iter()
@@ -238,17 +299,17 @@ impl SleepTracker {
             .sum::<f64>()
             / records.len() as f64;
 
+        let ideal = self.ideal_hours();
+
         if (MIN_ACCEPTABLE_HOURS..=MAX_USEFUL_HOURS).contains(&avg_hours) {
-            // Closer to ideal = higher score
-            let deviation = (avg_hours - IDEAL_SLEEP_HOURS).abs();
+            // Closer to the user's learned ideal = higher score.
+            let deviation = (avg_hours - ideal).abs();
             (1.0 - deviation / 3.0).max(0.0) as f32
         } else if avg_hours < MIN_ACCEPTABLE_HOURS {
-            // Use IDEAL_SLEEP_HOURS as denominator so that severely short
-            // sleep (e.g. 4 hours) is scored harshly enough to trigger
-            // the recommendation threshold.
-            (avg_hours / IDEAL_SLEEP_HOURS).max(0.0) as f32
+            // Severely short sleep scored against the user's ideal.
+            (avg_hours / ideal).max(0.0) as f32
         } else {
-            // Over-sleeping: gentle penalty
+            // Over-sleeping: gentle penalty.
             (1.0 - (avg_hours - MAX_USEFUL_HOURS) / 3.0).max(0.0) as f32
         }
     }

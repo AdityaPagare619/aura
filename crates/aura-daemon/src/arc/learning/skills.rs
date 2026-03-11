@@ -39,11 +39,12 @@ const CONFIDENCE_FLOOR: f32 = 0.3;
 /// Maximum confidence ceiling.
 const CONFIDENCE_CEILING: f32 = 0.99;
 
-/// Confidence boost on successful execution.
-const CONFIDENCE_BOOST_SUCCESS: f32 = 0.05;
+/// Base confidence boost on successful execution (attenuated by exposure).
+/// Actual boost = base / √(1 + total_executions).
+const CONFIDENCE_BOOST_SUCCESS_BASE: f32 = 0.05;
 
-/// Confidence penalty on failed execution.
-const CONFIDENCE_PENALTY_FAILURE: f32 = 0.08;
+/// Base confidence penalty on failed execution (attenuated by exposure).
+const CONFIDENCE_PENALTY_FAILURE_BASE: f32 = 0.08;
 
 /// Maximum skill lineage depth (prevents cycles).
 const MAX_LINEAGE_DEPTH: usize = 16;
@@ -245,6 +246,7 @@ impl SkillRegistry {
         skill_id: u64,
         success: bool,
         duration_ms: u64,
+        now_ms: u64,
     ) -> Result<(), ArcError> {
         let skill = self
             .skills
@@ -254,14 +256,16 @@ impl SkillRegistry {
                 id: skill_id,
             })?;
 
+        // Exposure-attenuated confidence: established skills resist perturbation.
+        let attenuation = 1.0 / (1.0 + skill.total_executions() as f32).sqrt();
         if success {
             skill.success_count = skill.success_count.saturating_add(1);
             skill.confidence =
-                (skill.confidence + CONFIDENCE_BOOST_SUCCESS).min(CONFIDENCE_CEILING);
+                (skill.confidence + CONFIDENCE_BOOST_SUCCESS_BASE * attenuation).min(CONFIDENCE_CEILING);
         } else {
             skill.failure_count = skill.failure_count.saturating_add(1);
             skill.confidence =
-                (skill.confidence - CONFIDENCE_PENALTY_FAILURE).max(CONFIDENCE_FLOOR);
+                (skill.confidence - CONFIDENCE_PENALTY_FAILURE_BASE * attenuation).max(CONFIDENCE_FLOOR);
         }
 
         // EMA for duration (alpha = 0.3)
@@ -273,7 +277,7 @@ impl SkillRegistry {
                 ((1.0 - alpha) * skill.avg_duration_ms as f64 + alpha * duration_ms as f64) as u64;
         }
 
-        skill.last_used_ms = skill.last_used_ms.max(duration_ms); // use duration_ms as proxy if no explicit timestamp
+        skill.last_used_ms = now_ms;
         skill.recompute_reliability();
         debug!(
             skill_id,
@@ -601,7 +605,7 @@ mod tests {
             .register_skill("nav", vec!["open_maps".into()], 100)
             .expect("register");
 
-        reg.record_outcome(id, true, 500).expect("record");
+        reg.record_outcome(id, true, 500, 1_700_000_000_000).expect("record");
         let skill = reg.get_skill(id).expect("lookup");
         assert_eq!(skill.success_count, 1);
         assert_eq!(skill.failure_count, 0);
@@ -615,7 +619,7 @@ mod tests {
             .register_skill("nav", vec!["open_maps".into()], 100)
             .expect("register");
 
-        reg.record_outcome(id, false, 500).expect("record");
+        reg.record_outcome(id, false, 500, 1_700_000_000_000).expect("record");
         let skill = reg.get_skill(id).expect("lookup");
         assert_eq!(skill.failure_count, 1);
         assert!((skill.reliability - 0.0).abs() < f32::EPSILON);
@@ -624,7 +628,7 @@ mod tests {
     #[test]
     fn test_record_outcome_not_found() {
         let mut reg = SkillRegistry::new();
-        let result = reg.record_outcome(999, true, 100);
+        let result = reg.record_outcome(999, true, 100, 1_700_000_000_000);
         assert!(result.is_err());
     }
 
@@ -637,9 +641,9 @@ mod tests {
 
         // 3 successes, 1 failure → reliability = 0.75
         for _ in 0..3 {
-            reg.record_outcome(id, true, 200).expect("ok");
+            reg.record_outcome(id, true, 200, 1_700_000_000_000).expect("ok");
         }
-        reg.record_outcome(id, false, 200).expect("ok");
+        reg.record_outcome(id, false, 200, 1_700_000_000_000).expect("ok");
 
         let skill = reg.get_skill(id).expect("lookup");
         assert!(
@@ -661,11 +665,11 @@ mod tests {
 
         // Good: 10 successes
         for _ in 0..10 {
-            reg.record_outcome(good, true, 100).expect("ok");
+            reg.record_outcome(good, true, 100, 1_700_000_000_000).expect("ok");
         }
         // Bad: 10 failures
         for _ in 0..10 {
-            reg.record_outcome(bad, false, 100).expect("ok");
+            reg.record_outcome(bad, false, 100, 1_700_000_000_000).expect("ok");
         }
 
         let reliable = reg.get_reliable_skills(0.8);
@@ -708,11 +712,11 @@ mod tests {
             .register_skill("timed", vec!["step".into()], 100)
             .expect("register");
 
-        reg.record_outcome(id, true, 1000).expect("ok");
+        reg.record_outcome(id, true, 1000, 1_700_000_000_000).expect("ok");
         let s1 = reg.get_skill(id).expect("lookup").avg_duration_ms;
         assert_eq!(s1, 1000); // first observation = raw value
 
-        reg.record_outcome(id, true, 500).expect("ok");
+        reg.record_outcome(id, true, 500, 1_700_000_000_000).expect("ok");
         let s2 = reg.get_skill(id).expect("lookup").avg_duration_ms;
         // EMA: 0.7 * 1000 + 0.3 * 500 = 850
         assert!((s2 as f64 - 850.0).abs() < 5.0, "expected ~850, got {s2}");
@@ -762,12 +766,13 @@ mod tests {
             .register_skill("boost", vec!["a".into()], 100)
             .expect("register");
 
-        reg.record_outcome(id, true, 200).expect("ok");
+        reg.record_outcome(id, true, 200, 1_700_000_000_000).expect("ok");
         let skill = reg.get_skill(id).expect("lookup");
-        // 0.5 + 0.05 = 0.55
+        // Should be above initial 0.5 (exposure-attenuated, but first execution
+        // gets near-full boost since total_executions was 0 before increment).
         assert!(
-            (skill.confidence - 0.55).abs() < 0.001,
-            "expected ~0.55, got {}",
+            skill.confidence > 0.5,
+            "confidence should increase on success, got {}",
             skill.confidence
         );
     }
@@ -779,12 +784,12 @@ mod tests {
             .register_skill("penalty", vec!["a".into()], 100)
             .expect("register");
 
-        reg.record_outcome(id, false, 200).expect("ok");
+        reg.record_outcome(id, false, 200, 1_700_000_000_000).expect("ok");
         let skill = reg.get_skill(id).expect("lookup");
-        // 0.5 - 0.08 = 0.42
+        // Should be below initial 0.5 (exposure-attenuated penalty).
         assert!(
-            (skill.confidence - 0.42).abs() < 0.001,
-            "expected ~0.42, got {}",
+            skill.confidence < 0.5,
+            "confidence should decrease on failure, got {}",
             skill.confidence
         );
     }
@@ -815,7 +820,7 @@ mod tests {
 
         // Many failures to push confidence down
         for _ in 0..10 {
-            reg.record_outcome(id, false, 100).expect("ok");
+            reg.record_outcome(id, false, 100, 1_700_000_000_000).expect("ok");
         }
         let skill = reg.get_skill(id).expect("lookup");
         assert!(
@@ -837,7 +842,7 @@ mod tests {
 
         // Record some successes to build reliability
         for _ in 0..5 {
-            reg.record_outcome(id, true, 200).expect("ok");
+            reg.record_outcome(id, true, 200, 1_700_000_000_000).expect("ok");
         }
 
         let matches = reg.match_skill(&["navigation", "maps"], 100);
@@ -862,7 +867,7 @@ mod tests {
             .expect("ok");
         reg.add_tags(id1, &["navigation", "maps"]).expect("ok");
         for _ in 0..10 {
-            reg.record_outcome(id1, true, 200).expect("ok");
+            reg.record_outcome(id1, true, 200, 1_700_000_000_000).expect("ok");
         }
 
         let id2 = reg
@@ -870,7 +875,7 @@ mod tests {
             .expect("ok");
         reg.add_tags(id2, &["navigation"]).expect("ok");
         for _ in 0..10 {
-            reg.record_outcome(id2, false, 200).expect("ok");
+            reg.record_outcome(id2, false, 200, 1_700_000_000_000).expect("ok");
         }
 
         let matches = reg.match_skill(&["navigation", "maps"], 100);

@@ -244,13 +244,22 @@ impl System1 {
     // -- Helpers --------------------------------------------------------------
 
     /// Extract a normalized cache key from content by lowercasing and keeping
-    /// only alphabetic words, sorted for order-independence.
+    /// only semantically meaningful words, sorted for order-independence.
+    ///
+    /// Short words that carry semantic weight (e.g. "on", "off", "no") are
+    /// preserved. Only true filler words ("a", "an", "the", etc.) are dropped.
     #[must_use]
     fn extract_cache_key(content: &str) -> String {
+        /// Filler/stop words that never affect action semantics.
+        const STOP_WORDS: &[&str] = &[
+            "a", "an", "the", "and", "or", "but", "for", "nor", "yet",
+            "of", "at", "by", "as",
+        ];
+
         let lowered = content.to_ascii_lowercase();
         let mut words: Vec<&str> = lowered
             .split_whitespace()
-            .filter(|w| w.len() > 2) // Drop short stop-words like "a", "to".
+            .filter(|w| !STOP_WORDS.contains(w))
             .collect();
         words.sort_unstable();
         words.dedup();

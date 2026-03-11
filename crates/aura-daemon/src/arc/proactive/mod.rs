@@ -15,6 +15,8 @@ pub use routines::{Automation, DetectedRoutine, RoutineManager};
 pub use suggestions::{Suggestion, SuggestionEngine, SuggestionTrigger};
 pub use attention::{AttentionState, ForestGuardian};
 
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
@@ -40,6 +42,17 @@ const MAX_INITIATIVE_BUDGET: f32 = 1.0;
 
 /// Maximum proactive actions returned per tick.
 const MAX_ACTIONS_PER_TICK: usize = 8;
+
+/// Default elapsed-seconds value used for the daily budget reset (1 day = 86400s).
+pub(crate) const DEFAULT_DAILY_BUDGET_RESET_SECS: f32 = 86400.0;
+
+// ---------------------------------------------------------------------------
+// Serde default helpers
+// ---------------------------------------------------------------------------
+
+fn default_daily_budget_reset_secs() -> f32 {
+    DEFAULT_DAILY_BUDGET_RESET_SECS
+}
 
 // ---------------------------------------------------------------------------
 // ProactiveAction — output type
@@ -89,6 +102,15 @@ pub struct ProactiveEngine {
     last_reset_day: u32,
     /// Timestamp (ms) of last tick for delta-time calculation.
     last_tick_ms: u64,
+    /// Queue of pending proactive actions awaiting drain.
+    pending_actions: VecDeque<ProactiveAction>,
+    /// Accumulated threat score [0.0, 1.0], decays exponentially each tick.
+    threat_score: f32,
+    /// Count of negative signals (rejections, dismissals) since last reset.
+    negative_signal_count: u32,
+    /// Elapsed seconds used for the daily initiative budget reset.
+    #[serde(default = "default_daily_budget_reset_secs")]
+    daily_budget_reset_secs: f32,
 }
 
 impl ProactiveEngine {
@@ -104,7 +126,17 @@ impl ProactiveEngine {
             daily_suggestions_count: 0,
             last_reset_day: 0,
             last_tick_ms: 0,
+            pending_actions: VecDeque::new(),
+            threat_score: 0.0,
+            negative_signal_count: 0,
+            daily_budget_reset_secs: DEFAULT_DAILY_BUDGET_RESET_SECS,
         }
+    }
+
+    /// Configured elapsed seconds for the daily initiative budget reset.
+    #[must_use]
+    pub(crate) fn daily_budget_reset_secs(&self) -> f32 {
+        self.daily_budget_reset_secs
     }
 
     /// Current initiative budget.
@@ -155,6 +187,177 @@ impl ProactiveEngine {
             self.daily_suggestions_count = 0;
             self.last_reset_day = current_day;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Cron-facing methods (called from main_loop cron handlers)
+    // -----------------------------------------------------------------------
+
+    /// Detect proactive opportunities by evaluating suggestion triggers and
+    /// routine patterns. Discovered actions are pushed onto the internal
+    /// `pending_actions` queue for later draining.
+    ///
+    /// Called by the `opportunity_detect` cron job (every 15 min, P2Normal).
+    /// Returns the number of newly enqueued actions.
+    #[instrument(name = "opportunity_detect", skip_all)]
+    pub(crate) fn detect_opportunities(&mut self, now_ms: u64) -> Result<usize, ArcError> {
+        let mut enqueued: usize = 0;
+
+        // 1) Evaluate suggestion triggers for new opportunities.
+        match self.suggestions.evaluate_triggers(now_ms) {
+            Ok(suggestions) => {
+                for suggestion in suggestions {
+                    self.pending_actions
+                        .push_back(ProactiveAction::Suggest(suggestion));
+                    enqueued += 1;
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "opportunity detection: suggestion trigger evaluation failed");
+            }
+        }
+
+        // 2) Check routine automations for the current time window.
+        let total_hours = now_ms / 3_600_000;
+        let hour = (total_hours % 24) as u8;
+        let day = (now_ms / 86_400_000) as u32;
+        let day_of_week = (day % 7) as u8;
+
+        let due_automations: Vec<Automation> = self
+            .routines
+            .check_automations(hour, day_of_week)
+            .into_iter()
+            .cloned()
+            .collect();
+        for automation in &due_automations {
+            self.pending_actions
+                .push_back(ProactiveAction::RunAutomation {
+                    routine_id: automation.routine_id,
+                    actions: automation.actions.clone(),
+                });
+            enqueued += 1;
+        }
+
+        // 3) Cross-domain signal: if suggestion acceptance rate is high for
+        //    any domain, that's a positive signal — reduce threat score slightly.
+        let stats = self.suggestions.category_stats_snapshot();
+        for (_domain, acceptance_rate, total) in &stats {
+            if *total >= 5 && *acceptance_rate > 0.7 {
+                self.threat_score = (self.threat_score - 0.02).max(0.0);
+            }
+        }
+
+        info!(
+            enqueued,
+            pending = self.pending_actions.len(),
+            "opportunity detection complete"
+        );
+        Ok(enqueued)
+    }
+
+    /// Accumulate threat signals by applying exponential decay to the current
+    /// threat score and then inspecting suggestion rejection rates across
+    /// domains.
+    ///
+    /// Called by the `threat_accumulate` cron job (every 2 min, P0Always).
+    /// Returns the current threat score after accumulation.
+    #[instrument(name = "threat_accumulate", skip_all)]
+    pub(crate) fn accumulate_threats(&mut self) -> f32 {
+        // 1) Exponential decay — threat_score halves roughly every 30 minutes.
+        //    At 2-min cadence (120s), decay factor ≈ 0.955  (0.5^(120/1800)).
+        const DECAY_FACTOR: f32 = 0.955;
+        self.threat_score *= DECAY_FACTOR;
+
+        // 2) Scan category stats for high-rejection domains → increase threat.
+        let stats = self.suggestions.category_stats_snapshot();
+        for (_domain, acceptance_rate, total) in &stats {
+            // Only consider domains with meaningful sample sizes.
+            if *total >= 3 && *acceptance_rate < 0.3 {
+                // Low acceptance → user is rejecting suggestions from this domain.
+                self.threat_score = (self.threat_score + 0.05).min(1.0);
+                self.negative_signal_count = self.negative_signal_count.saturating_add(1);
+            }
+        }
+
+        // 3) Clamp floor.
+        if self.threat_score < 0.001 {
+            self.threat_score = 0.0;
+        }
+
+        info!(
+            threat_score = self.threat_score,
+            negative_signals = self.negative_signal_count,
+            "threat accumulation complete"
+        );
+        self.threat_score
+    }
+
+    /// Current accumulated threat score [0.0, 1.0].
+    #[must_use]
+    pub fn threat_score(&self) -> f32 {
+        self.threat_score
+    }
+
+    /// Number of pending actions in the drain queue.
+    #[must_use]
+    pub fn pending_action_count(&self) -> usize {
+        self.pending_actions.len()
+    }
+
+    /// Drain pending proactive actions, spending initiative budget for each.
+    /// Returns the actions that were successfully drained (budget permitting).
+    ///
+    /// Called by the `action_drain` cron job (every 60s, P0Always).
+    #[instrument(name = "action_drain", skip_all)]
+    pub(crate) fn drain_pending_actions(&mut self) -> Vec<ProactiveAction> {
+        let mut drained: Vec<ProactiveAction> = Vec::with_capacity(MAX_ACTIONS_PER_TICK);
+
+        while let Some(action) = self.pending_actions.front() {
+            if drained.len() >= MAX_ACTIONS_PER_TICK {
+                break;
+            }
+
+            // Determine cost based on action type.
+            let cost = match action {
+                ProactiveAction::Suggest(s) => {
+                    0.1 * (1.0 - s.confidence).max(MIN_INITIATIVE_COST)
+                }
+                ProactiveAction::RunAutomation { .. } => 0.1,
+                ProactiveAction::Briefing(_) => 0.15,
+                ProactiveAction::Alert { urgency, .. } => {
+                    // Urgent alerts are cheap — we want them to go through.
+                    0.05 * (1.0 - urgency).max(MIN_INITIATIVE_COST)
+                }
+            };
+
+            if !self.spend_initiative(cost) {
+                // Budget exhausted — stop draining, leave remaining in queue.
+                debug!(
+                    remaining = self.pending_actions.len(),
+                    budget = self.initiative_budget,
+                    "drain stopped: insufficient initiative budget"
+                );
+                break;
+            }
+
+            // Budget spent — pop and collect.
+            if let Some(action) = self.pending_actions.pop_front() {
+                // Count suggestions against daily limit.
+                if matches!(&action, ProactiveAction::Suggest(_)) {
+                    self.daily_suggestions_count =
+                        self.daily_suggestions_count.saturating_add(1);
+                }
+                drained.push(action);
+            }
+        }
+
+        info!(
+            drained = drained.len(),
+            remaining = self.pending_actions.len(),
+            budget = self.initiative_budget,
+            "action drain complete"
+        );
+        drained
     }
 
     /// Main evaluation cycle — call once per tick from the cron scheduler.

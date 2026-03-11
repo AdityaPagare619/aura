@@ -22,9 +22,9 @@ pub mod tracker;
 
 // Re-export primary types for convenient access.
 pub use conflicts::ConflictResolver;
-pub use decomposer::GoalDecomposer;
+pub use decomposer::{GoalDecomposer, HtnDecomposer};
 pub use registry::GoalRegistry;
-pub use scheduler::GoalScheduler;
+pub use scheduler::{BdiScheduler, GoalScheduler};
 pub use tracker::GoalTracker;
 
 use serde::{Deserialize, Serialize};

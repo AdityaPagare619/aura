@@ -23,6 +23,7 @@ use std::collections::BinaryHeap;
 use aura_types::events::EventSource;
 use aura_types::memory::WorkingSlot;
 
+use crate::memory::compaction::ContextCompactor;
 use crate::memory::embeddings;
 
 /// Maximum number of slots in working memory.
@@ -95,6 +96,8 @@ pub struct WorkingMemory {
     last_activation_ms: u64,
     head: usize,
     count: usize,
+    /// Compactor for long sessions.
+    compactor: ContextCompactor,
 }
 
 impl WorkingMemory {
@@ -108,6 +111,7 @@ impl WorkingMemory {
             last_activation_ms: 0,
             head: 0,
             count: 0,
+            compactor: ContextCompactor::new(),
         }
     }
 
@@ -137,6 +141,11 @@ impl WorkingMemory {
             ttl_ms,
         };
 
+        // If getting full (>= 90% capacity), try to compact older events.
+        if self.count >= (MAX_SLOTS * 9) / 10 {
+            self.compact_old_events(now_ms);
+        }
+
         if self.count < MAX_SLOTS {
             // Below capacity — use an empty position directly.
             // Expired slots are left in place for sweep_expired() to handle,
@@ -156,6 +165,50 @@ impl WorkingMemory {
 
         // Advance head for round-robin tracking
         self.head = (self.head + 1) % MAX_SLOTS;
+    }
+
+    /// Try to compact older working slots to free up space.
+    fn compact_old_events(&mut self, now_ms: u64) {
+        let live: Vec<(usize, &WorkingSlot)> = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_ref().map(|slot| (i, slot)))
+            .collect();
+
+        // Keep at least the 100 most recent slots intact.
+        let candidates = self.compactor.identify_compaction_candidates(&live, 100);
+        
+        if candidates.len() < 3 {
+            return;
+        }
+
+        let mut slots_to_compact = Vec::with_capacity(candidates.len());
+        for &idx in &candidates {
+            if let Some(s) = &self.slots[idx] {
+                slots_to_compact.push(s.clone());
+            }
+        }
+        
+        let refs: Vec<&WorkingSlot> = slots_to_compact.iter().collect();
+        let compacted_slot = self.compactor.compact(&refs, now_ms);
+
+        for &idx in &candidates {
+            self.slots[idx] = None;
+            self.activation_scores[idx] = 0.0;
+            self.count -= 1;
+        }
+
+        let pos = self.find_empty_slot();
+        self.slots[pos] = Some(compacted_slot);
+        self.activation_scores[pos] = 0.0;
+        self.count += 1;
+        
+        tracing::debug!(
+            compacted_count = candidates.len(),
+            new_count = self.count,
+            "Working memory compacted"
+        );
     }
 
     /// Query working memory for the top-k most relevant slots.

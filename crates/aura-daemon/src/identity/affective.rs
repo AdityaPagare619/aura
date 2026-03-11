@@ -37,6 +37,14 @@ pub enum MoodEvent {
     Silence {
         duration_ms: u64,
     },
+    /// Voice biomarker detected elevated stress (0.0 … 1.0).
+    VoiceStressDetected {
+        level: f32,
+    },
+    /// Voice biomarker detected fatigue (0.0 … 1.0).
+    VoiceFatigueDetected {
+        level: f32,
+    },
 }
 
 impl MoodEvent {
@@ -55,6 +63,16 @@ impl MoodEvent {
                 } else {
                     None // Silence not long enough to affect mood.
                 }
+            }
+            // Stress lowers valence and raises arousal proportionally.
+            MoodEvent::VoiceStressDetected { level } => {
+                let l = level.clamp(&0.0, &1.0);
+                Some((-0.10 * l, 0.15 * l))
+            }
+            // Fatigue lowers both valence and arousal proportionally.
+            MoodEvent::VoiceFatigueDetected { level } => {
+                let l = level.clamp(&0.0, &1.0);
+                Some((-0.05 * l, -0.10 * l))
             }
         }
     }
@@ -640,7 +658,11 @@ impl StressAccumulator {
         // Only negative events add stress.
         let is_negative = matches!(
             event,
-            MoodEvent::TaskFailed | MoodEvent::UserFrustrated | MoodEvent::Criticism
+            MoodEvent::TaskFailed
+                | MoodEvent::UserFrustrated
+                | MoodEvent::Criticism
+                | MoodEvent::VoiceStressDetected { .. }
+                | MoodEvent::VoiceFatigueDetected { .. }
         );
 
         if is_negative {

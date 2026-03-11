@@ -101,6 +101,12 @@ impl IpcHandler {
                         self.check_idle_unload();
                         continue;
                     }
+                    if e.kind() == io::ErrorKind::InvalidData {
+                        // Oversized or malformed message — already drained (if
+                        // applicable), stream is in sync.  Log and continue.
+                        warn!(error = %e, "skipping invalid message");
+                        continue;
+                    }
                     error!(error = %e, "IPC read error");
                     return Err(e);
                 }
@@ -125,10 +131,38 @@ impl IpcHandler {
         };
 
         if msg_len > max_size {
-            warn!(msg_len, max_size, "message exceeds size limit");
-            // Drain the oversized message to keep the stream in sync.
-            let mut drain = vec![0u8; msg_len.min(max_size)];
-            let _ = self.stream.read_exact(&mut drain);
+            // Hard cap: refuse to drain absurdly large messages (>16 MB).
+            // A legitimate peer should never send this much; drop the connection.
+            const HARD_CAP: usize = 16 * 1024 * 1024;
+            if msg_len > HARD_CAP {
+                error!(
+                    msg_len,
+                    hard_cap = HARD_CAP,
+                    "message exceeds hard cap — dropping connection"
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "message absurdly large: {msg_len} bytes (hard cap {HARD_CAP}) — \
+                         refusing to drain, connection dropped"
+                    ),
+                ));
+            }
+
+            warn!(msg_len, max_size, "message exceeds size limit — draining");
+
+            // Drain the oversized message in chunks to keep the stream in sync.
+            // Uses a small fixed buffer to avoid large allocations under memory pressure.
+            const DRAIN_CHUNK: usize = 8192;
+            let mut remaining = msg_len;
+            let mut chunk = vec![0u8; DRAIN_CHUNK];
+            while remaining > 0 {
+                let to_read = remaining.min(DRAIN_CHUNK);
+                self.stream.read_exact(&mut chunk[..to_read])?;
+                remaining -= to_read;
+            }
+
+            debug!(msg_len, "oversized message drained successfully");
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("message too large: {msg_len} bytes (max {max_size})"),
@@ -290,6 +324,9 @@ impl IpcHandler {
             // Send memory warning as a side-effect via the progress channel,
             // but continue with inference (Founder's directive: never refuse).
             self.set_low_memory(true);
+        } else if self.low_memory {
+            info!(available_mb, "memory recovered — restoring normal message size limits");
+            self.set_low_memory(false);
         }
 
         // Create a progress sender that writes directly to the stream.

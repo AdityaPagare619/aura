@@ -306,6 +306,8 @@ pub enum DaemonToNeocortex {
     Cancel,
     /// Health check.
     Ping,
+    /// Request to embed text into a neural vector.
+    Embed { text: String },
 }
 
 // ─── Neocortex → Daemon messages ────────────────────────────────────────────
@@ -341,6 +343,8 @@ pub enum NeocortexToDaemon {
     MemoryWarning { used_mb: u32, available_mb: u32 },
     /// Token budget exhausted during inference.
     TokenBudgetExhausted,
+    /// Response to an Embed request.
+    Embedding { vector: Vec<f32> },
 }
 
 #[cfg(test)]
@@ -413,6 +417,14 @@ mod tests {
         let msg = DaemonToNeocortex::Ping;
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("Ping"));
+    }
+
+    #[test]
+    fn test_daemon_to_neocortex_embed() {
+        let msg = DaemonToNeocortex::Embed { text: "hello".to_string() };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("Embed"));
+        assert!(json.contains("hello"));
     }
 
     #[test]

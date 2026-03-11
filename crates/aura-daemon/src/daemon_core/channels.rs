@@ -60,6 +60,10 @@ pub struct VoiceMetadata {
     pub emotional_valence: Option<f32>,
     /// Emotional arousal derived from voice biomarkers (0.0 … 1.0).
     pub emotional_arousal: Option<f32>,
+    /// Vocal stress level derived from voice biomarkers (0.0 … 1.0).
+    pub emotional_stress: Option<f32>,
+    /// Vocal fatigue level derived from voice biomarkers (0.0 … 1.0).
+    pub emotional_fatigue: Option<f32>,
 }
 
 /// A user command received via JNI, voice, or Telegram.

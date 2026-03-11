@@ -10,6 +10,7 @@ pub mod identity;
 pub mod ipc;
 pub mod manifest;
 pub mod memory;
+pub mod outcome;
 pub mod power;
 pub mod screen;
 pub mod tools;

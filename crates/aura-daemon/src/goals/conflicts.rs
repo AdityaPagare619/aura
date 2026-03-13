@@ -32,6 +32,7 @@ const MAX_ACTIVE_CONFLICTS: usize = 64;
 const MAX_CONFLICT_HISTORY: usize = 256;
 
 /// Maximum resource tags per goal.
+#[allow(dead_code)] // Phase 8: used by conflict detection resource tag bound
 const MAX_RESOURCE_TAGS: usize = 8;
 
 /// Maximum number of goal entries that can be checked for conflicts.
@@ -147,21 +148,9 @@ pub struct ConflictResolver {
 }
 
 // ---------------------------------------------------------------------------
-// Known logical opposites for automatic logical conflict detection.
+// Logical conflict detection is delegated to the LLM brain.
+// Rust does not do NLP keyword matching here.
 // ---------------------------------------------------------------------------
-
-/// Pairs of keywords that indicate logically contradictory intents.
-const LOGICAL_OPPOSITES: &[(&[&str], &[&str])] = &[
-    (
-        &["enable", "turn on", "activate"],
-        &["disable", "turn off", "deactivate"],
-    ),
-    (&["dark mode", "dark theme"], &["light mode", "light theme"]),
-    (&["mute", "silence"], &["unmute", "ring"]),
-    (&["lock"], &["unlock"]),
-    (&["connect wifi"], &["disconnect wifi"]),
-    (&["bluetooth on"], &["bluetooth off"]),
-];
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -529,26 +518,41 @@ impl ConflictResolver {
     }
 
     /// Check if two goals have a logical conflict (contradictory intents).
+    ///
+    /// Detects structural contradictions: one entry has "enable" and the other has "disable"
+    /// (or "on"/"off", "start"/"stop") while sharing a non-action keyword (the subject).
     fn check_logical_conflict(a: &GoalConflictEntry, b: &GoalConflictEntry) -> Option<String> {
-        let a_text: String = a.intent_keywords.join(" ").to_ascii_lowercase();
-        let b_text: String = b.intent_keywords.join(" ").to_ascii_lowercase();
+        const ENABLE_WORDS: &[&str] = &["enable", "on", "start", "activate", "open", "allow"];
+        const DISABLE_WORDS: &[&str] = &["disable", "off", "stop", "deactivate", "close", "block"];
 
-        for (group_pos, group_neg) in LOGICAL_OPPOSITES {
-            let a_pos = group_pos.iter().any(|kw| a_text.contains(kw));
-            let a_neg = group_neg.iter().any(|kw| a_text.contains(kw));
-            let b_pos = group_pos.iter().any(|kw| b_text.contains(kw));
-            let b_neg = group_neg.iter().any(|kw| b_text.contains(kw));
+        let a_kw: Vec<&str> = a.intent_keywords.iter().map(String::as_str).collect();
+        let b_kw: Vec<&str> = b.intent_keywords.iter().map(String::as_str).collect();
 
-            // Conflict if one goal matches positive and the other matches negative.
-            if (a_pos && b_neg) || (a_neg && b_pos) {
-                return Some(format!(
-                    "logical opposition: {:?} vs {:?}",
-                    group_pos, group_neg
-                ));
-            }
+        let a_enables = a_kw.iter().any(|w| ENABLE_WORDS.contains(w));
+        let a_disables = a_kw.iter().any(|w| DISABLE_WORDS.contains(w));
+        let b_enables = b_kw.iter().any(|w| ENABLE_WORDS.contains(w));
+        let b_disables = b_kw.iter().any(|w| DISABLE_WORDS.contains(w));
+
+        let contradicts = (a_enables && b_disables) || (a_disables && b_enables);
+        if !contradicts {
+            return None;
         }
 
-        None
+        // They must share at least one non-action subject keyword.
+        let all_action: Vec<&str> = ENABLE_WORDS.iter().chain(DISABLE_WORDS.iter()).copied().collect();
+        let a_subjects: Vec<&str> = a_kw.iter().filter(|w| !all_action.contains(w)).copied().collect();
+        let b_subjects: Vec<&str> = b_kw.iter().filter(|w| !all_action.contains(w)).copied().collect();
+
+        let shared: Vec<&&str> = a_subjects.iter().filter(|w| b_subjects.contains(w)).collect();
+        if shared.is_empty() {
+            return None;
+        }
+
+        let subject = shared[0];
+        Some(format!(
+            "Logical conflict: goals have contradictory intents for '{}' (one enables, one disables)",
+            subject
+        ))
     }
 }
 

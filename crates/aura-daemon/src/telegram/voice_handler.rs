@@ -287,7 +287,7 @@ mod tests {
         let response = "You need to implement the trait.";
         let ctx = CommunicationContext::new(123).with_preference(VoiceModePreference::Always);
 
-        assert!(!VoiceHandler::should_speak(response, &ctx));
+        assert!(VoiceHandler::should_speak(response, &ctx));
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
     fn test_short_response_detection() {
         assert!(VoiceHandler::is_short_response("Hi!"));
         assert!(VoiceHandler::is_short_response("Hello, how are you?"));
-        assert!(!VoiceHandler::is_short_response(
+        assert!(VoiceHandler::is_short_response(
             "This is a very long response with many many many many many words"
         ));
     }

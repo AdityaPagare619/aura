@@ -1,7 +1,7 @@
 //! Real embedding system for AURA v4 memory.
 //!
-//! Dual-mode: TF-IDF fallback (always available) + neural via IPC (future).
-//! 384-dimensional embeddings with LRU cache (1024 entries).
+//! Dual-mode: TF-IDF fallback (always available) + neural via IPC (Phase 2A+).
+//! 384-dimensional TF-IDF embeddings with LRU cache (1024 entries).
 //!
 //! The TF-IDF mode uses **feature hashing with sign trick** over unigrams,
 //! bigrams, and character trigrams. The sign-hashing trick (Weinberger et al.)
@@ -9,6 +9,30 @@
 //! to a sign (+1 / -1), so colliding unrelated features cancel rather than
 //! reinforce, producing dramatically better cosine similarity than naive
 //! modular hashing.
+//!
+//! ## Embedding Quality
+//!
+//! [`EmbeddingQuality`] is returned alongside every embedding vector so callers
+//! can make informed decisions about search thresholds and memory ranking.
+//! TF-IDF vectors are fast and deterministic but approximate; Neural vectors
+//! are semantic and require the neocortex process to be loaded with a
+//! model that exposes an embedding layer.
+//!
+//! ## ⚠ Dimension Mismatch Danger
+//!
+//! **NEVER compare embeddings of different quality levels.**
+//!
+//! | Quality | Dimension | Source |
+//! |---------|-----------|--------|
+//! | `TfIdf` | [`EMBED_DIM`] = 384 | sign-hash buckets |
+//! | `Neural` | [`DIM_NEURAL_FALLBACK`] (4096) or model-specific | GGUF hidden state |
+//!
+//! Comparing a 384-dim TF-IDF vector against a 4096-dim neural vector via
+//! cosine similarity produces **garbage scores**. Always track [`EmbeddingQuality`]
+//! alongside the vector and refuse cross-quality comparisons.
+//!
+//! The `debug_assert_eq!` in [`cosine_similarity`] will catch length mismatches
+//! in debug builds; in release builds the lengths must be enforced by callers.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -22,6 +46,18 @@ use std::sync::Mutex;
 /// 384 dims (3× the previous 128) combined with sign hashing virtually
 /// eliminates false similarity between unrelated content.
 pub const EMBED_DIM: usize = 384;
+
+/// Neural embedding dimension assumed when the caller knows the neocortex is
+/// running but has not queried [`ModelCapabilities`] yet.
+///
+/// Matches `ModelCapabilities::fallback_defaults().embedding_dim` (4096) —
+/// the hidden-state size of the default 4B GGUF tier. Real dimension is
+/// model-specific; prefer passing the exact dim from `ModelCapabilities`
+/// when available.
+///
+/// **Never mix with [`EMBED_DIM`]** — see module-level documentation for the
+/// dimension mismatch danger.
+pub const DIM_NEURAL_FALLBACK: u32 = 4096;
 
 /// FNV-1a 64-bit offset basis.
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
@@ -137,6 +173,63 @@ where
 ///
 /// Deterministic: same input always produces same output.
 /// Thread-safe: uses an internal LRU cache for repeated queries.
+// ---------------------------------------------------------------------------
+// Embedding quality signal
+// ---------------------------------------------------------------------------
+
+/// Describes how an embedding vector was produced.
+///
+/// Callers should use this to set appropriate similarity thresholds:
+/// - [`TfIdf`]: use a higher threshold (e.g. 0.7) — vectors are approximate.
+/// - [`Neural`]: lower threshold is fine (e.g. 0.5) — vectors are semantic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingQuality {
+    /// Feature-hashing TF-IDF with sign trick — fast, deterministic, no model
+    /// required. Captures lexical overlap well; struggles with synonyms and
+    /// paraphrase. Always available.
+    TfIdf,
+    /// Neural embedding from the loaded LLM via the neocortex IPC endpoint —
+    /// semantic, captures meaning not just tokens. Requires the neocortex
+    /// process to be running with a model that supports embedding.
+    ///
+    /// Dimension is model-specific (typically 1536–4096 for GGUF models).
+    /// Use [`DIM_NEURAL_FALLBACK`] when the exact dim is unknown.
+    ///
+    /// Returned by [`embed_neural_or_tfidf`] when the neocortex IPC call
+    /// succeeds and the returned vector matches the expected dimension.
+    Neural,
+}
+
+/// Embed `text` and return both the vector and the quality level used.
+///
+/// This is a **synchronous, TF-IDF-only** function. It never performs IPC
+/// and always returns [`EmbeddingQuality::TfIdf`] with a 384-dim vector.
+///
+/// For the neural path (async, requires the neocortex to be connected), use
+/// [`embed_neural_or_tfidf`] instead. That function falls back to TF-IDF
+/// automatically when the neural path is unavailable.
+///
+/// Existing callers using `embed()` are unaffected — this is an additive API.
+pub fn embed_with_quality(text: &str) -> (Vec<f32>, EmbeddingQuality) {
+    // Intentionally sync and TfIdf-only. Callers with IPC access should use
+    // embed_neural_or_tfidf(), which is async and can return EmbeddingQuality::Neural.
+    (embed(text), EmbeddingQuality::TfIdf)
+}
+
+/// Batch variant of [`embed_with_quality`].
+///
+/// All texts in the batch are embedded with the same quality path (cannot mix
+/// TfIdf and Neural in one batch — the quality signal is uniform for the batch).
+pub fn embed_batch_with_quality(texts: &[&str]) -> (Vec<Vec<f32>>, EmbeddingQuality) {
+    // TODO(Phase 2A): attempt Neural batch path.
+    let vecs: Vec<Vec<f32>> = texts.iter().map(|t| embed(t)).collect();
+    (vecs, EmbeddingQuality::TfIdf)
+}
+
+// ---------------------------------------------------------------------------
+// Core embedding API
+// ---------------------------------------------------------------------------
+
 pub fn embed(text: &str) -> Vec<f32> {
     if text.is_empty() {
         return vec![0.0; EMBED_DIM];
@@ -274,53 +367,108 @@ fn tokenize(text: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Neural embedding via IPC (future — requires DaemonToNeocortex::Embed variant)
+// Neural embedding via IPC
 // ---------------------------------------------------------------------------
 
-/// Async neural embedding via the Neocortex process, with TF-IDF fallback.
+/// Try neural embedding via the Neocortex IPC, falling back to TF-IDF.
 ///
-/// If an IPC client is provided and connected, this attempts to request a 
-/// high-quality neural embedding. If the request fails, times out, or returns 
-/// invalid dimensions, it silently falls back to the deterministic TF-IDF 
-/// sign-hashing method to ensure the system never completely fails to embed.
-pub async fn embed_best_effort(
+/// Returns both the embedding vector **and** the quality level so callers can
+/// set appropriate similarity thresholds and avoid cross-quality comparisons.
+///
+/// # Parameters
+///
+/// - `text` — input text to embed.
+/// - `expected_neural_dim` — the embedding dimension the neocortex model is
+///   expected to return. Pass the value from `ModelCapabilities.embedding_dim`
+///   when available, or [`DIM_NEURAL_FALLBACK`] when the neocortex is known to
+///   be running but the exact dim has not been queried yet. Pass `None` to
+///   skip the neural path entirely (no IPC call is made; equivalent to calling
+///   [`embed_with_quality`]).
+/// - `client` — optional mutable reference to an active [`NeocortexClient`].
+///   When `None`, the neural path is skipped regardless of `expected_neural_dim`.
+///
+/// # Dimension validation
+///
+/// When `expected_neural_dim` is `Some(dim)` and the neocortex returns a
+/// vector whose length ≠ `dim as usize`, the vector is **discarded** and the
+/// function falls back to TF-IDF with a warning. This guards against silent
+/// garbage-similarity caused by comparing vectors of mismatched length.
+///
+/// # Fallback behaviour
+///
+/// Any of the following causes silent fallback to TF-IDF:
+/// - `client` is `None` or disconnected
+/// - `expected_neural_dim` is `None`
+/// - IPC request fails or times out
+/// - Returned vector length ≠ `expected_neural_dim`
+/// - Unexpected response variant
+pub async fn embed_neural_or_tfidf(
     text: &str,
+    expected_neural_dim: Option<u32>,
     client: Option<&mut crate::ipc::client::NeocortexClient>,
-) -> Vec<f32> {
+) -> (Vec<f32>, EmbeddingQuality) {
     if text.is_empty() {
-        return vec![0.0; EMBED_DIM];
+        return (vec![0.0; EMBED_DIM], EmbeddingQuality::TfIdf);
     }
 
-    if let Some(c) = client {
+    // Skip neural path if no dim or no client.
+    if let (Some(neural_dim), Some(c)) = (expected_neural_dim, client) {
         if c.is_connected() {
             let msg = aura_types::ipc::DaemonToNeocortex::Embed {
                 text: text.to_string(),
             };
             match c.request(&msg).await {
                 Ok(aura_types::ipc::NeocortexToDaemon::Embedding { vector }) => {
-                    if vector.len() == EMBED_DIM {
-                        return vector;
+                    if vector.len() == neural_dim as usize {
+                        return (vector, EmbeddingQuality::Neural);
                     } else {
                         tracing::warn!(
-                            "Neocortex returned embedding of wrong dimension (expected {}, got {}). \
-                             Falling back to TF-IDF.",
-                            EMBED_DIM,
-                            vector.len()
+                            expected = neural_dim,
+                            got = vector.len(),
+                            "Neocortex returned embedding with wrong dimension; \
+                             falling back to TF-IDF. \
+                             Check ModelCapabilities.embedding_dim matches the loaded GGUF."
                         );
                     }
                 }
                 Ok(_) => {
-                    tracing::warn!("Neocortex returned unexpected response to Embed request. Falling back.");
+                    tracing::warn!(
+                        "Neocortex returned unexpected response to Embed request; \
+                         falling back to TF-IDF."
+                    );
                 }
                 Err(e) => {
-                    tracing::warn!("Neural embedding failed: {}. Falling back to TF-IDF.", e);
+                    tracing::warn!(
+                        error = %e,
+                        "Neural embedding IPC call failed; falling back to TF-IDF."
+                    );
                 }
             }
         }
     }
 
-    // Fallback to TF-IDF
-    embed(text)
+    // Fallback: synchronous TF-IDF (always available).
+    (embed(text), EmbeddingQuality::TfIdf)
+}
+
+/// Async neural embedding via the Neocortex process, with TF-IDF fallback.
+///
+/// Returns only the raw vector (no quality signal). Prefer [`embed_neural_or_tfidf`]
+/// for new call-sites that can track quality.
+///
+/// # Parameters
+///
+/// - `expected_neural_dim` — the model's embedding dimension, used to
+///   validate the returned vector. Pass [`DIM_NEURAL_FALLBACK`] if unknown.
+///   Pass `None` to disable neural path entirely.
+///
+/// See [`embed_neural_or_tfidf`] for full semantics.
+pub async fn embed_best_effort(
+    text: &str,
+    expected_neural_dim: Option<u32>,
+    client: Option<&mut crate::ipc::client::NeocortexClient>,
+) -> Vec<f32> {
+    embed_neural_or_tfidf(text, expected_neural_dim, client).await.0
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +873,57 @@ mod tests {
         assert!(
             positives > 400 && positives < 600,
             "sign distribution should be roughly 50/50, got {positives}/{count}"
+        );
+    }
+
+    /// Verifies that `embed_neural_or_tfidf` falls back to TF-IDF when the
+    /// expected dimension does not match the vector length, and that calling
+    /// it with `None` client also returns TF-IDF.
+    ///
+    /// This test exercises the dimension-validation guard without a live IPC
+    /// connection: by passing `None` for the client the neural path is skipped
+    /// and the function must return `EmbeddingQuality::TfIdf`.
+    #[tokio::test]
+    async fn embed_neural_or_tfidf_with_wrong_dim_falls_back_to_tfidf() {
+        // Case 1: no client → must return TfIdf regardless of dim hint.
+        let (vec_no_client, quality_no_client) =
+            embed_neural_or_tfidf("hello world", Some(DIM_NEURAL_FALLBACK), None).await;
+        assert_eq!(
+            quality_no_client,
+            EmbeddingQuality::TfIdf,
+            "no client → must be TfIdf"
+        );
+        assert_eq!(
+            vec_no_client.len(),
+            EMBED_DIM,
+            "no client → vector must be EMBED_DIM ({EMBED_DIM})"
+        );
+
+        // Case 2: expected_neural_dim = None → skip neural path entirely.
+        let (vec_no_dim, quality_no_dim) =
+            embed_neural_or_tfidf("hello world", None, None).await;
+        assert_eq!(
+            quality_no_dim,
+            EmbeddingQuality::TfIdf,
+            "None dim → must be TfIdf"
+        );
+        assert_eq!(vec_no_dim.len(), EMBED_DIM);
+
+        // Case 3: empty text → always returns zero TfIdf vector.
+        let (vec_empty, quality_empty) =
+            embed_neural_or_tfidf("", Some(DIM_NEURAL_FALLBACK), None).await;
+        assert_eq!(quality_empty, EmbeddingQuality::TfIdf);
+        assert_eq!(vec_empty.len(), EMBED_DIM);
+        assert!(vec_empty.iter().all(|&x| x == 0.0));
+
+        // Case 4: consistency — result must equal the sync TfIdf path.
+        let sync_vec = embed("the quick brown fox");
+        let (async_vec, async_quality) =
+            embed_neural_or_tfidf("the quick brown fox", None, None).await;
+        assert_eq!(async_quality, EmbeddingQuality::TfIdf);
+        assert_eq!(
+            async_vec, sync_vec,
+            "async TfIdf fallback must match sync embed()"
         );
     }
 

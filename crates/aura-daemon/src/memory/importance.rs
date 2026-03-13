@@ -7,6 +7,8 @@
 //! Source weights, recency decay constants, and domain priorities are all from
 //! the AURA-V4-ENGINEERING-BLUEPRINT.md §4.1.2.
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -48,31 +50,6 @@ impl From<aura_types::events::EventSource> for EventSource {
     }
 }
 
-/// Content domain for priority weighting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Domain {
-    Health,
-    Finance,
-    Social,
-    Productivity,
-    Entertainment,
-    General,
-}
-
-impl Domain {
-    /// Priority multiplier.
-    pub fn priority(self) -> f32 {
-        match self {
-            Self::Health => 1.2,
-            Self::Finance => 1.1,
-            Self::Social => 1.0,
-            Self::Productivity => 0.9,
-            Self::Entertainment => 0.7,
-            Self::General => 0.8,
-        }
-    }
-}
-
 /// Events that adjust an existing importance score.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ImportanceEvent {
@@ -87,6 +64,73 @@ pub enum ImportanceEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Hebbian memory trace
+// ---------------------------------------------------------------------------
+
+/// Forgetting rate constants for Hebbian traces (fraction of strength lost per hour).
+///
+/// Episodic memories (tied to specific events) forget faster than semantic ones
+/// (general knowledge). Values chosen so episodic half-life ≈ 4 days,
+/// semantic half-life ≈ 35 days.
+const HEBBIAN_EPISODIC_RATE: f64 = 0.007_200; // h⁻¹  ≈ 1/139 h
+const HEBBIAN_SEMANTIC_RATE: f64 = 0.000_825; // h⁻¹  ≈ 1/1212 h
+
+/// A Hebbian connection-strength trace attached to an individual memory.
+///
+/// Each time a memory is retrieved, its trace is *strengthened* (fire-together
+/// wire-together). During idle time the trace decays exponentially, modelling
+/// biological forgetting.
+///
+/// `effective_strength` applies time-elapsed decay lazily — the stored
+/// `strength` is the *peak* after the last retrieval; actual current value
+/// must always be computed via `effective_strength(hours_since_last_retrieval)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HebbianTrace {
+    /// Connection strength in [0.0, 1.0]. 1.0 = maximally consolidated.
+    pub strength: f32,
+    /// Whether this trace belongs to episodic or semantic memory.
+    /// Episodic decays faster; semantic decays slower.
+    pub is_episodic: bool,
+}
+
+impl HebbianTrace {
+    /// Create a brand-new trace (day-zero safe — no prior retrieval required).
+    pub fn new(is_episodic: bool) -> Self {
+        Self {
+            strength: 0.5,
+            is_episodic,
+        }
+    }
+
+    /// Strengthen the trace on retrieval (Hebbian LTP analogue).
+    ///
+    /// Formula: `min(strength * 1.3 + 0.05, 1.0)`
+    /// — a proportional boost plus a small absolute floor so even weak traces
+    /// recover somewhat from retrieval.
+    pub fn on_retrieved(&mut self) {
+        self.strength = (self.strength * 1.3 + 0.05).min(1.0);
+    }
+
+    /// Return the *current* effective strength, accounting for exponential
+    /// forgetting since the last retrieval.
+    ///
+    /// `hours_elapsed` — wall-clock hours since the last `on_retrieved` call
+    /// (or since creation for a brand-new trace).
+    ///
+    /// Returns a value in (0.0, 1.0]. Never zero — even ancient memories
+    /// leave a faint biological trace.
+    pub fn effective_strength(&self, hours_elapsed: f64) -> f32 {
+        let rate = if self.is_episodic {
+            HEBBIAN_EPISODIC_RATE
+        } else {
+            HEBBIAN_SEMANTIC_RATE
+        };
+        let decayed = self.strength as f64 * (-rate * hours_elapsed).exp();
+        decayed.clamp(1e-6, 1.0) as f32
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Core scoring
 // ---------------------------------------------------------------------------
 
@@ -94,21 +138,24 @@ pub enum ImportanceEvent {
 ///
 /// Formula: `source_weight * recency_decay * access_bonus * domain_priority`
 ///
+/// `domain_priority` should be 1.0 by default. The LLM layer is responsible for
+/// determining domain-based priority and may pass a non-1.0 multiplier if it has
+/// classified the memory domain. Rust must not attempt to classify domain from text.
+///
 /// For new memories, `hours_old` is typically 0 and `access_count` is 0,
 /// so the effective formula simplifies to `source_weight * 1.0 * 1.0 * domain_priority`.
 pub fn calculate_importance(
     source: EventSource,
     hours_old: f64,
     access_count: u32,
-    domain: Domain,
+    domain_priority: f32,
 ) -> f32 {
     let source_weight = source.weight();
     let recency = recency_decay(hours_old);
     let access = access_bonus(access_count);
-    let priority = domain.priority();
 
-    let raw = source_weight * recency * access * priority;
-    raw.clamp(0.0, 2.0) // theoretical max is 1.0 * 1.0 * 2.0 * 1.2 = 2.4, clamp for safety
+    let raw = source_weight * recency * access * domain_priority;
+    raw.clamp(0.0, 2.0)
 }
 
 /// Update an existing importance value based on an event.
@@ -198,79 +245,6 @@ pub fn generalization_confidence(num_episodes: usize) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Domain detection
-// ---------------------------------------------------------------------------
-
-/// Simple keyword-based domain detection from content text.
-///
-/// Scans for domain-indicating keywords and returns the domain with the
-/// most keyword matches. Returns General if no matches.
-pub fn detect_domain(content: &str) -> Domain {
-    let lower = content.to_lowercase();
-
-    let scores = [
-        (Domain::Health, health_keywords(&lower)),
-        (Domain::Finance, finance_keywords(&lower)),
-        (Domain::Social, social_keywords(&lower)),
-        (Domain::Productivity, productivity_keywords(&lower)),
-        (Domain::Entertainment, entertainment_keywords(&lower)),
-    ];
-
-    scores
-        .iter()
-        .max_by_key(|(_, count)| *count)
-        .filter(|(_, count)| *count > 0)
-        .map(|(domain, _)| *domain)
-        .unwrap_or(Domain::General)
-}
-
-fn health_keywords(text: &str) -> u32 {
-    let words = [
-        "health", "doctor", "medicine", "hospital", "exercise", "workout",
-        "sleep", "diet", "symptom", "pain", "weight", "calories", "fitness",
-        "meditation", "therapy", "vitamin", "prescription", "appointment",
-        "medical", "clinic",
-    ];
-    words.iter().filter(|w| text.contains(*w)).count() as u32
-}
-
-fn finance_keywords(text: &str) -> u32 {
-    let words = [
-        "money", "payment", "bank", "transfer", "salary", "invoice",
-        "budget", "expense", "tax", "invest", "stock", "credit",
-        "debit", "loan", "mortgage", "bill", "price", "cost",
-        "purchase", "financial",
-    ];
-    words.iter().filter(|w| text.contains(*w)).count() as u32
-}
-
-fn social_keywords(text: &str) -> u32 {
-    let words = [
-        "friend", "family", "birthday", "party", "dinner", "meeting",
-        "call", "message", "chat", "social", "relationship", "date",
-        "wedding", "reunion", "group", "contact", "invite",
-    ];
-    words.iter().filter(|w| text.contains(*w)).count() as u32
-}
-
-fn productivity_keywords(text: &str) -> u32 {
-    let words = [
-        "work", "project", "deadline", "task", "meeting", "email",
-        "report", "schedule", "calendar", "presentation", "office",
-        "code", "commit", "review", "sprint", "kanban", "todo",
-    ];
-    words.iter().filter(|w| text.contains(*w)).count() as u32
-}
-
-fn entertainment_keywords(text: &str) -> u32 {
-    let words = [
-        "movie", "music", "game", "watch", "play", "stream",
-        "podcast", "show", "series", "concert", "youtube", "netflix",
-        "spotify", "book", "read", "fun", "hobby",
-    ];
-    words.iter().filter(|w| text.contains(*w)).count() as u32
-}
-
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -289,27 +263,24 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_priorities() {
-        assert_eq!(Domain::Health.priority(), 1.2);
-        assert_eq!(Domain::Finance.priority(), 1.1);
-        assert_eq!(Domain::Social.priority(), 1.0);
-        assert_eq!(Domain::Productivity.priority(), 0.9);
-        assert_eq!(Domain::Entertainment.priority(), 0.7);
-        assert_eq!(Domain::General.priority(), 0.8);
+    fn test_calculate_importance_new_memory() {
+        // New memory: hours_old=0, access_count=0, neutral domain_priority=1.0
+        let imp = calculate_importance(EventSource::UserExplicit, 0.0, 0, 1.0);
+        // 1.0 * exp(0) * min(2.0, 1.0 + 0) * 1.0 = 1.0
+        assert!((imp - 1.0).abs() < 1e-5, "expected 1.0, got {}", imp);
     }
 
     #[test]
-    fn test_calculate_importance_new_memory() {
-        // New memory: hours_old=0, access_count=0
-        let imp = calculate_importance(EventSource::UserExplicit, 0.0, 0, Domain::Health);
-        // 1.0 * exp(0) * min(2.0, 1.0 + 0) * 1.2 = 1.0 * 1.0 * 1.0 * 1.2 = 1.2
+    fn test_calculate_importance_with_domain_priority() {
+        // LLM-provided domain_priority of 1.2 (e.g., health-classified by LLM)
+        let imp = calculate_importance(EventSource::UserExplicit, 0.0, 0, 1.2);
         assert!((imp - 1.2).abs() < 1e-5, "expected 1.2, got {}", imp);
     }
 
     #[test]
     fn test_calculate_importance_old_memory() {
-        // 720 hours old (30 days), 5 accesses
-        let imp = calculate_importance(EventSource::Conversation, 720.0, 5, Domain::Social);
+        // 720 hours old (30 days), 5 accesses, neutral domain_priority=1.0
+        let imp = calculate_importance(EventSource::Conversation, 720.0, 5, 1.0);
         let expected = 0.8 * (-0.001 * 720.0_f64).exp() as f32 * (1.0 + 0.5) * 1.0;
         assert!((imp - expected).abs() < 1e-4, "expected {}, got {}", expected, imp);
     }
@@ -398,21 +369,6 @@ mod tests {
         assert!((generalization_confidence(3) - 0.8).abs() < f32::EPSILON);
         assert!((generalization_confidence(5) - 0.95).abs() < f32::EPSILON); // capped
         assert!((generalization_confidence(10) - 0.95).abs() < f32::EPSILON); // capped
-    }
-
-    #[test]
-    fn test_detect_domain() {
-        assert_eq!(detect_domain("doctor appointment at hospital"), Domain::Health);
-        assert_eq!(detect_domain("bank transfer payment"), Domain::Finance);
-        assert_eq!(detect_domain("friend birthday party"), Domain::Social);
-        assert_eq!(detect_domain("project deadline sprint"), Domain::Productivity);
-        assert_eq!(detect_domain("movie music game"), Domain::Entertainment);
-        assert_eq!(detect_domain("random gibberish text"), Domain::General);
-    }
-
-    #[test]
-    fn test_detect_domain_empty() {
-        assert_eq!(detect_domain(""), Domain::General);
     }
 
     #[test]

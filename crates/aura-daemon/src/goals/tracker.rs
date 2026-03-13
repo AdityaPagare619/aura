@@ -53,6 +53,12 @@ const MAX_PROGRESS_SNAPSHOTS: usize = 64;
 /// Maximum number of milestones per goal.
 const MAX_MILESTONES_PER_GOAL: usize = 16;
 
+/// Maximum number of dependency IDs a single goal may be blocked by.
+const MAX_BLOCKED_BY: usize = 64;
+
+/// Maximum number of error log entries per goal.
+const MAX_ERROR_LOG: usize = 32;
+
 /// Minimum progress delta per window to avoid stall detection.
 const STALL_THRESHOLD: f32 = 0.01;
 
@@ -81,8 +87,8 @@ pub struct TrackedGoal {
     pub started_at_ms: Option<u64>,
     /// Deadline for completion (epoch ms).
     pub deadline_ms: Option<u64>,
-    /// Goal IDs that this goal is blocked by.
-    pub blocked_by: Vec<u64>,
+    /// Goal IDs that this goal is blocked by (bounded to prevent unbounded growth).
+    pub blocked_by: BoundedVec<u64, MAX_BLOCKED_BY>,
     /// Number of retry attempts made.
     pub retry_count: u8,
     /// Maximum allowed retries.
@@ -91,8 +97,8 @@ pub struct TrackedGoal {
     pub last_retry_at_ms: Option<u64>,
     /// When this goal was last paused (epoch ms).
     pub paused_at_ms: Option<u64>,
-    /// Accumulated error messages from failed attempts.
-    pub error_log: Vec<String>,
+    /// Accumulated error messages from failed attempts (bounded to prevent unbounded growth).
+    pub error_log: BoundedVec<String, MAX_ERROR_LOG>,
 }
 
 /// A completed goal stored in history for learning.
@@ -301,12 +307,12 @@ impl GoalTracker {
             steps_total,
             started_at_ms: None,
             deadline_ms,
-            blocked_by: Vec::new(),
+            blocked_by: BoundedVec::new(),
             retry_count: 0,
             max_retries: DEFAULT_MAX_RETRIES,
             last_retry_at_ms: None,
             paused_at_ms: None,
-            error_log: Vec::new(),
+            error_log: BoundedVec::new(),
         };
 
         self.goals
@@ -365,7 +371,12 @@ impl GoalTracker {
         Self::validate_transition(&tracked.goal.status, &target)?;
 
         tracked.goal.status = target;
-        tracked.blocked_by = blocked_by;
+
+        // Replace blocked_by list (bounded — excess dependencies silently dropped).
+        tracked.blocked_by = BoundedVec::new();
+        for dep in blocked_by {
+            let _ = tracked.blocked_by.try_push(dep); // cap enforced; excess silently dropped
+        }
 
         tracing::info!(goal_id, reason = %reason, "goal blocked");
         Ok(())
@@ -405,7 +416,7 @@ impl GoalTracker {
         }
 
         tracked.goal.status = GoalStatus::Active;
-        tracked.blocked_by.clear();
+        tracked.blocked_by = BoundedVec::new();
         tracked.paused_at_ms = None;
 
         tracing::info!(goal_id, "goal resumed");
@@ -447,7 +458,7 @@ impl GoalTracker {
         Self::validate_transition(&tracked.goal.status, &target)?;
 
         tracked.goal.status = target;
-        tracked.error_log.push(reason);
+        let _ = tracked.error_log.try_push(reason); // cap enforced; oldest errors evicted on overflow is not needed — excess silently dropped
 
         let completed = Self::to_completed_record(tracked, now_ms);
         self.history.push(completed);
@@ -1199,7 +1210,7 @@ impl GoalTracker {
             duration_ms: duration,
             retries_used: tracked.retry_count,
             completed_at_ms: now_ms,
-            errors: tracked.error_log.clone(),
+            errors: tracked.error_log.iter().cloned().collect(),
         }
     }
 
@@ -1316,7 +1327,7 @@ mod tests {
 
         let tracked = tracker.get(1).expect("should exist");
         assert!(matches!(tracked.goal.status, GoalStatus::Blocked(_)));
-        assert_eq!(tracked.blocked_by, vec![42]);
+        assert_eq!(tracked.blocked_by.as_slice(), &[42u64]);
 
         tracker.resume(1, 200).expect("resume should succeed");
         let tracked = tracker.get(1).expect("should exist");

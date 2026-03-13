@@ -124,8 +124,15 @@ impl RelationshipTracker {
         rel.interaction_count += 1;
         rel.last_interaction_ms = timestamp_ms;
 
-        // Recalculate stage with hysteresis (uses aura-types implementation).
-        rel.stage = RelationshipStage::from_trust(rel.trust, Some(rel.stage));
+        // Recalculate stage with hysteresis.
+        // compute_cohesion and evaluate_stage were removed from aura-types (Theater AGI violation).
+        // Logic is owned here in the identity engine where it belongs.
+        let cohesion = (rel.trust * 0.4
+            + rel.trust * 0.3
+            + 0.0_f32 * 0.2
+            + 0.5_f32 * 0.1)
+            .clamp(0.0, 1.0);
+        rel.stage = classify_relationship_stage(cohesion, Some(rel.stage));
 
         tracing::debug!(
             user = user_id,
@@ -236,6 +243,62 @@ impl RelationshipTracker {
 impl Default for RelationshipTracker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers (classification logic — moved here from aura-types)
+// ---------------------------------------------------------------------------
+
+/// Map a raw cohesion value [0.0, 1.0] to a [`RelationshipStage`] variant.
+/// Thresholds: Stranger < 0.15, Acquaintance < 0.35, Friend < 0.60, CloseFriend < 0.85, Soulmate.
+fn classify_stage_raw(c: f32) -> RelationshipStage {
+    if c >= 0.85 {
+        RelationshipStage::Soulmate
+    } else if c >= 0.60 {
+        RelationshipStage::CloseFriend
+    } else if c >= 0.35 {
+        RelationshipStage::Friend
+    } else if c >= 0.15 {
+        RelationshipStage::Acquaintance
+    } else {
+        RelationshipStage::Stranger
+    }
+}
+
+/// Ordinal rank of a [`RelationshipStage`] for hysteresis comparison.
+fn stage_ordinal(stage: RelationshipStage) -> u8 {
+    match stage {
+        RelationshipStage::Stranger => 0,
+        RelationshipStage::Acquaintance => 1,
+        RelationshipStage::Friend => 2,
+        RelationshipStage::CloseFriend => 3,
+        RelationshipStage::Soulmate => 4,
+    }
+}
+
+/// Determine relationship stage from a cohesion value, applying hysteresis
+/// (0.05 gap required) when downgrading to prevent oscillation.
+fn classify_relationship_stage(cohesion: f32, current: Option<RelationshipStage>) -> RelationshipStage {
+    match current {
+        None => classify_stage_raw(cohesion),
+        Some(current_stage) => {
+            let raw = classify_stage_raw(cohesion);
+            let raw_ord = stage_ordinal(raw);
+            let cur_ord = stage_ordinal(current_stage);
+            if raw_ord > cur_ord {
+                raw
+            } else if raw_ord < cur_ord {
+                let hysteresis_stage = classify_stage_raw((cohesion + 0.05).min(1.0));
+                if stage_ordinal(hysteresis_stage) < cur_ord {
+                    raw
+                } else {
+                    current_stage
+                }
+            } else {
+                current_stage
+            }
+        }
     }
 }
 
@@ -361,7 +424,8 @@ mod tests {
     fn test_trust_based_autonomy_high_trust() {
         let mut rt = RelationshipTracker::new();
         // Build enough trust to cross 0.75 threshold.
-        for i in 0..200 {
+        // With diminishing-returns formula, 214 positives cross 0.75; use 250 to be safe.
+        for i in 0..250 {
             rt.record_interaction("bob", InteractionType::Positive, 1000 + i);
         }
         let trust = rt.get_relationship("bob").unwrap().trust;
@@ -393,8 +457,9 @@ mod tests {
     #[test]
     fn test_requires_permission_medium_trust() {
         let mut rt = RelationshipTracker::new();
-        // Build enough trust for Medium autonomy (trust >= 0.50)
-        for i in 0..100 {
+        // Build enough trust for Medium autonomy (trust >= 0.50).
+        // With diminishing-returns formula, 112 positives cross 0.50; use 130 to be safe.
+        for i in 0..130 {
             rt.record_interaction("carol", InteractionType::Positive, 1000 + i);
         }
         let trust = rt.get_relationship("carol").unwrap().trust;

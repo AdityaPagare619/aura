@@ -164,6 +164,19 @@ impl ProactiveEngine {
         );
     }
 
+    /// Cap the initiative budget to a maximum value.
+    ///
+    /// Used by the health monitor to throttle proactive activity under battery
+    /// or thermal pressure. Pass `0.0` to immediately stop all proactive actions.
+    pub fn cap_budget(&mut self, max: f32) {
+        self.initiative_budget = self.initiative_budget.min(max.clamp(0.0, MAX_INITIATIVE_BUDGET));
+        debug!(
+            budget = self.initiative_budget,
+            cap = max,
+            "initiative budget capped by health monitor"
+        );
+    }
+
     /// Spend initiative budget for an action. Returns `false` if insufficient.
     fn spend_initiative(&mut self, cost: f32) -> bool {
         let actual_cost = cost.max(MIN_INITIATIVE_COST);
@@ -238,8 +251,9 @@ impl ProactiveEngine {
             enqueued += 1;
         }
 
-        // 3) Cross-domain signal: if suggestion acceptance rate is high for
-        //    any domain, that's a positive signal — reduce threat score slightly.
+        // 3) Cross-domain telemetry: high acceptance for a domain is a positive
+        //    signal. Reduce threat score slightly so the LLM sees a healthier
+        //    metric. This is MEASUREMENT only — it does not alter what is surfaced.
         let stats = self.suggestions.category_stats_snapshot();
         for (_domain, acceptance_rate, total) in &stats {
             if *total >= 5 && *acceptance_rate > 0.7 {
@@ -259,6 +273,13 @@ impl ProactiveEngine {
     /// threat score and then inspecting suggestion rejection rates across
     /// domains.
     ///
+    /// # Architecture contract — telemetry only
+    /// `threat_score` is a **reporting metric exposed to the LLM** so it can
+    /// reason about whether the user is finding AURA's suggestions useful.
+    /// It does NOT gate which actions are surfaced, does NOT alter routing,
+    /// and does NOT suppress suggestions in Rust. Any behavioural response to
+    /// a high threat score is the LLM's decision.
+    ///
     /// Called by the `threat_accumulate` cron job (every 2 min, P0Always).
     /// Returns the current threat score after accumulation.
     #[instrument(name = "threat_accumulate", skip_all)]
@@ -268,12 +289,14 @@ impl ProactiveEngine {
         const DECAY_FACTOR: f32 = 0.955;
         self.threat_score *= DECAY_FACTOR;
 
-        // 2) Scan category stats for high-rejection domains → increase threat.
+        // 2) Scan category stats for high-rejection domains → update telemetry.
+        //    This is a MEASUREMENT step only. It does not alter what gets surfaced.
         let stats = self.suggestions.category_stats_snapshot();
         for (_domain, acceptance_rate, total) in &stats {
             // Only consider domains with meaningful sample sizes.
             if *total >= 3 && *acceptance_rate < 0.3 {
-                // Low acceptance → user is rejecting suggestions from this domain.
+                // Low acceptance is a signal the LLM can act on.
+                // Rust records the fact; it does not make the decision.
                 self.threat_score = (self.threat_score + 0.05).min(1.0);
                 self.negative_signal_count = self.negative_signal_count.saturating_add(1);
             }

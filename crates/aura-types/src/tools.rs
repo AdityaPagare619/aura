@@ -844,6 +844,7 @@ pub fn tools_by_risk(level: RiskLevel) -> Vec<&'static str> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvocation {
     pub tool_name: String,
+    /// Bounded at runtime to MAX_TOOL_PARAMETERS entries — enforced by consumer.
     pub parameters: Vec<(String, ParamValue)>,
 }
 

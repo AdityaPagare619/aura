@@ -19,7 +19,6 @@ use tracing::{debug, info};
 use crate::memory::archive::{ArchiveMemory, ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD, CompressionAlgo};
 use crate::memory::embeddings::{cosine_similarity, embed};
 use crate::memory::episodic::EpisodicMemory;
-use crate::memory::importance;
 use crate::memory::patterns::PatternEngine;
 use crate::memory::semantic::SemanticMemory;
 use crate::memory::working::WorkingMemory;
@@ -63,6 +62,10 @@ pub enum ConsolidationLevel {
     Emergency,
 }
 
+/// Maximum number of non-fatal errors captured in a single consolidation report.
+/// Prevents unbounded growth if many operations fail in one pass.
+const MAX_REPORT_ERRORS: usize = 100;
+
 /// Report of what a consolidation pass accomplished.
 #[derive(Debug, Clone, Default)]
 pub struct ConsolidationReport {
@@ -83,8 +86,17 @@ pub struct ConsolidationReport {
     pub bytes_freed: u64,
     /// Duration of the consolidation pass in milliseconds.
     pub duration_ms: u64,
-    /// Any errors encountered (non-fatal).
+    /// Any errors encountered (non-fatal). Capped at MAX_REPORT_ERRORS.
     pub errors: Vec<String>,
+}
+
+impl ConsolidationReport {
+    /// Append a non-fatal error message, silently dropping it if the cap is reached.
+    pub fn push_error(&mut self, msg: String) {
+        if self.errors.len() < MAX_REPORT_ERRORS {
+            self.errors.push(msg);
+        }
+    }
 }
 
 impl std::fmt::Display for ConsolidationLevel {
@@ -102,17 +114,108 @@ impl std::fmt::Display for ConsolidationLevel {
 // Consolidation scoring
 // ---------------------------------------------------------------------------
 
+/// Learned weights for the consolidation priority formula.
+///
+/// Starts at the empirically calibrated defaults (recency 0.3, frequency 0.3,
+/// importance 0.4) and drifts over time as AURA observes which memories the
+/// user actually retrieves, making the consolidation signal adaptive.
+///
+/// ## Adaptation rule
+/// [`adjust_from_outcome`] is called after every confirmed retrieval event:
+/// - If the retrieved memory was recent (< 24h) → recency weight nudges up.
+/// - If the retrieved memory was older (≥ 24h) → frequency weight nudges up.
+/// - After each retrieval → importance weight nudges up (the user chose it).
+/// Weights are renormalized to sum to 1.0 and clamped to [0.1, 0.7] so no
+/// single dimension can dominate or disappear.
+///
+/// ## Persistence
+/// Stored in [`DaemonCheckpoint`] so learned weights survive across restarts.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConsolidationWeights {
+    /// Weight for recency factor. Default: 0.3.
+    pub recency: f32,
+    /// Weight for access-frequency factor. Default: 0.3.
+    pub frequency: f32,
+    /// Weight for importance-score factor. Default: 0.4.
+    pub importance: f32,
+}
+
+impl Default for ConsolidationWeights {
+    fn default() -> Self {
+        Self {
+            recency: 0.3,
+            frequency: 0.3,
+            importance: 0.4,
+        }
+    }
+}
+
+impl ConsolidationWeights {
+    /// Nudge weights based on a retrieval outcome.
+    ///
+    /// `was_retrieved` — a memory was actually fetched by the user / pipeline.
+    /// `hours_after_storage` — how long ago the memory was stored (hours).
+    ///
+    /// The caller is responsible for persisting the checkpoint after calling
+    /// this method so the learned weights survive a restart.
+    pub fn adjust_from_outcome(&mut self, was_retrieved: bool, hours_after_storage: f64) {
+        const DELTA: f32 = 0.01;
+
+        if was_retrieved {
+            // Recency signal: if retrieved soon after storage, recency matters more.
+            // Frequency signal: if retrieved long after storage, access count matters.
+            if hours_after_storage < 24.0 {
+                self.recency += DELTA;
+            } else {
+                self.frequency += DELTA;
+            }
+            // Importance always nudges up when user retrieves — they found it useful.
+            self.importance += DELTA;
+        }
+        // No downward nudge on non-retrieval: absence of retrieval is weak signal
+        // (memory may simply not have been needed yet, not that it was unimportant).
+
+        // Renormalize so weights always sum to 1.0.
+        let sum = self.recency + self.frequency + self.importance;
+        if sum > 0.0 {
+            self.recency /= sum;
+            self.frequency /= sum;
+            self.importance /= sum;
+        }
+
+        // Clamp: no single weight dominates (max 0.7) or disappears (min 0.1).
+        self.recency = self.recency.clamp(0.1, 0.7);
+        self.frequency = self.frequency.clamp(0.1, 0.7);
+        self.importance = self.importance.clamp(0.1, 0.7);
+
+        // Re-normalize after clamping (clamping can break sum=1 invariant).
+        let sum2 = self.recency + self.frequency + self.importance;
+        if sum2 > 0.0 {
+            self.recency /= sum2;
+            self.frequency /= sum2;
+            self.importance /= sum2;
+        }
+    }
+}
+
 /// Compute a consolidation priority score for an item.
 ///
-/// Formula: recency(0.3) + frequency(0.3) + importance(0.4)
+/// Formula: recency(w.recency) + frequency(w.frequency) + importance(w.importance)
 ///
 /// - recency: exponential decay with 7-day half-life
 /// - frequency: log-scaled access count (capped at 1.0)
 /// - importance: raw importance score (already 0..1)
+///
+/// Weights start at (0.3, 0.3, 0.4) and adapt via [`ConsolidationWeights::adjust_from_outcome`].
+///
+/// **Metric only** — this value must NOT be used as a decision gate (Iron Law #2).
+/// It is available for reporting, diagnostics, and tests.
+#[allow(dead_code)]
 fn consolidation_priority(
     age_ms: u64,
     access_count: u32,
     importance_score: f32,
+    weights: &ConsolidationWeights,
 ) -> f32 {
     // Recency: exp(-ln(2) * age / half_life)
     let recency = (-(std::f64::consts::LN_2 * age_ms as f64 / RECENCY_HALF_LIFE_MS)).exp() as f32;
@@ -120,8 +223,10 @@ fn consolidation_priority(
     // Frequency: log2(access_count + 1) / log2(32), capped at 1.0
     let frequency = ((access_count as f32 + 1.0).log2() / 5.0).min(1.0);
 
-    // Weighted combination
-    0.3 * recency + 0.3 * frequency + 0.4 * importance_score.clamp(0.0, 1.0)
+    // Weighted combination using learned weights.
+    weights.recency * recency
+        + weights.frequency * frequency
+        + weights.importance * importance_score.clamp(0.0, 1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +248,7 @@ pub async fn consolidate(
     archive: &ArchiveMemory,
     patterns: &mut PatternEngine,
     now_ms: u64,
+    neocortex: Option<&mut crate::ipc::NeocortexClient>,
 ) -> ConsolidationReport {
     let start = std::time::Instant::now();
     let mut report = ConsolidationReport {
@@ -161,7 +267,7 @@ pub async fn consolidate(
         ConsolidationLevel::Deep => {
             run_micro(working, now_ms, &mut report);
             run_light(working, episodic, semantic, patterns, now_ms, &mut report).await;
-            run_deep(episodic, semantic, archive, patterns, now_ms, &mut report).await;
+            run_deep(episodic, semantic, archive, patterns, now_ms, neocortex, &mut report).await;
         }
         ConsolidationLevel::Emergency => {
             run_emergency(working, episodic, archive, now_ms, &mut report).await;
@@ -220,16 +326,11 @@ async fn run_light(
     let mut to_remove: Vec<usize> = Vec::new();
 
     for (idx, slot) in &snapshot {
-        // Use the new consolidation priority scoring
-        let age_ms = now_ms.saturating_sub(slot.timestamp_ms);
-        let priority = consolidation_priority(age_ms, 0, slot.importance);
-
-        // Also check the legacy importance-based scoring for backward compat
-        let hours_ago = age_ms as f64 / 3_600_000.0;
-        let consol_score = importance::consolidation_score(hours_ago, 0, slot.importance);
-
-        // Promote if either scoring says yes
-        if priority >= 0.5 || consol_score >= 0.7 || slot.importance >= 0.7 {
+        // Promote slots whose raw importance attribute meets the threshold.
+        // Weighted scoring formulas are available as metrics via
+        // `consolidation_priority()` and `importance::consolidation_score()`
+        // but must NOT be used as decision gates (Iron Law #2).
+        if slot.importance >= 0.7 {
             match episodic
                 .store(
                     slot.content.clone(),
@@ -242,8 +343,8 @@ async fn run_light(
             {
                 Ok(ep_id) => {
                     debug!(
-                        "light: promoted working slot {} to episode {} (importance: {:.2}, priority: {:.2})",
-                        idx, ep_id, slot.importance, priority
+                        "light: promoted working slot {} to episode {} (importance: {:.2})",
+                        idx, ep_id, slot.importance
                     );
                     to_remove.push(*idx);
                     report.working_to_episodic += 1;
@@ -256,15 +357,13 @@ async fn run_light(
                         true,
                         now_ms,
                     ) {
-                        report.errors.push(format!("pattern record failed: {}", e));
+                        report.push_error(format!("pattern record failed: {}", e));
                     } else {
                         report.patterns_recorded += 1;
                     }
                 }
                 Err(e) => {
-                    report
-                        .errors
-                        .push(format!("promote slot {} failed: {}", idx, e));
+                    report.push_error(format!("promote slot {} failed: {}", idx, e));
                 }
             }
         }
@@ -283,7 +382,7 @@ async fn run_light(
             Ok(entries) if !entries.is_empty() => {
                 let entry = &entries[0];
                 if let Err(e) = semantic.reinforce(entry.id, None, now_ms).await {
-                    report.errors.push(format!(
+                    report.push_error(format!(
                         "reinforce semantic {} failed: {}",
                         entry.id, e
                     ));
@@ -302,16 +401,14 @@ async fn run_light(
                         true,
                         now_ms,
                     ) {
-                        report.errors.push(format!("pattern record failed: {}", e));
+                        report.push_error(format!("pattern record failed: {}", e));
                     } else {
                         report.patterns_recorded += 1;
                     }
                 }
             }
             Err(e) => {
-                report
-                    .errors
-                    .push(format!("semantic concept search failed: {}", e));
+                report.push_error(format!("semantic concept search failed: {}", e));
             }
             _ => {} // No match — nothing to reinforce
         }
@@ -326,10 +423,11 @@ async fn run_deep(
     archive: &ArchiveMemory,
     patterns: &mut PatternEngine,
     now_ms: u64,
+    neocortex: Option<&mut crate::ipc::NeocortexClient>,
     report: &mut ConsolidationReport,
 ) {
     // 1. Find episodes that could be generalized via k-means clustering
-    run_generalization(episodic, semantic, patterns, now_ms, report).await;
+    run_generalization(episodic, semantic, patterns, now_ms, neocortex, report).await;
 
     // 2. Archive old, low-importance episodes
     run_archival(episodic, archive, now_ms, report).await;
@@ -398,9 +496,7 @@ async fn run_emergency(
                         archived_ids.push(episode.id);
                     }
                     Err(e) => {
-                        report
-                            .errors
-                            .push(format!("emergency archive ep {} failed: {}", episode.id, e));
+                        report.push_error(format!("emergency archive ep {} failed: {}", episode.id, e));
                     }
                 }
             }
@@ -412,17 +508,13 @@ async fn run_emergency(
                         report.bytes_freed += total_content_bytes;
                     }
                     Err(e) => {
-                        report
-                            .errors
-                            .push(format!("emergency delete episodes failed: {}", e));
+                        report.push_error(format!("emergency delete episodes failed: {}", e));
                     }
                 }
             }
         }
         Err(e) => {
-            report
-                .errors
-                .push(format!("emergency archival candidates failed: {}", e));
+            report.push_error(format!("emergency archival candidates failed: {}", e));
         }
     }
 
@@ -636,6 +728,7 @@ async fn run_generalization(
     semantic: &SemanticMemory,
     patterns: &mut PatternEngine,
     now_ms: u64,
+    mut neocortex: Option<&mut crate::ipc::NeocortexClient>,
     report: &mut ConsolidationReport,
 ) {
     // Fetch recent full episodes — getting full objects to utilize context/behavioral tags
@@ -645,7 +738,7 @@ async fn run_generalization(
     {
         Ok(results) => results,
         Err(e) => {
-            report.errors.push(format!("episode fetch for clustering failed: {}", e));
+            report.push_error(format!("episode fetch for clustering failed: {}", e));
             return;
         }
     };
@@ -688,10 +781,22 @@ async fn run_generalization(
             .map(|&i| (contents[i].clone(), episodes[i].importance))
             .collect();
 
-        match semantic
-            .try_generalize(&episode_data, &concept_hint, now_ms)
-            .await
-        {
+        // Architecture: LLM = brain. Use LLM generalization when neocortex is
+        // available; fall back to sync TF-IDF only when IPC is unavailable.
+        let generalize_result = match neocortex.as_deref_mut() {
+            Some(nc) => {
+                semantic
+                    .try_generalize_with_llm(&episode_data, &concept_hint, now_ms, nc)
+                    .await
+            }
+            None => {
+                semantic
+                    .try_generalize(&episode_data, &concept_hint, now_ms)
+                    .await
+            }
+        };
+
+        match generalize_result {
             Ok(Some(id)) => {
                 report.semantic_generalized += 1;
                 debug!(
@@ -709,7 +814,7 @@ async fn run_generalization(
                     true,
                     now_ms,
                 ) {
-                    report.errors.push(format!("pattern record failed: {}", e));
+                    report.push_error(format!("pattern record failed: {}", e));
                 } else {
                     report.patterns_recorded += 1;
                 }
@@ -719,9 +824,7 @@ async fn run_generalization(
                 debug!("deep: generalization rejected for cluster (concept: {})", concept_hint);
             }
             Err(e) => {
-                report
-                    .errors
-                    .push(format!("generalization failed for '{}': {}", concept_hint, e));
+                report.push_error(format!("generalization failed for '{}': {}", concept_hint, e));
             }
         }
     }
@@ -774,7 +877,7 @@ async fn run_archival(
                         );
                     }
                     Err(e) => {
-                        report.errors.push(format!(
+                        report.push_error(format!(
                             "archive episode {} failed: {}",
                             episode.id, e
                         ));
@@ -789,17 +892,13 @@ async fn run_archival(
                         report.episodes_archived += deleted;
                     }
                     Err(e) => {
-                        report
-                            .errors
-                            .push(format!("delete archived episodes failed: {}", e));
+                        report.push_error(format!("delete archived episodes failed: {}", e));
                     }
                 }
             }
         }
         Err(e) => {
-            report
-                .errors
-                .push(format!("get archival candidates failed: {}", e));
+            report.push_error(format!("get archival candidates failed: {}", e));
         }
     }
 }
@@ -856,25 +955,27 @@ mod tests {
 
     #[test]
     fn test_consolidation_priority_scoring() {
+        let w = ConsolidationWeights::default();
         // Fresh, accessed, important item should score high
-        let high = consolidation_priority(0, 10, 0.9);
+        let high = consolidation_priority(0, 10, 0.9, &w);
         assert!(high > 0.7, "high priority item scored {}", high);
 
         // Old, never accessed, unimportant item should score low
-        let low = consolidation_priority(30 * 24 * 3600 * 1000, 0, 0.1);
+        let low = consolidation_priority(30 * 24 * 3600 * 1000, 0, 0.1, &w);
         assert!(low < 0.3, "low priority item scored {}", low);
 
         // Recency matters: same item, one fresh, one 14 days old
-        let fresh = consolidation_priority(0, 5, 0.5);
-        let old = consolidation_priority(14 * 24 * 3600 * 1000, 5, 0.5);
+        let fresh = consolidation_priority(0, 5, 0.5, &w);
+        let old = consolidation_priority(14 * 24 * 3600 * 1000, 5, 0.5, &w);
         assert!(fresh > old, "fresh ({}) should beat old ({})", fresh, old);
     }
 
     #[test]
     fn test_consolidation_priority_half_life() {
+        let w = ConsolidationWeights::default();
         // At exactly 7 days, recency factor should be ~0.5
         let half_life_ms = 7 * 24 * 3600 * 1000;
-        let score_at_half_life = consolidation_priority(half_life_ms, 0, 0.0);
+        let score_at_half_life = consolidation_priority(half_life_ms, 0, 0.0, &w);
         // recency_factor at half-life = 0.5, so score = 0.3 * 0.5 + 0.3 * log2(1)/5 + 0.0 = 0.15
         assert!(
             (score_at_half_life - 0.15).abs() < 0.02,
@@ -973,6 +1074,7 @@ mod tests {
             &archive,
             &mut patterns,
             now() + 300,
+            None,
         ));
 
         assert_eq!(report.working_slots_swept, 2);
@@ -1012,6 +1114,7 @@ mod tests {
             &archive,
             &mut patterns,
             now() + 1000,
+            None,
         ));
 
         assert!(report.working_to_episodic >= 1, "should promote at least 1 slot");
@@ -1063,6 +1166,7 @@ mod tests {
             &archive,
             &mut patterns,
             now(),
+            None,
         ));
 
         // Should have swept working slots

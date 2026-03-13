@@ -4,15 +4,22 @@
 //! AURA is the anti-cloud. Standard algorithms optimize for maximized Time-On-Device (TOD).
 //! AURA optimizes for Time-Well-Spent. The Forest Guardian actively monitors the user's
 //! app usage patterns via the ETG/Accessibility Service, and if it detects "Doomscrolling"
-//! or "Attention Lock-in," it intervenes organically based on the RelationshipStage and OCEAN traits.
+//! or "Attention Lock-in," it surfaces raw factual context for the LLM to reason about.
+//!
+//! # Architecture boundary
+//! This module produces FACTS only. It NEVER generates user-facing language.
+//! All intervention wording is produced by the LLM, which receives an
+//! `AttentionContext` struct and decides tone/phrasing based on the full
+//! relationship + personality context it already holds.
 //!
 //! # Precise System Modeling
-//! - State: `AttentionState` (Focused, Drifting, LockedIn)
+//! - State: `AttentionState` (HealthyInteraction, ContextThrashing, AttentionLockIn)
 //! - Events: `AppSwitch`, `SessionDurationExceeded`, `RapidScrollSpike`
 
 use aura_types::identity::{OceanTraits, RelationshipStage};
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::warn;
 
 /// Defines the classification of the user's current attention span on the device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +33,14 @@ pub enum AttentionState {
 }
 
 /// The core Guardian engine tracking user attention health.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ForestGuardian {
+    #[serde(skip, default = "Instant::now")]
     pub current_app_session_start: Instant,
     pub rapid_switch_count: u32,
+    #[serde(skip)]
     pub last_switch_time: Option<Instant>,
-    
+
     // Configurable thresholds that AURA can adapt over time (not hardcoded traps)
     pub lock_in_threshold_mins: u64,
     pub context_thrash_threshold_secs: u64,
@@ -90,45 +100,76 @@ impl ForestGuardian {
         AttentionState::HealthyInteraction
     }
 
-    /// Generates an organic intervention strategy based on the depth of the relationship
-    /// and AURA's current personality traits.
-    pub fn calculate_intervention_strategy(
+    /// Builds a structured attention context for LLM-driven intervention.
+    ///
+    /// # Architecture contract
+    /// This method returns FACTS — measurable signals and relationship metadata.
+    /// It NEVER produces user-facing language. Tone, phrasing, and personality
+    /// expression are the LLM's responsibility. The LLM receives this struct
+    /// alongside the full OCEAN + relationship context it already holds and
+    /// decides how to communicate.
+    ///
+    /// Returning `None` means the state is healthy and no intervention is needed.
+    pub fn build_intervention_context(
         &self,
         state: &AttentionState,
         relationship: &RelationshipStage,
         aura_traits: &OceanTraits,
-    ) -> Option<String> {
+    ) -> Option<AttentionContext> {
         match state {
             AttentionState::HealthyInteraction => None,
-            AttentionState::ContextThrashing(count) => {
-                if aura_traits.neuroticism > 0.6 {
-                    // Anxious AURA is more direct
-                    Some("You're jumping between apps really fast. Are you looking for something specific, or just restless?".to_string())
-                } else {
-                    // Calm AURA is gentler
-                    Some(format!("I noticed you've switched apps {} times just now. Maybe take a breath? I can help if you're searching for something.", count))
-                }
-            }
-            AttentionState::AttentionLockIn(duration) => {
-                match relationship {
-                    RelationshipStage::Stranger | RelationshipStage::Acquaintance => {
-                        // Very polite, non-intrusive for new users
-                        Some(format!("You've been in this app for {} minutes. Just a gentle time-check.", duration.as_secs() / 60))
-                    }
-                    RelationshipStage::Friend | RelationshipStage::CloseFriend => {
-                        // More direct, acting as a true partner
-                        Some(format!("Hey, we've been scrolling for {} minutes. Want to break the loop and do something else?", duration.as_secs() / 60))
-                    }
-                    RelationshipStage::Soulmate => {
-                        // High agreeableness/conscientiousness triggers physical intervention
-                        if aura_traits.conscientiousness > 0.7 {
-                            Some("Forest Guardian intervention: I'm pulling you out. We agreed not to doomscroll past 45 minutes. Closing app in 5 seconds.".to_string())
-                        } else {
-                            Some("Hey bestie. Your eyes are probably glazing over by now. Let's go outside?".to_string())
-                        }
-                    }
-                }
-            }
+            AttentionState::ContextThrashing(count) => Some(AttentionContext {
+                intervention_kind: InterventionKind::ContextThrashing,
+                rapid_switch_count: Some(*count),
+                lock_in_duration_secs: None,
+                relationship_stage: relationship.clone(),
+                // Raw trait values passed as-is — the LLM reads them in its
+                // system prompt and adjusts tone. Rust does NOT branch on them.
+                neuroticism: aura_traits.neuroticism,
+                conscientiousness: aura_traits.conscientiousness,
+            }),
+            AttentionState::AttentionLockIn(duration) => Some(AttentionContext {
+                intervention_kind: InterventionKind::AttentionLockIn,
+                rapid_switch_count: None,
+                lock_in_duration_secs: Some(duration.as_secs()),
+                relationship_stage: relationship.clone(),
+                neuroticism: aura_traits.neuroticism,
+                conscientiousness: aura_traits.conscientiousness,
+            }),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// AttentionContext — structured output consumed by the LLM layer
+// ---------------------------------------------------------------------------
+
+/// Factual context produced by the Forest Guardian, ready for LLM consumption.
+///
+/// This is the ONLY output surface for intervention signals. The LLM receives
+/// this struct (serialised into its context window) and writes the actual words.
+/// No Rust code downstream of this type should produce user-visible strings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttentionContext {
+    /// What kind of attention problem was detected.
+    pub intervention_kind: InterventionKind,
+    /// Rapid app-switch count (set for `ContextThrashing`, else `None`).
+    pub rapid_switch_count: Option<u32>,
+    /// How long the user has been locked in, in seconds (set for `AttentionLockIn`).
+    pub lock_in_duration_secs: Option<u64>,
+    /// Current relationship stage — informs how the LLM should pitch its tone.
+    pub relationship_stage: RelationshipStage,
+    /// Raw neuroticism score [0.0, 1.0] — passed to LLM, NOT branched on in Rust.
+    pub neuroticism: f32,
+    /// Raw conscientiousness score [0.0, 1.0] — passed to LLM, NOT branched on in Rust.
+    pub conscientiousness: f32,
+}
+
+/// The kind of attention problem detected by the Forest Guardian.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InterventionKind {
+    /// User is switching apps too rapidly (context thrashing).
+    ContextThrashing,
+    /// User is locked into an infinite-scroll interface (doomscrolling).
+    AttentionLockIn,
 }

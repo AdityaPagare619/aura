@@ -158,7 +158,7 @@ impl TelegramEngine {
             config.allowed_chat_ids.clone(),
             http,
         );
-        let policy_gate = PolicyGate::new(config.trust_level, config.approval_ttl_secs);
+        let policy_gate = PolicyGate::new(config.approval_ttl_secs);
         let dialogue_mgr = DialogueManager::new(config.dialogue_timeout_secs);
 
         info!(
@@ -456,7 +456,10 @@ impl TelegramEngine {
     }
 
     /// Process a single incoming update through the full pipeline.
+    // Phase 8 wire point: called by Telegram polling loop once bridge is
+    // activated from the JNI boot path.
     #[instrument(skip(self, update), fields(chat_id = update.chat_id, update_id = update.update_id))]
+    #[allow(dead_code)]
     async fn handle_update(&mut self, update: TelegramUpdate) {
         let chat_id = update.chat_id;
         let text = match &update.text {
@@ -545,6 +548,8 @@ impl TelegramEngine {
     }
 
     /// Handle input directed to an active dialogue flow.
+    // Phase 8 wire point: called by handle_update dialogue routing branch.
+    #[allow(dead_code)]
     fn handle_dialogue_input(&mut self, chat_id: i64, text: &str) {
         use dialogue::DialogueOutcome;
 
@@ -623,6 +628,8 @@ impl TelegramEngine {
     }
 
     /// Enqueue a handler response for sending.
+    // Phase 8 wire point: called by handle_update command handler dispatch.
+    #[allow(dead_code)]
     fn enqueue_response(&self, chat_id: i64, response: HandlerResponse) {
         match response {
             HandlerResponse::Text(text) => {

@@ -52,6 +52,8 @@ pub enum AppState {
     LoginScreen,
     /// An overlay or popup is blocking the main content.
     OverlayBlocking,
+    /// State is not yet determined; LLM will classify from raw tree data.
+    Unknown,
 }
 
 /// Extract a compact screen summary from the accessibility tree.
@@ -90,64 +92,12 @@ pub fn extract_screen_summary(tree: &ScreenTree) -> ScreenSummary {
     }
 }
 
-/// Detect the current app state from the screen tree using heuristics.
-pub fn detect_app_state(tree: &ScreenTree) -> AppState {
-    // Empty tree → crashed or transition
-    if tree.node_count == 0 {
-        return AppState::Crashed;
-    }
-
-    // Check for system dialogs (permission prompts, crash dialogs, etc.)
-    // These checks MUST come before the node_count <= 2 guard because
-    // permission prompts and system dialogs can legitimately have very few nodes.
-    let package = &tree.package_name;
-    if is_permission_package(package) {
-        return AppState::PermissionPrompt;
-    }
-    if is_system_dialog_package(package) {
-        return AppState::SystemDialog;
-    }
-
-    if tree.node_count <= 2 {
-        return AppState::EmptyOrTransition;
-    }
-
-    // Collect all text for pattern matching
-    let all_text = tree.all_text();
-    let all_text_lower: Vec<String> = all_text.iter().map(|t| t.to_lowercase()).collect();
-    let joined_text = all_text_lower.join(" ");
-
-    // Check for crash dialog
-    if is_crash_dialog(&joined_text, &tree.root) {
-        return AppState::Crashed;
-    }
-
-    // Check for error dialog
-    if is_error_dialog(&joined_text, &tree.root) {
-        return AppState::ErrorDialog;
-    }
-
-    // Check for login screen
-    if is_login_screen(&joined_text, &tree.root) {
-        return AppState::LoginScreen;
-    }
-
-    // Check for loading state
-    if is_loading_state(&joined_text, &tree.root) {
-        return AppState::Loading;
-    }
-
-    // Check for overlay blocking
-    if is_overlay_blocking(&tree.root) {
-        return AppState::OverlayBlocking;
-    }
-
-    // Check for keyboard / input mode
-    if is_keyboard_visible(&tree.root) {
-        return AppState::InputMode;
-    }
-
-    AppState::Normal
+/// Detect the current app state from the screen tree.
+///
+/// Iron Law: Rust does NOT do NLP keyword matching or semantic inference.
+/// The LLM classifies app state from raw screen data. Rust returns Unknown.
+pub fn detect_app_state(_tree: &ScreenTree) -> AppState {
+    AppState::Unknown
 }
 
 // ── Heuristic helpers ───────────────────────────────────────────────────────
@@ -196,190 +146,6 @@ fn collect_summary_stats(
             keyboard_visible,
         );
     }
-}
-
-/// Known permission dialog packages.
-fn is_permission_package(package: &str) -> bool {
-    matches!(
-        package,
-        "com.android.packageinstaller"
-            | "com.google.android.permissioncontroller"
-            | "com.android.permissioncontroller"
-            | "com.samsung.android.permissioncontroller"
-    )
-}
-
-/// Known system dialog packages that aren't the target app.
-fn is_system_dialog_package(package: &str) -> bool {
-    package == "android"
-        || package == "com.android.systemui"
-        || package == "com.android.settings"
-        || package.starts_with("com.android.internal")
-}
-
-/// Check if the current screen looks like a crash dialog.
-fn is_crash_dialog(joined_text: &str, root: &ScreenNode) -> bool {
-    let crash_patterns = [
-        "has stopped",
-        "keeps stopping",
-        "isn't responding",
-        "has crashed",
-        "unfortunately",
-        "force close",
-        "app isn't responding",
-        "close app",
-        "wait",
-    ];
-
-    let has_crash_text = crash_patterns
-        .iter()
-        .any(|pattern| joined_text.contains(pattern));
-
-    // Must also have a dismiss button (OK, Close app, etc.)
-    if has_crash_text {
-        return has_button_with_text(root, &["ok", "close app", "close", "wait"]);
-    }
-
-    false
-}
-
-/// Check if the current screen looks like an error dialog.
-fn is_error_dialog(joined_text: &str, root: &ScreenNode) -> bool {
-    let error_patterns = [
-        "error",
-        "failed",
-        "couldn't",
-        "unable to",
-        "no internet",
-        "no connection",
-        "network error",
-        "something went wrong",
-        "try again",
-        "retry",
-    ];
-
-    let error_score: u32 = error_patterns
-        .iter()
-        .filter(|p| joined_text.contains(**p))
-        .count() as u32;
-
-    // Need at least 2 error-related strings to confirm
-    error_score >= 2
-        && has_button_with_text(root, &["ok", "retry", "try again", "dismiss", "close"])
-}
-
-/// Check if the current screen looks like a login/auth screen.
-fn is_login_screen(joined_text: &str, root: &ScreenNode) -> bool {
-    let login_patterns = [
-        "sign in",
-        "log in",
-        "login",
-        "email",
-        "password",
-        "username",
-        "forgot password",
-        "create account",
-        "register",
-    ];
-
-    let login_score: u32 = login_patterns
-        .iter()
-        .filter(|p| joined_text.contains(**p))
-        .count() as u32;
-
-    // Need at least 2 login-related strings and at least one editable field
-    login_score >= 2 && has_editable_field(root)
-}
-
-/// Check if the screen appears to be in a loading state.
-fn is_loading_state(joined_text: &str, root: &ScreenNode) -> bool {
-    let loading_patterns = ["loading", "please wait", "spinner", "progress"];
-
-    let has_loading_text = loading_patterns.iter().any(|p| joined_text.contains(p));
-
-    // Also check for ProgressBar class in the tree
-    let has_progress_bar = has_class_name(root, "ProgressBar");
-
-    has_loading_text || has_progress_bar
-}
-
-/// Check if an overlay or popup is blocking the main content.
-fn is_overlay_blocking(root: &ScreenNode) -> bool {
-    // Heuristic: if there's a node covering >80% of the screen that is
-    // not the root and has a small number of children, it's likely an overlay.
-    let screen_area = root.bounds.width() as i64 * root.bounds.height() as i64;
-    if screen_area <= 0 {
-        return false;
-    }
-
-    for child in &root.children {
-        let child_area = child.bounds.width() as i64 * child.bounds.height() as i64;
-        let coverage = (child_area * 100) / screen_area;
-
-        // A child covering >80% of screen with few children = likely overlay
-        if coverage > 80 && child.children.len() <= 5 && child.is_clickable {
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Check if a keyboard is likely visible.
-fn is_keyboard_visible(root: &ScreenNode) -> bool {
-    fn check_node(node: &ScreenNode) -> bool {
-        if node.package_name.contains("inputmethod")
-            || node.package_name.contains("keyboard")
-            || node.class_name.contains("KeyboardView")
-            || node.class_name.contains("InputView")
-        {
-            return true;
-        }
-        node.children.iter().any(|c| check_node(c))
-    }
-    check_node(root)
-}
-
-/// Check if any node in the tree has a button with text matching one of the patterns.
-fn has_button_with_text(node: &ScreenNode, patterns: &[&str]) -> bool {
-    if node.is_clickable {
-        if let Some(ref text) = node.text {
-            let lower = text.to_lowercase();
-            if patterns.iter().any(|p| lower.contains(p)) {
-                return true;
-            }
-        }
-        if let Some(ref desc) = node.content_description {
-            let lower = desc.to_lowercase();
-            if patterns.iter().any(|p| lower.contains(p)) {
-                return true;
-            }
-        }
-    }
-    node.children
-        .iter()
-        .any(|c| has_button_with_text(c, patterns))
-}
-
-/// Check if there's at least one editable field in the tree.
-fn has_editable_field(node: &ScreenNode) -> bool {
-    if node.is_editable {
-        return true;
-    }
-    node.children.iter().any(|c| has_editable_field(c))
-}
-
-/// Check if any node has the given class name (short match).
-fn has_class_name(node: &ScreenNode, class: &str) -> bool {
-    let short = node
-        .class_name
-        .rsplit('.')
-        .next()
-        .unwrap_or(&node.class_name);
-    if short == class {
-        return true;
-    }
-    node.children.iter().any(|c| has_class_name(c, class))
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -460,7 +226,7 @@ mod tests {
         let tree = make_tree_with_root(root, "com.test");
 
         let summary = extract_screen_summary(&tree);
-        assert_eq!(summary.app_state, AppState::Normal);
+        assert_eq!(summary.app_state, AppState::Unknown);
         assert_eq!(summary.clickable_count, 1);
         assert_eq!(summary.visible_text.len(), 2);
     }
@@ -474,7 +240,8 @@ mod tests {
             timestamp_ms: 0,
             node_count: 0,
         };
-        assert_eq!(detect_app_state(&tree), AppState::Crashed);
+        // detect_app_state always returns Unknown — LLM classifies app state.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]
@@ -495,7 +262,8 @@ mod tests {
             )],
         );
         let tree = make_tree_with_root(root, "com.google.android.permissioncontroller");
-        assert_eq!(detect_app_state(&tree), AppState::PermissionPrompt);
+        // detect_app_state always returns Unknown — LLM classifies app state from raw tree.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]
@@ -519,8 +287,8 @@ mod tests {
             ],
         );
         let tree = make_tree_with_root(root, "android");
-        // Package is "android" → SystemDialog, which is checked before crash
-        assert_eq!(detect_app_state(&tree), AppState::SystemDialog);
+        // detect_app_state always returns Unknown — LLM classifies app state from raw tree.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]
@@ -544,7 +312,8 @@ mod tests {
             ],
         );
         let tree = make_tree_with_root(root, "com.test");
-        assert_eq!(detect_app_state(&tree), AppState::Crashed);
+        // detect_app_state always returns Unknown — LLM classifies app state from raw tree.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]
@@ -563,7 +332,8 @@ mod tests {
             ],
         );
         let tree = make_tree_with_root(root, "com.test");
-        assert_eq!(detect_app_state(&tree), AppState::LoginScreen);
+        // detect_app_state always returns Unknown — LLM classifies app state from raw tree.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]
@@ -587,7 +357,8 @@ mod tests {
             ],
         );
         let tree = make_tree_with_root(root, "com.test");
-        assert_eq!(detect_app_state(&tree), AppState::Loading);
+        // detect_app_state always returns Unknown — LLM classifies app state from raw tree.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]
@@ -612,7 +383,8 @@ mod tests {
             ],
         );
         let tree = make_tree_with_root(root, "com.test");
-        assert_eq!(detect_app_state(&tree), AppState::ErrorDialog);
+        // detect_app_state always returns Unknown — LLM classifies app state from raw tree.
+        assert_eq!(detect_app_state(&tree), AppState::Unknown);
     }
 
     #[test]

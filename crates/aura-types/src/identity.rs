@@ -76,79 +76,11 @@ impl Default for InteractionTensor {
     }
 }
 
-impl InteractionTensor {
-    /// Compute the unified state cohesion using dynamic weighted dimensional fusion.
-    #[must_use]
-    pub fn compute_cohesion(&self) -> f32 {
-        // Base weights for the architectural mapping: functionality (reliability) is core,
-        // but higher stages require depth and resonance.
-        (self.reliability * 0.4
-            + self.conceptual_alignment * 0.3
-            + self.context_depth * 0.2
-            + self.emotional_resonance * 0.1)
-            .clamp(0.0, 1.0)
-    }
-}
-
-impl RelationshipStage {
-    /// Determine relationship stage dynamically from the multi-dimensional interaction tensor.
-    ///
-    /// When transitioning UP, uses standard fused thresholds.
-    /// When transitioning DOWN, requires dropping 0.05 below the threshold to prevent oscillation.
-    #[must_use]
-    pub fn evaluate_stage(tensor: &InteractionTensor, current: Option<RelationshipStage>) -> RelationshipStage {
-        let cohesion = tensor.compute_cohesion();
-
-        match current {
-            None => Self::from_cohesion_raw(cohesion),
-            Some(current_stage) => {
-                let raw = Self::from_cohesion_raw(cohesion);
-                let raw_ord = Self::ordinal(&raw);
-                let cur_ord = Self::ordinal(&current_stage);
-
-                if raw_ord > cur_ord {
-                    // Upgrading — use standard cohesion thresholds.
-                    raw
-                } else if raw_ord < cur_ord {
-                    // Downgrading — apply hysteresis (need to drop 0.05 further).
-                    let hysteresis_stage = Self::from_cohesion_raw((cohesion + 0.05).min(1.0));
-                    let hyst_ord = Self::ordinal(&hysteresis_stage);
-                    if hyst_ord < cur_ord {
-                        raw
-                    } else {
-                        current_stage
-                    }
-                } else {
-                    current_stage
-                }
-            }
-        }
-    }
-
-    fn from_cohesion_raw(c: f32) -> RelationshipStage {
-        if c >= 0.85 {
-            RelationshipStage::Soulmate
-        } else if c >= 0.60 {
-            RelationshipStage::CloseFriend
-        } else if c >= 0.35 {
-            RelationshipStage::Friend
-        } else if c >= 0.15 {
-            RelationshipStage::Acquaintance
-        } else {
-            RelationshipStage::Stranger
-        }
-    }
-
-    fn ordinal(stage: &RelationshipStage) -> u8 {
-        match stage {
-            RelationshipStage::Stranger => 0,
-            RelationshipStage::Acquaintance => 1,
-            RelationshipStage::Friend => 2,
-            RelationshipStage::CloseFriend => 3,
-            RelationshipStage::Soulmate => 4,
-        }
-    }
-}
+// TODO(types): Phase 3 wire-point — InteractionTensor cohesion computation and
+// RelationshipStage classification (evaluate_stage, hysteresis logic, ordinal mapping)
+// belong in the identity engine crate, not in aura-types. Consumers receive a
+// pre-computed RelationshipStage variant over IPC; no Rust-side classification
+// should occur here.
 
 /// Mood represented in Valence-Arousal-Dominance space.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -242,52 +174,6 @@ mod tests {
         assert!((traits.extraversion - 0.1).abs() < f32::EPSILON);
         assert!((traits.agreeableness - 0.9).abs() < f32::EPSILON);
         assert!((traits.neuroticism - 0.5).abs() < f32::EPSILON);
-    }
-
-    fn create_tensor(cohesion_target: f32) -> InteractionTensor {
-        InteractionTensor {
-            reliability: cohesion_target,
-            conceptual_alignment: cohesion_target,
-            context_depth: cohesion_target,
-            emotional_resonance: cohesion_target,
-        }
-    }
-
-    #[test]
-    fn test_dynamic_relationship_stage_no_hysteresis() {
-        assert_eq!(
-            RelationshipStage::evaluate_stage(&create_tensor(0.05), None),
-            RelationshipStage::Stranger
-        );
-        assert_eq!(
-            RelationshipStage::evaluate_stage(&create_tensor(0.20), None),
-            RelationshipStage::Acquaintance
-        );
-        assert_eq!(
-            RelationshipStage::evaluate_stage(&create_tensor(0.50), None),
-            RelationshipStage::Friend
-        );
-        assert_eq!(
-            RelationshipStage::evaluate_stage(&create_tensor(0.70), None),
-            RelationshipStage::CloseFriend
-        );
-        assert_eq!(
-            RelationshipStage::evaluate_stage(&create_tensor(0.90), None),
-            RelationshipStage::Soulmate
-        );
-    }
-
-    #[test]
-    fn test_dynamic_relationship_hysteresis() {
-        // At exactly threshold 0.35, raw says Friend.
-        // If currently Friend and cohesion drops to 0.33, raw says Acquaintance.
-        // But with hysteresis, 0.33 + 0.05 = 0.38 => Friend, so no downgrade.
-        let stage = RelationshipStage::evaluate_stage(&create_tensor(0.33), Some(RelationshipStage::Friend));
-        assert_eq!(stage, RelationshipStage::Friend);
-
-        // Drop to 0.28 — 0.28 + 0.05 = 0.33, raw says Acquaintance — downgrade.
-        let stage = RelationshipStage::evaluate_stage(&create_tensor(0.28), Some(RelationshipStage::Friend));
-        assert_eq!(stage, RelationshipStage::Acquaintance);
     }
 
     #[test]

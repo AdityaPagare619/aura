@@ -1,0 +1,137 @@
+# ============================================================
+# AURA v4 — Android Cross-Compilation
+# Target: aarch64-linux-android (Termux on ARM64 devices)
+# NDK: r26b (stable LTS)
+#
+# KNOWN ISSUE: This workflow requires the llama.cpp submodule.
+# If aura-llama-sys/llama.cpp/ is empty (submodule not initialized),
+# the build will fail at the cc::Build step in build.rs.
+# Fix: ensure `git submodule add <url> crates/aura-llama-sys/llama.cpp`
+# has been committed and the submodule URL is accessible.
+# ============================================================
+
+name: Build Android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: r26b
+  # API level 21 = Android 5.0 minimum — covers all modern devices
+  API_LEVEL: "21"
+  TARGET: aarch64-linux-android
+
+jobs:
+  build-android:
+    name: Cross-compile aura-daemon (aarch64-linux-android)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ----------------------------------------------------------
+      # 1. Checkout — recursive for llama.cpp submodule
+      # ----------------------------------------------------------
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ----------------------------------------------------------
+      # 2. Rust toolchain + Android target
+      # ----------------------------------------------------------
+      - name: Install Rust stable + aarch64-linux-android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # ----------------------------------------------------------
+      # 3. Cache
+      # ----------------------------------------------------------
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: android-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: android-cargo-
+
+      # ----------------------------------------------------------
+      # 4. Download and unpack Android NDK r26b
+      # Source: GitHub releases (no third-party services)
+      # ----------------------------------------------------------
+      - name: Download Android NDK r26b
+        run: |
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "Downloading NDK from: $NDK_URL"
+          curl -fsSL "$NDK_URL" -o ndk.zip
+          unzip -q ndk.zip -d $HOME
+          echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      # ----------------------------------------------------------
+      # 5. Export cross-compilation environment variables
+      # These tell cc-rs and cargo which toolchain binaries to use
+      # ----------------------------------------------------------
+      - name: Configure cross-compilation env
+        run: |
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+
+          # Clang binaries for API level 21
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
+
+          # Add NDK bin to PATH so cc-rs can find tools without full paths
+          echo "${TOOLCHAIN}" >> $GITHUB_PATH
+
+      # ----------------------------------------------------------
+      # 6. System build deps (cmake needed by llama.cpp build.rs)
+      # ----------------------------------------------------------
+      - name: Install system build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
+      # ----------------------------------------------------------
+      # 7. Verify submodule (fail fast with a clear message)
+      # ----------------------------------------------------------
+      - name: Verify llama.cpp submodule is present
+        run: |
+          if [ ! -f "crates/aura-llama-sys/llama.cpp/llama.cpp" ]; then
+            echo "ERROR: crates/aura-llama-sys/llama.cpp submodule is missing or empty."
+            echo "The aura-llama-sys build.rs compiles llama.cpp from source for Android."
+            echo "Fix: commit the llama.cpp submodule at crates/aura-llama-sys/llama.cpp"
+            exit 1
+          fi
+          echo "llama.cpp submodule verified OK"
+
+      # ----------------------------------------------------------
+      # 8. Cross-compile
+      # ----------------------------------------------------------
+      - name: Build aura-daemon for aarch64-linux-android
+        run: cargo build --release -p aura-daemon --target aarch64-linux-android
+
+      # ----------------------------------------------------------
+      # 9. Strip binary (reduces size significantly for on-device use)
+      # ----------------------------------------------------------
+      - name: Strip binary
+        run: |
+          STRIP="$TOOLCHAIN/llvm-strip"
+          BINARY="target/aarch64-linux-android/release/aura-daemon"
+          echo "Binary size before strip: $(du -sh $BINARY | cut -f1)"
+          $STRIP "$BINARY"
+          echo "Binary size after strip:  $(du -sh $BINARY | cut -f1)"
+
+      # ----------------------------------------------------------
+      # 10. Upload artifact
+      # ----------------------------------------------------------
+      - name: Upload aura-daemon binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-daemon-aarch64-linux-android
+          path: target/aarch64-linux-android/release/aura-daemon
+          retention-days: 30
+          if-no-files-found: error

@@ -380,7 +380,11 @@ impl WorkingMemory {
     /// Fusion) combining importance, recency, and semantic relevance to the
     /// query. Falls back to importance-only sorting when no query is provided.
     /// See: AURA-V4-BATCH7-MEMORY-INFERENCE-AUDIT §1.4.
-    pub fn context_for_llm(&self, query: &str, max_items: usize, now_ms: u64) -> String {
+    /// Returns the top-ranked working memory slot contents for LLM context assembly.
+    ///
+    /// Returns raw content strings in relevance order. Formatting (labels, numbering,
+    /// section headers) is the responsibility of the neocortex/LLM context assembly layer.
+    pub fn context_for_llm(&self, query: &str, max_items: usize, now_ms: u64) -> Vec<String> {
         let live: Vec<(usize, &WorkingSlot)> = self
             .slots
             .iter()
@@ -390,7 +394,7 @@ impl WorkingMemory {
             .collect();
 
         if live.is_empty() {
-            return String::new();
+            return vec![];
         }
 
         // Build per-slot scores via RRF over three rankings.
@@ -444,13 +448,13 @@ impl WorkingMemory {
         rrf_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         rrf_scores.truncate(max_items);
 
-        let mut ctx = String::from("[Working Memory]\n");
-        for (i, (slot_idx, _score)) in rrf_scores.iter().enumerate() {
+        let mut items: Vec<String> = Vec::with_capacity(rrf_scores.len());
+        for (slot_idx, _score) in &rrf_scores {
             if let Some(Some(slot)) = self.slots.get(*slot_idx) {
-                ctx.push_str(&format!("{}. {}\n", i + 1, slot.content));
+                items.push(slot.content.clone());
             }
         }
-        ctx
+        items
     }
 
     // -----------------------------------------------------------------------
@@ -662,8 +666,16 @@ mod tests {
                 now() + i as u64 * 100,
             );
         }
-        // Should never exceed MAX_SLOTS
-        assert_eq!(wm.len(), MAX_SLOTS);
+        // Must never exceed MAX_SLOTS.  With compaction active (fires at 90%
+        // capacity), the actual count may be well below MAX_SLOTS as batches
+        // of older slots are merged; the invariant is strictly ≤ MAX_SLOTS.
+        assert!(
+            wm.len() <= MAX_SLOTS,
+            "len {} must not exceed MAX_SLOTS {}",
+            wm.len(),
+            MAX_SLOTS
+        );
+        assert!(wm.len() > 0, "should have at least one entry");
     }
 
     #[test]
@@ -831,14 +843,9 @@ mod tests {
         wm.push("medium fact".into(), EventSource::Notification, 0.6, now());
 
         let ctx = wm.context_for_llm("important", 2, now());
-        assert!(ctx.contains("[Working Memory]"));
-        assert!(ctx.contains("important fact"));
-        // Should include the top 2 by importance
-        let lines: Vec<&str> = ctx
-            .lines()
-            .filter(|l| l.starts_with(|c: char| c.is_ascii_digit()))
-            .collect();
-        assert_eq!(lines.len(), 2);
+        // Returns Vec<String> of raw content — no formatting headers
+        assert_eq!(ctx.len(), 2);
+        assert!(ctx.iter().any(|s| s == "important fact"));
     }
 
     #[test]

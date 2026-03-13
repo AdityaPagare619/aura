@@ -106,7 +106,7 @@ pub struct LearnedSkill {
     pub confidence: f32,
 }
 
-/// A scored skill match result from [`SkillRegistry::match_skill`].
+/// A ranked skill result from [`SkillRegistry::rank_skills_by_relevance`].
 #[derive(Debug, Clone)]
 pub struct SkillMatch {
     /// Matched skill ID.
@@ -318,13 +318,19 @@ impl SkillRegistry {
     // Skill matching
     // -----------------------------------------------------------------------
 
-    /// Find skills whose tags overlap with `goal_tags`, scored by relevance.
+    /// Rank skills by relevance to `goal_tags` and return the ordered list.
     ///
-    /// Score = `tag_overlap × 0.4 + decayed_confidence × 0.3 + reliability × 0.3`.
-    /// Returns up to [`MAX_MATCH_RESULTS`] matches with score > 0.1, sorted
-    /// descending by score.
+    /// # Architecture contract
+    /// This method RANKS — it does NOT select or route. The returned `Vec<SkillMatch>`
+    /// contains all individual score components (`tag_overlap`, `confidence`,
+    /// `reliability`) so the caller (LLM or orchestrator) can apply its own
+    /// judgment to decide which skill to actually invoke.
+    ///
+    /// Composite rank = `tag_overlap × 0.4 + decayed_confidence × 0.3 + reliability × 0.3`.
+    /// Matches with rank < 0.1 are excluded as noise.
+    /// Returns up to [`MAX_MATCH_RESULTS`] results sorted descending by rank.
     #[must_use]
-    pub fn match_skill(&self, goal_tags: &[&str], now_ms: u64) -> Vec<SkillMatch> {
+    pub fn rank_skills_by_relevance(&self, goal_tags: &[&str], now_ms: u64) -> Vec<SkillMatch> {
         if goal_tags.is_empty() {
             return Vec::new();
         }
@@ -832,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_match_skill_by_tags() {
+    fn test_rank_skills_by_tags() {
         let mut reg = SkillRegistry::new();
         let id = reg
             .register_skill("navigate", vec!["open_maps".into()], 100)
@@ -845,21 +851,21 @@ mod tests {
             reg.record_outcome(id, true, 200, 1_700_000_000_000).expect("ok");
         }
 
-        let matches = reg.match_skill(&["navigation", "maps"], 100);
+        let matches = reg.rank_skills_by_relevance(&["navigation", "maps"], 100);
         assert!(!matches.is_empty(), "should find a match");
         assert_eq!(matches[0].skill_id, id);
         assert!(matches[0].tag_overlap > 0.5);
     }
 
     #[test]
-    fn test_match_skill_empty_tags() {
+    fn test_rank_skills_empty_tags() {
         let reg = SkillRegistry::new();
-        let matches = reg.match_skill(&[], 100);
+        let matches = reg.rank_skills_by_relevance(&[], 100);
         assert!(matches.is_empty());
     }
 
     #[test]
-    fn test_match_skill_scoring_order() {
+    fn test_rank_skills_scoring_order() {
         let mut reg = SkillRegistry::new();
 
         let id1 = reg
@@ -878,9 +884,9 @@ mod tests {
             reg.record_outcome(id2, false, 200, 1_700_000_000_000).expect("ok");
         }
 
-        let matches = reg.match_skill(&["navigation", "maps"], 100);
+        let matches = reg.rank_skills_by_relevance(&["navigation", "maps"], 100);
         assert!(matches.len() >= 1);
-        // id1 should score higher (better reliability + better tag overlap)
+        // id1 should rank higher (better reliability + better tag overlap)
         assert_eq!(matches[0].skill_id, id1);
     }
 

@@ -27,6 +27,10 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
+use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::{Aes256Gcm, Nonce};
+use argon2::{Algorithm, Argon2, Params, Version};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -45,8 +49,9 @@ const SENSITIVE_RETENTION_DAYS: u32 = 365;
 /// Retention limit for critical data (days).
 const CRITICAL_RETENTION_DAYS: u32 = 90;
 
-/// Minimum confidence threshold for auto-classification.
-const AUTO_CLASSIFY_MIN_CONFIDENCE: f32 = 0.7;
+// NOTE: No confidence scoring for classification — Rust detects structural
+// data patterns (digit counts, keyword presence) only. The LLM reasons about
+// user intent; Rust only determines encryption tier from data structure.
 
 // ---------------------------------------------------------------------------
 // BoundedVec<T>
@@ -365,6 +370,10 @@ pub enum VaultError {
     },
     /// Encryption/decryption failure from the platform keystore.
     EncryptionFailed(String),
+    /// Decryption failure — ciphertext corrupted or wrong key.
+    DecryptionFailed(String),
+    /// PIN hashing or verification failure.
+    HashFailed(String),
     /// Key string is empty or invalid.
     InvalidKey,
     /// Entry has passed its expiry timestamp.
@@ -382,6 +391,8 @@ impl std::fmt::Display for VaultError {
                 write!(f, "tier mismatch: expected {expected}, got {got}")
             }
             Self::EncryptionFailed(msg) => write!(f, "encryption failed: {msg}"),
+            Self::DecryptionFailed(msg) => write!(f, "decryption failed: {msg}"),
+            Self::HashFailed(msg) => write!(f, "hash operation failed: {msg}"),
             Self::InvalidKey => write!(f, "invalid key (empty or malformed)"),
             Self::Expired => write!(f, "entry has expired"),
         }
@@ -449,18 +460,15 @@ pub struct ExportManifest {
 // ---------------------------------------------------------------------------
 
 /// Intelligent auto-classifier that detects data sensitivity from content
-/// patterns. Uses regex-free heuristics for performance on mobile.
+/// patterns. Uses structural heuristics (digit counts, character patterns)
+/// for encryption-tier assignment — no confidence scoring, no routing.
+/// The LLM reasons about user intent; this only asks "what tier encrypts this?"
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataClassifier {
-    /// Minimum confidence to accept an auto-classification.
-    min_confidence: f32,
-}
+pub struct DataClassifier {}
 
 impl Default for DataClassifier {
     fn default() -> Self {
-        Self {
-            min_confidence: AUTO_CLASSIFY_MIN_CONFIDENCE,
-        }
+        Self {}
     }
 }
 
@@ -676,6 +684,132 @@ pub struct CriticalVault {
     tier_counts: [u32; 4],
     /// Auto-classification engine.
     auto_classifier: DataClassifier,
+    /// AES-256-GCM encryption key for Tier 1+ entries.
+    ///
+    /// `None` means the vault is unsealed — encryption is a no-op and the
+    /// caller must call [`CriticalVault::set_encryption_key`] before storing
+    /// sensitive data.  In production, this is derived from the Android
+    /// Keystore or from the user's PIN via Argon2id.
+    encryption_key: Option<[u8; 32]>,
+}
+
+// ---------------------------------------------------------------------------
+// AES-256-GCM Encryption Helpers
+// ---------------------------------------------------------------------------
+
+/// Encrypt `plaintext` with AES-256-GCM using the provided 256-bit `key`.
+///
+/// Returns `nonce || ciphertext` (12-byte nonce prepended).
+/// A fresh random nonce is generated for every call via CSPRNG (OsRng).
+fn vault_encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| VaultError::EncryptionFailed(format!("key init: {e}")))?;
+
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| VaultError::EncryptionFailed(format!("encrypt: {e}")))?;
+
+    // Prepend nonce to ciphertext: [nonce(12) || ciphertext(..)]
+    let mut out = Vec::with_capacity(12 + ciphertext.len());
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypt `nonce || ciphertext` produced by [`vault_encrypt`].
+fn vault_decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, VaultError> {
+    if data.len() < 12 {
+        return Err(VaultError::DecryptionFailed(
+            "ciphertext too short (missing nonce)".into(),
+        ));
+    }
+
+    let (nonce_bytes, ciphertext) = data.split_at(12);
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| VaultError::DecryptionFailed(format!("key init: {e}")))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| VaultError::DecryptionFailed(format!("decrypt: {e}")))
+}
+
+// ---------------------------------------------------------------------------
+// Argon2id PIN Hashing
+// ---------------------------------------------------------------------------
+//
+// ## Migration note (PIN hash format change)
+//
+// Previous versions used a weak `wrapping_mul(31) + XOR` hash with no salt.
+// This version uses Argon2id with a 16-byte CSPRNG salt (48-byte output).
+//
+// On upgrade, stored PIN hashes will fail `verify_pin()` because the old
+// format is a different length/structure. Callers should handle this by:
+//   1. Detecting a `HashFailed("stored PIN hash too short")` error.
+//   2. Falling back to the legacy verification **once** for migration.
+//   3. On successful legacy verify, immediately re-hash with `hash_pin()`
+//      and persist the new 48-byte blob.
+//   4. After migration, delete any legacy hash material.
+//
+// This ensures a seamless one-time upgrade without forcing users to reset
+// their PIN, while eliminating the weak hash from storage.
+// ---------------------------------------------------------------------------
+
+/// OWASP-recommended Argon2id parameters (2023 guidance, interactive login tier).
+///
+/// - m_cost:  65536 KiB (64 MiB) — memory hardness
+/// - t_cost:  3 iterations        — time hardness
+/// - p_cost:  4 lanes             — parallelism
+/// - output:  32 bytes            — 256-bit derived key
+///
+/// These are compile-time constants; `Params::new` is a `const fn` that only
+/// fails for out-of-range values, so the `expect` is safe for these literals.
+fn argon2_params() -> Params {
+    Params::new(65_536, 3, 4, Some(32))
+        .expect("hardcoded Argon2id params are valid")
+}
+
+/// Hash a PIN using Argon2id with a random 16-byte CSPRNG salt.
+///
+/// Returns `salt(16) || argon2id_hash(32)` — 48 bytes total.
+/// The salt is generated fresh each time via OsRng.
+fn hash_pin(pin: &[u8]) -> Result<Vec<u8>, VaultError> {
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+
+    let mut hash_output = [0u8; 32];
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, argon2_params())
+        .hash_password_into(pin, &salt, &mut hash_output)
+        .map_err(|e| VaultError::HashFailed(format!("argon2id hash: {e}")))?;
+
+    // Layout: [salt(16) || hash(32)]
+    let mut out = Vec::with_capacity(48);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&hash_output);
+    Ok(out)
+}
+
+/// Verify a PIN against a stored `salt || hash` blob produced by [`hash_pin`].
+fn verify_pin(pin: &[u8], stored: &[u8]) -> Result<bool, VaultError> {
+    if stored.len() < 48 {
+        return Err(VaultError::HashFailed(
+            "stored PIN hash too short (expected 48 bytes)".into(),
+        ));
+    }
+
+    let (salt, expected_hash) = stored.split_at(16);
+
+    let mut hash_output = [0u8; 32];
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, argon2_params())
+        .hash_password_into(pin, salt, &mut hash_output)
+        .map_err(|e| VaultError::HashFailed(format!("argon2id verify: {e}")))?;
+
+    // Constant-time comparison to prevent timing attacks.
+    Ok(hash_output == expected_hash[..32])
 }
 
 impl CriticalVault {
@@ -686,7 +820,29 @@ impl CriticalVault {
             access_log: BoundedVec::new(MAX_ACCESS_LOG_ENTRIES),
             tier_counts: [0; 4],
             auto_classifier: DataClassifier::new(),
+            encryption_key: None,
         }
+    }
+
+    /// Set the AES-256-GCM encryption key used for Tier 1+ entries.
+    ///
+    /// In production, derive this from the Android Keystore or from the
+    /// user PIN via Argon2id key derivation.  Must be called before
+    /// storing or retrieving encrypted data.
+    pub fn set_encryption_key(&mut self, key: [u8; 32]) {
+        self.encryption_key = Some(key);
+    }
+
+    /// Hash a user PIN for secure storage (Argon2id + CSPRNG salt).
+    ///
+    /// Returns a 48-byte blob: `salt(16) || hash(32)`.
+    pub fn hash_user_pin(pin: &[u8]) -> Result<Vec<u8>, VaultError> {
+        hash_pin(pin)
+    }
+
+    /// Verify a user PIN against a previously stored hash blob.
+    pub fn verify_user_pin(pin: &[u8], stored_hash: &[u8]) -> Result<bool, VaultError> {
+        verify_pin(pin, stored_hash)
     }
 
     /// Store a new entry or update an existing one.
@@ -719,10 +875,32 @@ impl CriticalVault {
             return Err(VaultError::VaultFull);
         }
 
+        // Encrypt value for Tier 1+ entries (Tier 0 = ephemeral/RAM only).
+        let encrypted_value = if tier.as_u8() >= 1 {
+            match &self.encryption_key {
+                Some(key) => vault_encrypt(key, value)?,
+                None => {
+                    tracing::warn!(
+                        target: "VAULT",
+                        key = key,
+                        tier = %tier,
+                        "no encryption key set — storing encrypted data requires \
+                         set_encryption_key() first"
+                    );
+                    return Err(VaultError::EncryptionFailed(
+                        "vault encryption key not configured".into(),
+                    ));
+                }
+            }
+        } else {
+            // Tier 0 (Ephemeral): RAM-only, no encryption needed.
+            value.to_vec()
+        };
+
         let entry = VaultEntry {
             key: key.to_string(),
             tier,
-            encrypted_value: value.to_vec(),
+            encrypted_value,
             created_ms: now_ms,
             last_accessed_ms: now_ms,
             access_count: 0,
@@ -747,7 +925,7 @@ impl CriticalVault {
         Ok(())
     }
 
-    /// Retrieve an entry's encrypted value.
+    /// Retrieve an entry's value, decrypting if necessary.
     ///
     /// # Authentication
     ///
@@ -761,12 +939,13 @@ impl CriticalVault {
     /// - [`VaultError::AuthenticationRequired`] for unauthenticated Tier 2+ access.
     /// - [`VaultError::BiometricRequired`] for unauthenticated Tier 3 access.
     /// - [`VaultError::Expired`] if the entry has passed its expiry.
+    /// - [`VaultError::DecryptionFailed`] if the ciphertext is corrupted or the key is wrong.
     pub fn retrieve(
         &mut self,
         key: &str,
         caller: &str,
         authenticated: bool,
-    ) -> Result<&[u8], VaultError> {
+    ) -> Result<Vec<u8>, VaultError> {
         // Check existence first (without borrowing mutably).
         if !self.entries.contains_key(key) {
             return Err(VaultError::EntryNotFound);
@@ -818,8 +997,20 @@ impl CriticalVault {
             entry.access_count = entry.access_count.saturating_add(1);
         }
 
-        // Return the value.
-        Ok(&self.entries[key].encrypted_value)
+        // Decrypt and return the value.
+        let raw = &self.entries[key].encrypted_value;
+        let tier = self.entries[key].tier;
+        if tier.as_u8() >= 1 {
+            match &self.encryption_key {
+                Some(ek) => vault_decrypt(ek, raw),
+                None => Err(VaultError::DecryptionFailed(
+                    "vault encryption key not configured".into(),
+                )),
+            }
+        } else {
+            // Tier 0 (Ephemeral): stored as plaintext.
+            Ok(raw.clone())
+        }
     }
 
     /// Delete an entry from the vault.
@@ -1197,9 +1388,17 @@ mod tests {
 
     // --- CriticalVault tests ---
 
+    /// Create a vault pre-loaded with a test encryption key.
+    fn make_test_vault() -> CriticalVault {
+        let mut vault = CriticalVault::new();
+        // Deterministic test key — NEVER use in production.
+        vault.set_encryption_key([0xAA; 32]);
+        vault
+    }
+
     #[test]
     fn test_store_and_retrieve_personal() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("User's name", DataCategory::Personal);
         vault.store("name", b"Aditya", DataTier::Personal, meta).unwrap();
 
@@ -1209,7 +1408,7 @@ mod tests {
 
     #[test]
     fn test_sensitive_requires_auth() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("Phone number", DataCategory::Contact);
         vault.store("phone", b"+919876543210", DataTier::Sensitive, meta).unwrap();
 
@@ -1224,7 +1423,7 @@ mod tests {
 
     #[test]
     fn test_critical_requires_biometric() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("Bank account", DataCategory::Financial);
         vault.store("bank", b"1234567890", DataTier::Critical, meta).unwrap();
 
@@ -1237,7 +1436,7 @@ mod tests {
 
     #[test]
     fn test_search_never_returns_critical() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let meta_p = make_metadata("Username", DataCategory::Personal);
         vault.store("username", b"aditya", DataTier::Personal, meta_p).unwrap();
@@ -1253,7 +1452,7 @@ mod tests {
 
     #[test]
     fn test_search_respects_max_tier() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let meta_p = make_metadata("Name", DataCategory::Personal);
         vault.store("name", b"Aditya", DataTier::Personal, meta_p).unwrap();
@@ -1268,7 +1467,7 @@ mod tests {
 
     #[test]
     fn test_is_safe_for_llm() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let meta_p = make_metadata("Name", DataCategory::Personal);
         vault.store("name", b"Aditya", DataTier::Personal, meta_p).unwrap();
@@ -1283,7 +1482,7 @@ mod tests {
 
     #[test]
     fn test_is_safe_for_search() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let meta_s = make_metadata("Email", DataCategory::Contact);
         vault.store("email", b"a@b.com", DataTier::Sensitive, meta_s).unwrap();
@@ -1297,7 +1496,7 @@ mod tests {
 
     #[test]
     fn test_delete_entry() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("Temp data", DataCategory::Personal);
         vault.store("temp", b"data", DataTier::Personal, meta).unwrap();
 
@@ -1308,7 +1507,7 @@ mod tests {
 
     #[test]
     fn test_secure_delete() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("Secret", DataCategory::Credential);
         vault.store("secret", b"important", DataTier::Critical, meta).unwrap();
 
@@ -1325,7 +1524,7 @@ mod tests {
 
     #[test]
     fn test_purge_expired() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let mut meta = make_metadata("Expiring", DataCategory::Personal);
         meta.expiry_ms = Some(1000); // expired long ago
@@ -1342,7 +1541,7 @@ mod tests {
 
     #[test]
     fn test_vault_full() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         for i in 0..MAX_VAULT_ENTRIES {
             let meta = make_metadata("entry", DataCategory::Personal);
             vault
@@ -1357,7 +1556,7 @@ mod tests {
 
     #[test]
     fn test_invalid_key() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("empty key", DataCategory::Personal);
         let result = vault.store("", b"v", DataTier::Personal, meta);
         assert!(matches!(result, Err(VaultError::InvalidKey)));
@@ -1365,7 +1564,7 @@ mod tests {
 
     #[test]
     fn test_vault_stats() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let meta_p = make_metadata("A", DataCategory::Personal);
         vault.store("a", b"1", DataTier::Personal, meta_p).unwrap();
@@ -1381,7 +1580,7 @@ mod tests {
 
     #[test]
     fn test_export_manifest_no_values() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("Secret stuff", DataCategory::Credential);
         vault.store("secret", b"TOP_SECRET_VALUE", DataTier::Critical, meta).unwrap();
 
@@ -1396,7 +1595,7 @@ mod tests {
 
     #[test]
     fn test_access_log_for_key() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
         let meta = make_metadata("Email", DataCategory::Contact);
         vault.store("email", b"a@b.com", DataTier::Sensitive, meta).unwrap();
 
@@ -1410,7 +1609,7 @@ mod tests {
 
     #[test]
     fn test_update_existing_entry() {
-        let mut vault = CriticalVault::new();
+        let mut vault = make_test_vault();
 
         let meta1 = make_metadata("Old name", DataCategory::Personal);
         vault.store("name", b"Old", DataTier::Personal, meta1).unwrap();

@@ -88,9 +88,18 @@ impl PermissionLevel {
 
 // ─── Rate limiter ───────────────────────────────────────────────────────────
 
+/// Hard cap on the number of unique chat IDs tracked by the rate limiter.
+///
+/// Prevents unbounded HashMap growth if the bot is exposed to many chat IDs
+/// (e.g., misconfigured whitelist or an enumeration attack before Layer 1
+/// rejects the chat ID). 1024 is well above any realistic single-user
+/// deployment and provides a clear memory ceiling.
+const MAX_TRACKED_CHATS: usize = 1024;
+
 /// Sliding-window rate limiter per chat ID.
 pub struct RateLimiter {
     /// chat_id -> recent request timestamps.
+    /// Bounded to MAX_TRACKED_CHATS entries — enforced in `check_and_record()`.
     windows: HashMap<i64, Vec<Instant>>,
     /// Max requests per 60-second window.
     pub max_per_minute: u32,
@@ -110,6 +119,22 @@ impl RateLimiter {
     /// Record a request and check if the caller is within limits.
     pub fn check_and_record(&mut self, chat_id: i64) -> Result<(), SecurityError> {
         let now = Instant::now();
+
+        // Enforce bounded capacity: evict the entry with the fewest recent
+        // timestamps (least active) if the map is at its limit and this is
+        // a new chat ID.
+        if !self.windows.contains_key(&chat_id) && self.windows.len() >= MAX_TRACKED_CHATS {
+            let evict = self
+                .windows
+                .iter()
+                .min_by_key(|(_, ts)| ts.len())
+                .map(|(&id, _)| id);
+            if let Some(id) = evict {
+                warn!(evicted_chat_id = id, "rate-limiter map full — evicting least-active entry");
+                self.windows.remove(&id);
+            }
+        }
+
         let timestamps = self.windows.entry(chat_id).or_default();
 
         // Prune entries older than 1 hour.

@@ -11,6 +11,9 @@ use aura_types::tools::{find_tool, ParamType, ToolSchema};
 
 use super::entity::{Entity, EntityType};
 
+// Cap on recent entities retained in conversation context.
+const MAX_RECENT_ENTITIES: usize = 10;
+
 // ---------------------------------------------------------------------------
 // Slot types
 // ---------------------------------------------------------------------------
@@ -107,9 +110,9 @@ impl ConversationContext {
             self.recent_entities.push(entity.clone());
         }
 
-        // Keep only last 10 entities.
-        if self.recent_entities.len() > 10 {
-            let drain = self.recent_entities.len() - 10;
+        // Keep only last MAX_RECENT_ENTITIES entities.
+        if self.recent_entities.len() > MAX_RECENT_ENTITIES {
+            let drain = self.recent_entities.len() - MAX_RECENT_ENTITIES;
             self.recent_entities.drain(..drain);
         }
     }

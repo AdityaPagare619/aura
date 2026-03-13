@@ -198,10 +198,18 @@ pub struct DaemonState {
     pub cancel_flag: Arc<AtomicBool>,
     /// Onboarding status detected at startup.
     pub onboarding_status: OnboardingStatus,
-    /// Tracks the [`InputSource`] of the most recent System2 dispatch so the
-    /// `ConversationReply` handler can route the response back to the correct
-    /// bridge (voice, Telegram, etc.) instead of always using `Direct`.
-    pub last_system2_source: Option<InputSource>,
+    /// FIFO queue of originating [`InputSource`]s for in-flight System2 requests.
+    ///
+    /// Replaced the previous single-slot `last_system2_source: Option<InputSource>`
+    /// which caused reply misrouting when two System2 requests were in-flight
+    /// concurrently (e.g. a proactive trigger fires during a user request).
+    ///
+    /// On dispatch: `push_back(source)`.
+    /// On `ConversationReply` receipt: `pop_front()` to get the oldest in-flight
+    /// source (neocortex processes requests sequentially, so FIFO is correct).
+    /// Falls back to `InputSource::Direct` if the queue is empty.
+    /// Bounded to 64 entries to prevent unbounded growth on pathological inputs.
+    pub pending_system2_sources: std::collections::VecDeque<InputSource>,
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +391,7 @@ pub fn startup(config: AuraConfig) -> Result<(DaemonState, StartupReport), Start
         startup_time_ms: total_ms,
         cancel_flag,
         onboarding_status,
-        last_system2_source: None,
+        pending_system2_sources: std::collections::VecDeque::new(),
     };
 
     Ok((state, report))

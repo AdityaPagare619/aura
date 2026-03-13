@@ -204,19 +204,19 @@ impl VoiceEngine {
     }
 
     /// Speak text with given priority. Synthesizes via TTS and plays audio.
+    ///
+    /// `mood_hint` is the LLM's raw valence signal from `ConversationReply`
+    /// (a float in [-1.0, 1.0]). Pass `None` if no hint is available.
+    /// Voice parameters come from LLM mood_hint, not from personality computation.
     pub async fn speak(
         &mut self,
         text: &str,
         priority: SpeechPriority,
         context: &SpeechContext,
+        mood_hint: Option<f32>,
     ) -> VoiceResult<()> {
-        // Apply personality to TTS params
-        let mood = MoodState::default(); // TODO: get from Amygdala
-        let params = personality_voice::personality_to_tts_params(
-            &self.config.personality,
-            &mood,
-            context,
-        );
+        // Apply LLM mood_hint to TTS params — OCEAN scores are NOT used here.
+        let params = personality_voice::mood_to_tts_params(mood_hint, context);
         self.tts.set_params(params);
 
         // Synthesize

@@ -46,6 +46,13 @@ mod inner {
     /// Cached global reference to the `AuraDaemonBridge` class.
     static BRIDGE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
+    /// JNI class path for the Kotlin-side bridge.
+    ///
+    /// Must match the fully-qualified class name used in the Android project.
+    /// Changing this without updating the Kotlin class declaration will cause
+    /// `JNI_OnLoad` verification to fail with a clear error log.
+    const BRIDGE_CLASS_PATH: &str = "dev/aura/v4/AuraDaemonBridge";
+
     // ── JNI_OnLoad ──────────────────────────────────────────────────────
 
     /// Called by the Android Runtime when `libaura_daemon.so` is loaded.
@@ -68,6 +75,32 @@ mod inner {
         // Cache the VM for later `jni_env()` calls.
         if JAVA_VM.set(vm).is_err() {
             eprintln!("AURA JNI_OnLoad: JavaVM already initialised");
+        }
+
+        // Verify that the bridge class exists at load time so any class-path
+        // mismatch (e.g. Kotlin rename without updating BRIDGE_CLASS_PATH) fails
+        // loudly here rather than silently at the first JNI call.
+        match jni_env() {
+            Ok(mut env) => {
+                match env.find_class(BRIDGE_CLASS_PATH) {
+                    Ok(_) => {
+                        info!("AURA JNI_OnLoad: verified bridge class '{}'", BRIDGE_CLASS_PATH);
+                    }
+                    Err(e) => {
+                        error!(
+                            "AURA JNI_OnLoad: bridge class '{}' not found — \
+                             check Kotlin package name matches BRIDGE_CLASS_PATH: {e}",
+                            BRIDGE_CLASS_PATH
+                        );
+                        // Return -1 to abort library load; the JVM will throw
+                        // UnsatisfiedLinkError, making the misconfiguration obvious.
+                        return -1;
+                    }
+                }
+            }
+            Err(e) => {
+                error!("AURA JNI_OnLoad: could not obtain JNIEnv for class verification: {e}");
+            }
         }
 
         info!("AURA JNI_OnLoad: native library loaded");
@@ -95,8 +128,8 @@ mod inner {
     fn bridge_class<'a>(env: &mut JNIEnv<'a>) -> Result<&'static GlobalRef, PlatformError> {
         BRIDGE_CLASS.get_or_try_init(|| {
             let cls = env
-                .find_class("dev/aura/v4/AuraDaemonBridge")
-                .map_err(|e| PlatformError::JniFailed(format!("find AuraDaemonBridge: {e}")))?;
+                .find_class(BRIDGE_CLASS_PATH)
+                .map_err(|e| PlatformError::JniFailed(format!("find {BRIDGE_CLASS_PATH}: {e}")))?;
             env.new_global_ref(cls)
                 .map_err(|e| PlatformError::JniFailed(format!("global ref: {e}")))
         })
@@ -168,10 +201,16 @@ mod inner {
 
         let state = unsafe { *Box::from_raw(state_ptr as *mut crate::DaemonState) };
 
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("tokio runtime should initialise");
+        {
+            Ok(r) => r,
+            Err(e) => {
+                error!("nativeRun: failed to build tokio runtime: {e}");
+                return;
+            }
+        };
 
         rt.block_on(async {
             crate::daemon_core::main_loop::run(state).await;
@@ -589,6 +628,216 @@ mod inner {
     /// Invoke `AuraDaemonBridge.isNetworkAvailable()` → `Z`.
     pub fn jni_is_network_available() -> Result<bool, PlatformError> {
         call_bool_no_args("isNetworkAvailable")
+    }
+
+    // ── Action helpers (Path A — direct intents) ────────────────────────
+
+    /// Invoke `AuraDaemonBridge.launchApp(package)` → `Z`.
+    ///
+    /// Kotlin impl: `PackageManager.getLaunchIntentForPackage(package) +
+    /// startActivity()`.
+    pub fn jni_launch_app(package: &str) -> Result<bool, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let j_pkg = env
+            .new_string(package)
+            .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "launchApp",
+                "(Ljava/lang/String;)Z",
+                &[(&j_pkg).into()],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("launchApp: {e}")))?;
+        Ok(result.z().unwrap_or(false))
+    }
+
+    /// Invoke `AuraDaemonBridge.openUrl(url)` → `Z`.
+    ///
+    /// Kotlin impl: `Intent(ACTION_VIEW, Uri.parse(url)) + startActivity()`.
+    pub fn jni_open_url(url: &str) -> Result<bool, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let j_url = env
+            .new_string(url)
+            .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "openUrl",
+                "(Ljava/lang/String;)Z",
+                &[(&j_url).into()],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("openUrl: {e}")))?;
+        Ok(result.z().unwrap_or(false))
+    }
+
+    /// Invoke `AuraDaemonBridge.sendSms(recipient, body)` → `Z`.
+    ///
+    /// Kotlin impl: `SmsManager.getDefault().sendTextMessage()`.
+    pub fn jni_send_sms(recipient: &str, body: &str) -> Result<bool, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let j_recipient = env
+            .new_string(recipient)
+            .map_err(|e| PlatformError::JniFailed(format!("new_string recipient: {e}")))?;
+        let j_body = env
+            .new_string(body)
+            .map_err(|e| PlatformError::JniFailed(format!("new_string body: {e}")))?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "sendSms",
+                "(Ljava/lang/String;Ljava/lang/String;)Z",
+                &[(&j_recipient).into(), (&j_body).into()],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("sendSms: {e}")))?;
+        Ok(result.z().unwrap_or(false))
+    }
+
+    /// Invoke `AuraDaemonBridge.setAlarm(hour, minute, label)` → `Z`.
+    ///
+    /// Kotlin impl: `Intent(AlarmClock.ACTION_SET_ALARM) + startActivity()`.
+    pub fn jni_set_alarm(hour: u8, minute: u8, label: &str) -> Result<bool, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let j_label = env
+            .new_string(label)
+            .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "setAlarm",
+                "(IILjava/lang/String;)Z",
+                &[
+                    JValue::Int(hour as i32),
+                    JValue::Int(minute as i32),
+                    (&j_label).into(),
+                ],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("setAlarm: {e}")))?;
+        Ok(result.z().unwrap_or(false))
+    }
+
+    /// Invoke `AuraDaemonBridge.queryCalendar(startMs, endMs)` → `[B` (JSON bytes).
+    ///
+    /// Kotlin impl: `ContentResolver.query(CalendarContract.Events.CONTENT_URI)`.
+    pub fn jni_query_calendar(start_ms: i64, end_ms: i64) -> Result<Vec<u8>, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "queryCalendar",
+                "(JJ)[B",
+                &[JValue::Long(start_ms), JValue::Long(end_ms)],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("queryCalendar: {e}")))?;
+        let obj = result
+            .l()
+            .map_err(|e| PlatformError::JniFailed(format!("queryCalendar result: {e}")))?;
+        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let len = env
+            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+        let mut buf = vec![0i8; len];
+        env.get_byte_array_region(byte_array, 0, &mut buf)
+            .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
+        Ok(buf.into_iter().map(|b| b as u8).collect())
+    }
+
+    /// Invoke `AuraDaemonBridge.queryContacts(query)` → `[B` (JSON bytes).
+    ///
+    /// Kotlin impl: `ContentResolver.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI)`.
+    pub fn jni_query_contacts(query: &str) -> Result<Vec<u8>, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let j_query = env
+            .new_string(query)
+            .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "queryContacts",
+                "(Ljava/lang/String;)[B",
+                &[(&j_query).into()],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("queryContacts: {e}")))?;
+        let obj = result
+            .l()
+            .map_err(|e| PlatformError::JniFailed(format!("queryContacts result: {e}")))?;
+        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let len = env
+            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+        let mut buf = vec![0i8; len];
+        env.get_byte_array_region(byte_array, 0, &mut buf)
+            .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
+        Ok(buf.into_iter().map(|b| b as u8).collect())
+    }
+
+    /// Invoke `AuraDaemonBridge.queryNotifications()` → `[B` (JSON bytes).
+    ///
+    /// Kotlin impl: `NotificationListenerService.getActiveNotifications()`.
+    pub fn jni_query_notifications() -> Result<Vec<u8>, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let result = env
+            .call_static_method(cls.as_ref(), "queryNotifications", "()[B", &[])
+            .map_err(|e| PlatformError::JniFailed(format!("queryNotifications: {e}")))?;
+        let obj = result
+            .l()
+            .map_err(|e| PlatformError::JniFailed(format!("queryNotifications result: {e}")))?;
+        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let len = env
+            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+        let mut buf = vec![0i8; len];
+        env.get_byte_array_region(byte_array, 0, &mut buf)
+            .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
+        Ok(buf.into_iter().map(|b| b as u8).collect())
+    }
+
+    /// Invoke `AuraDaemonBridge.setBrightness(level)` → `Z`.
+    ///
+    /// Kotlin impl: `Settings.System.putInt(SCREEN_BRIGHTNESS)` +
+    /// `WindowManager.LayoutParams` for immediate effect.
+    /// `level` is in range `0.0..=1.0` (scaled to 0–255 on the Kotlin side).
+    pub fn jni_set_brightness(level: f32) -> Result<bool, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "setBrightness",
+                "(F)Z",
+                &[JValue::Float(level)],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("setBrightness: {e}")))?;
+        Ok(result.z().unwrap_or(false))
+    }
+
+    /// Invoke `AuraDaemonBridge.toggleWifi(enable)` → `Z`.
+    ///
+    /// Kotlin impl:
+    /// - Android < 10: `WifiManager.setWifiEnabled(enable)`.
+    /// - Android ≥ 10: `Intent(Settings.ACTION_WIFI_SETTINGS)` via startActivity
+    ///   (API restriction — direct toggle not available without root/DeviceAdmin).
+    /// Returns `true` if the intent/call was dispatched; the caller must verify
+    /// the Wi-Fi state via `jni_get_network_type()` to confirm the change.
+    pub fn jni_toggle_wifi(enable: bool) -> Result<bool, PlatformError> {
+        let mut env = jni_env()?;
+        let cls = bridge_class(&mut env)?;
+        let result = env
+            .call_static_method(
+                cls.as_ref(),
+                "toggleWifi",
+                "(Z)Z",
+                &[JValue::Bool(enable as jboolean)],
+            )
+            .map_err(|e| PlatformError::JniFailed(format!("toggleWifi: {e}")))?;
+        Ok(result.z().unwrap_or(false))
     }
 
     // ── OEM detection ───────────────────────────────────────────────────
@@ -1035,6 +1284,109 @@ pub fn jni_has_autostart_permission() -> Result<bool, PlatformError> {
     Ok(true)
 }
 
+// ── Action intents ───────────────────────────────────────────────────────────
+
+/// Launch an app by package name via `PackageManager` + `startActivity`.
+#[cfg(target_os = "android")]
+pub fn jni_launch_app(package: &str) -> Result<bool, PlatformError> {
+    inner::jni_launch_app(package)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_launch_app(_package: &str) -> Result<bool, PlatformError> {
+    Ok(true)
+}
+
+/// Open a URL via `ACTION_VIEW` intent.
+#[cfg(target_os = "android")]
+pub fn jni_open_url(url: &str) -> Result<bool, PlatformError> {
+    inner::jni_open_url(url)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_open_url(_url: &str) -> Result<bool, PlatformError> {
+    Ok(true)
+}
+
+/// Send an SMS via `SmsManager.sendTextMessage`.
+#[cfg(target_os = "android")]
+pub fn jni_send_sms(recipient: &str, body: &str) -> Result<bool, PlatformError> {
+    inner::jni_send_sms(recipient, body)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_send_sms(_recipient: &str, _body: &str) -> Result<bool, PlatformError> {
+    Ok(true)
+}
+
+/// Set an alarm via `AlarmClock.ACTION_SET_ALARM`.
+#[cfg(target_os = "android")]
+pub fn jni_set_alarm(hour: u8, minute: u8, label: &str) -> Result<bool, PlatformError> {
+    inner::jni_set_alarm(hour, minute, label)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_set_alarm(_hour: u8, _minute: u8, _label: &str) -> Result<bool, PlatformError> {
+    Ok(true)
+}
+
+/// Set screen brightness (0.0–1.0) via `Settings.System.SCREEN_BRIGHTNESS`.
+#[cfg(target_os = "android")]
+pub fn jni_set_brightness(level: f32) -> Result<bool, PlatformError> {
+    inner::jni_set_brightness(level)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_set_brightness(_level: f32) -> Result<bool, PlatformError> {
+    Ok(true)
+}
+
+/// Toggle Wi-Fi via `WifiManager` (or Settings intent on Android ≥ 10).
+#[cfg(target_os = "android")]
+pub fn jni_toggle_wifi(enable: bool) -> Result<bool, PlatformError> {
+    inner::jni_toggle_wifi(enable)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_toggle_wifi(_enable: bool) -> Result<bool, PlatformError> {
+    Ok(true)
+}
+
+// ── Content provider queries (return JSON bytes) ─────────────────────────────
+
+/// Query `CalendarContract` events in `[start_ms, end_ms)` → JSON bytes.
+#[cfg(target_os = "android")]
+pub fn jni_query_calendar(start_ms: i64, end_ms: i64) -> Result<Vec<u8>, PlatformError> {
+    inner::jni_query_calendar(start_ms, end_ms)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_query_calendar(_start_ms: i64, _end_ms: i64) -> Result<Vec<u8>, PlatformError> {
+    Ok(b"[]".to_vec())
+}
+
+/// Query `ContactsContract` with a name/number filter → JSON bytes.
+#[cfg(target_os = "android")]
+pub fn jni_query_contacts(query: &str) -> Result<Vec<u8>, PlatformError> {
+    inner::jni_query_contacts(query)
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_query_contacts(_query: &str) -> Result<Vec<u8>, PlatformError> {
+    Ok(b"[]".to_vec())
+}
+
+/// Query active notifications via `NotificationListenerService` → JSON bytes.
+#[cfg(target_os = "android")]
+pub fn jni_query_notifications() -> Result<Vec<u8>, PlatformError> {
+    inner::jni_query_notifications()
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_query_notifications() -> Result<Vec<u8>, PlatformError> {
+    Ok(b"[]".to_vec())
+}
+
 // ─── Tests (desktop mock paths) ─────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1214,5 +1566,62 @@ mod tests {
     #[test]
     fn test_autostart_permission_desktop_mock() {
         assert!(jni_has_autostart_permission().unwrap());
+    }
+
+    // ── Action intent mock tests ────────────────────────────────────────
+
+    #[test]
+    fn test_launch_app_desktop_mock() {
+        assert!(jni_launch_app("com.example.app").unwrap());
+    }
+
+    #[test]
+    fn test_open_url_desktop_mock() {
+        assert!(jni_open_url("https://example.com").unwrap());
+    }
+
+    #[test]
+    fn test_send_sms_desktop_mock() {
+        assert!(jni_send_sms("+1234567890", "hello").unwrap());
+    }
+
+    #[test]
+    fn test_set_alarm_desktop_mock() {
+        assert!(jni_set_alarm(7, 30, "wake up").unwrap());
+    }
+
+    #[test]
+    fn test_set_brightness_desktop_mock() {
+        assert!(jni_set_brightness(0.75).unwrap());
+    }
+
+    #[test]
+    fn test_toggle_wifi_enable_desktop_mock() {
+        assert!(jni_toggle_wifi(true).unwrap());
+    }
+
+    #[test]
+    fn test_toggle_wifi_disable_desktop_mock() {
+        assert!(jni_toggle_wifi(false).unwrap());
+    }
+
+    // ── Content provider mock tests ─────────────────────────────────────
+
+    #[test]
+    fn test_query_calendar_desktop_mock() {
+        let bytes = jni_query_calendar(0, 1_000_000).unwrap();
+        assert_eq!(&bytes, b"[]");
+    }
+
+    #[test]
+    fn test_query_contacts_desktop_mock() {
+        let bytes = jni_query_contacts("alice").unwrap();
+        assert_eq!(&bytes, b"[]");
+    }
+
+    #[test]
+    fn test_query_notifications_desktop_mock() {
+        let bytes = jni_query_notifications().unwrap();
+        assert_eq!(&bytes, b"[]");
     }
 }

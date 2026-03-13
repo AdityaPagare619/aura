@@ -4,6 +4,11 @@
 //! Each `InferenceMode` gets a GBNF grammar that ensures the model produces
 //! syntactically valid output. Conversational mode uses no grammar (free text).
 //!
+//! Phase 3: this entire module is wired when `aura_llama_sys` exposes the
+//! grammar sampling API (`llama_sampling_grammar`). Until then all items are
+//! intentionally dead scaffolding.
+#![allow(dead_code)]
+//!
 //! GBNF is the grammar format used by llama.cpp for constraining token
 //! generation. It is a BNF-like DSL that defines the shape of valid outputs.
 //! The model can only generate tokens that match the grammar at each step.
@@ -32,13 +37,18 @@ pub enum GrammarKind {
 impl GrammarKind {
     /// Select the appropriate grammar for an inference mode.
     ///
-    /// Conversational mode uses free text; all structured modes get grammars.
+    /// Returns `None` for `Conversational` — that mode uses free-text generation
+    /// with no grammar constraint. All structured modes return `Some(grammar)`.
+    ///
+    /// Callers that previously matched against `GrammarKind::FreeText` should
+    /// instead handle the `None` case to skip grammar application entirely.
     #[must_use]
-    pub fn for_mode(mode: InferenceMode) -> Self {
+    pub fn for_mode(mode: InferenceMode) -> Option<Self> {
         match mode {
-            InferenceMode::Planner | InferenceMode::Strategist => GrammarKind::ActionPlan,
-            InferenceMode::Composer => GrammarKind::DslSteps,
-            InferenceMode::Conversational => GrammarKind::FreeText,
+            InferenceMode::Planner | InferenceMode::Strategist => Some(GrammarKind::ActionPlan),
+            InferenceMode::Composer => Some(GrammarKind::DslSteps),
+            // Conversational produces free text — no grammar constraint.
+            InferenceMode::Conversational => None,
         }
     }
 
@@ -104,10 +114,12 @@ pub fn compile_grammar(kind: GrammarKind) -> Option<CompiledGrammar> {
 
 /// Compile a grammar for an inference mode.
 ///
-/// Convenience wrapper around `compile_grammar(GrammarKind::for_mode(mode))`.
+/// Returns `None` for `Conversational` (no grammar needed) and for any mode
+/// that maps to `None` via `GrammarKind::for_mode`. Delegates to
+/// `compile_grammar` for all structured modes.
 #[tracing::instrument(level = "debug")]
 pub fn grammar_for_mode(mode: InferenceMode) -> Option<CompiledGrammar> {
-    compile_grammar(GrammarKind::for_mode(mode))
+    compile_grammar(GrammarKind::for_mode(mode)?)
 }
 
 // ─── GBNF grammar definitions ──────────────────────────────────────────────
@@ -327,48 +339,171 @@ ws ::= [ \t\n\r]*
     .to_string()
 }
 
+// ─── Error types ────────────────────────────────────────────────────────────
+
+/// Error returned by `validate_output` when structured output does not match
+/// the expected grammar contract.
+///
+/// Variants carry enough detail for the inference engine to decide whether to
+/// retry, cascade, or surface an error code to the daemon.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GrammarError {
+    /// The output was empty (or only whitespace).
+    EmptyOutput,
+    /// The output is missing a required top-level field.
+    MissingField {
+        /// Name of the expected JSON key that was absent.
+        field: &'static str,
+    },
+    /// The output has the wrong top-level structure (e.g. object instead of array).
+    InvalidStructure {
+        /// Human-readable description of the structural mismatch.
+        reason: String,
+    },
+}
+
+impl std::fmt::Display for GrammarError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrammarError::EmptyOutput => write!(f, "grammar error: output is empty"),
+            GrammarError::MissingField { field } => {
+                write!(f, "grammar error: missing required field \"{field}\"")
+            }
+            GrammarError::InvalidStructure { reason } => {
+                write!(f, "grammar error: invalid structure — {reason}")
+            }
+        }
+    }
+}
+
+/// Error returned by structured output parsers (`ReflectionVerdict::parse`,
+/// `ChainOfThoughtOutput::parse`).
+///
+/// LLM output is untrusted — every variant avoids panicking and instead
+/// returns a specific, actionable error so callers can log and handle it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseError {
+    /// The raw string was not valid JSON.
+    InvalidJson {
+        /// The serde_json error message.
+        detail: String,
+    },
+    /// The JSON was valid but not an object at the top level.
+    NotAnObject,
+    /// A required field was absent from the JSON object.
+    MissingField {
+        /// Name of the absent JSON key.
+        field: &'static str,
+    },
+    /// A field was present but had an unexpected type or value.
+    InvalidField {
+        /// Name of the JSON key.
+        field: &'static str,
+        /// Description of what was wrong.
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::InvalidJson { detail } => {
+                write!(f, "parse error: invalid JSON — {detail}")
+            }
+            ParseError::NotAnObject => {
+                write!(f, "parse error: expected a JSON object at the top level")
+            }
+            ParseError::MissingField { field } => {
+                write!(f, "parse error: missing required field \"{field}\"")
+            }
+            ParseError::InvalidField { field, detail } => {
+                write!(f, "parse error: field \"{field}\" — {detail}")
+            }
+        }
+    }
+}
+
 // ─── Grammar validation helpers ─────────────────────────────────────────────
 
 /// Validate that a generated string matches the expected grammar structure.
 ///
 /// This is a lightweight post-generation check — the grammar sampler should
-/// have already enforced this during generation, but we double-check on the
-/// parsing side as a safety net.
+/// have already enforced structure during generation, but we double-check on
+/// the parsing side as a safety net against truncated or malformed output.
 ///
-/// Returns `true` if the output appears structurally valid for the grammar kind.
+/// Returns `Ok(())` if the output satisfies the structural contract for `kind`.
+/// Returns `Err(GrammarError)` with a specific error if it does not, so callers
+/// can decide whether to retry or surface an error code to the daemon.
 #[tracing::instrument(level = "trace", skip(output))]
-pub fn validate_output(kind: GrammarKind, output: &str) -> bool {
+pub fn validate_output(kind: GrammarKind, output: &str) -> Result<(), GrammarError> {
     let trimmed = output.trim();
+
+    if trimmed.is_empty() {
+        return Err(GrammarError::EmptyOutput);
+    }
+
     match kind {
         GrammarKind::ActionPlan => {
-            // Must be a JSON object with goal_description and steps.
-            trimmed.starts_with('{')
-                && trimmed.ends_with('}')
-                && trimmed.contains("\"goal_description\"")
-                && trimmed.contains("\"steps\"")
+            if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+                return Err(GrammarError::InvalidStructure {
+                    reason: "expected a JSON object (\"{ ... }\")".to_string(),
+                });
+            }
+            if !trimmed.contains("\"goal_description\"") {
+                return Err(GrammarError::MissingField { field: "goal_description" });
+            }
+            if !trimmed.contains("\"steps\"") {
+                return Err(GrammarError::MissingField { field: "steps" });
+            }
+            Ok(())
         }
         GrammarKind::DslSteps => {
-            // Must be a JSON array.
-            trimmed.starts_with('[') && trimmed.ends_with(']')
+            if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+                return Err(GrammarError::InvalidStructure {
+                    reason: "expected a JSON array (\"[ ... ]\")".to_string(),
+                });
+            }
+            Ok(())
         }
         GrammarKind::ChainOfThought => {
-            // Must be a JSON object with thinking and action fields.
-            trimmed.starts_with('{')
-                && trimmed.ends_with('}')
-                && trimmed.contains("\"thinking\"")
-                && trimmed.contains("\"action\"")
+            if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+                return Err(GrammarError::InvalidStructure {
+                    reason: "expected a JSON object (\"{ ... }\")".to_string(),
+                });
+            }
+            if !trimmed.contains("\"thinking\"") {
+                return Err(GrammarError::MissingField { field: "thinking" });
+            }
+            if !trimmed.contains("\"action\"") {
+                return Err(GrammarError::MissingField { field: "action" });
+            }
+            Ok(())
         }
         GrammarKind::ReflectionVerdict => {
-            // Must be a JSON object with safe, correct, verdict fields.
-            trimmed.starts_with('{') && trimmed.ends_with('}') && trimmed.contains("\"verdict\"")
+            if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+                return Err(GrammarError::InvalidStructure {
+                    reason: "expected a JSON object (\"{ ... }\")".to_string(),
+                });
+            }
+            if !trimmed.contains("\"verdict\"") {
+                return Err(GrammarError::MissingField { field: "verdict" });
+            }
+            Ok(())
         }
         GrammarKind::ConfidenceAssessment => {
-            // Must be a JSON object with confidence field.
-            trimmed.starts_with('{') && trimmed.ends_with('}') && trimmed.contains("\"confidence\"")
+            if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+                return Err(GrammarError::InvalidStructure {
+                    reason: "expected a JSON object (\"{ ... }\")".to_string(),
+                });
+            }
+            if !trimmed.contains("\"confidence\"") {
+                return Err(GrammarError::MissingField { field: "confidence" });
+            }
+            Ok(())
         }
         GrammarKind::FreeText => {
-            // Any non-empty string is valid.
-            !trimmed.is_empty()
+            // Any non-empty string is valid free text.
+            Ok(())
         }
     }
 }
@@ -382,6 +517,11 @@ pub struct ReflectionVerdict {
     pub correct: bool,
     pub concerns: Vec<String>,
     pub verdict: VerdictOutcome,
+    /// Primary reason / first concern summarising the verdict (empty if concerns is empty).
+    pub reason: String,
+    /// Brainstem's self-reported confidence in this verdict (0.0–1.0).
+    /// Extracted from `"confidence"` field if present; defaults to `1.0` when absent.
+    pub confidence: f32,
 }
 
 /// Outcome of a reflection verdict.
@@ -395,38 +535,97 @@ pub enum VerdictOutcome {
 impl ReflectionVerdict {
     /// Parse a reflection verdict from JSON output.
     ///
-    /// Returns `None` if parsing fails — the caller should treat this as
-    /// a non-blocking issue (Layer 4 is advisory, not mandatory).
-    pub fn parse(json: &str) -> Option<Self> {
+    /// Returns `Err(ParseError)` on any structural or type failure so the
+    /// inference engine can log a specific error instead of silently discarding.
+    ///
+    /// **No panics** — all access to untrusted JSON is guarded.
+    pub fn parse(json: &str) -> Result<Self, ParseError> {
         let trimmed = json.trim();
 
-        // Use serde_json for robust parsing.
-        let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-        let obj = value.as_object()?;
+        let value: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| ParseError::InvalidJson {
+                detail: e.to_string(),
+            })?;
 
-        let safe = obj.get("safe")?.as_bool()?;
-        let correct = obj.get("correct")?.as_bool()?;
+        let obj = value.as_object().ok_or(ParseError::NotAnObject)?;
 
-        let concerns = obj
-            .get("concerns")?
-            .as_array()?
+        let safe = obj
+            .get("safe")
+            .ok_or(ParseError::MissingField { field: "safe" })?
+            .as_bool()
+            .ok_or(ParseError::InvalidField {
+                field: "safe",
+                detail: "expected boolean".to_string(),
+            })?;
+
+        let correct = obj
+            .get("correct")
+            .ok_or(ParseError::MissingField { field: "correct" })?
+            .as_bool()
+            .ok_or(ParseError::InvalidField {
+                field: "correct",
+                detail: "expected boolean".to_string(),
+            })?;
+
+        let concerns: Vec<String> = obj
+            .get("concerns")
+            .ok_or(ParseError::MissingField { field: "concerns" })?
+            .as_array()
+            .ok_or(ParseError::InvalidField {
+                field: "concerns",
+                detail: "expected array".to_string(),
+            })?
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_str()
+                    .map(String::from)
+                    .ok_or(ParseError::InvalidField {
+                        field: "concerns",
+                        detail: format!("element {i} is not a string"),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let verdict_str = obj.get("verdict")?.as_str()?;
+        let verdict_str = obj
+            .get("verdict")
+            .ok_or(ParseError::MissingField { field: "verdict" })?
+            .as_str()
+            .ok_or(ParseError::InvalidField {
+                field: "verdict",
+                detail: "expected string".to_string(),
+            })?;
+
         let verdict = match verdict_str {
             "approve" => VerdictOutcome::Approve,
             "flag" => VerdictOutcome::Flag,
             "reject" => VerdictOutcome::Reject,
-            _ => return None,
+            other => {
+                return Err(ParseError::InvalidField {
+                    field: "verdict",
+                    detail: format!("unknown value \"{other}\"; expected approve|flag|reject"),
+                })
+            }
         };
 
-        Some(ReflectionVerdict {
+        // Optional confidence field — default to 1.0 if absent (grammar enforces
+        // the four required fields; confidence is an extension for richer verdicts).
+        let confidence = obj
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .map(|v| (v as f32).clamp(0.0, 1.0))
+            .unwrap_or(1.0);
+
+        // Primary reason: first concern, or empty string.
+        let reason = concerns.first().cloned().unwrap_or_default();
+
+        Ok(ReflectionVerdict {
             safe,
             correct,
             concerns,
             verdict,
+            reason,
+            confidence,
         })
     }
 
@@ -440,6 +639,15 @@ impl ReflectionVerdict {
     #[must_use]
     pub fn needs_retry(&self) -> bool {
         matches!(self.verdict, VerdictOutcome::Flag | VerdictOutcome::Reject)
+    }
+
+    /// Whether this verdict demands that the response be discarded entirely.
+    ///
+    /// A rejected response is not retried — it is surfaced as an error to the
+    /// daemon. This differs from `needs_retry()` which covers Flag too.
+    #[must_use]
+    pub fn should_reject(&self) -> bool {
+        self.verdict == VerdictOutcome::Reject
     }
 }
 
@@ -457,39 +665,52 @@ pub struct ChainOfThoughtOutput {
 impl ChainOfThoughtOutput {
     /// Parse a chain-of-thought JSON output.
     ///
-    /// Falls back to treating the entire output as the action if CoT
-    /// parsing fails (graceful degradation — never refuse to produce output).
-    pub fn parse(json: &str) -> Self {
+    /// Returns `Err(ParseError)` on any structural failure — LLM output is
+    /// untrusted and a fallback that silently swallows malformed CoT would
+    /// hide bugs at the grammar-sampler or prompt level. Callers that need
+    /// graceful degradation should handle the error explicitly.
+    ///
+    /// **No panics** — all access to untrusted JSON is guarded.
+    pub fn parse(json: &str) -> Result<Self, ParseError> {
         let trimmed = json.trim();
 
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(obj) = value.as_object() {
-                let thinking = obj
-                    .get("thinking")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let action = obj
-                    .get("action")
-                    .map(|v| {
-                        if v.is_string() {
-                            v.as_str().unwrap_or("").to_string()
-                        } else {
-                            // Action could be a nested JSON object (e.g., plan).
-                            serde_json::to_string(v).unwrap_or_default()
-                        }
-                    })
-                    .unwrap_or_default();
+        let value: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| ParseError::InvalidJson {
+                detail: e.to_string(),
+            })?;
 
-                return ChainOfThoughtOutput { thinking, action };
-            }
-        }
+        let obj = value.as_object().ok_or(ParseError::NotAnObject)?;
 
-        // Fallback: entire output is the action, no thinking extracted.
-        ChainOfThoughtOutput {
-            thinking: String::new(),
-            action: trimmed.to_string(),
-        }
+        let thinking = obj
+            .get("thinking")
+            .ok_or(ParseError::MissingField { field: "thinking" })?
+            .as_str()
+            .ok_or(ParseError::InvalidField {
+                field: "thinking",
+                detail: "expected string".to_string(),
+            })?
+            .to_string();
+
+        let action_val = obj
+            .get("action")
+            .ok_or(ParseError::MissingField { field: "action" })?;
+
+        // `action` may be a plain string or a nested JSON object (e.g., an
+        // ActionPlan). Serialize nested objects back to a JSON string so callers
+        // always receive a `String` regardless of the inner shape.
+        let action = if action_val.is_string() {
+            action_val
+                .as_str()
+                .expect("is_string() guarantees as_str() succeeds")
+                .to_string()
+        } else {
+            serde_json::to_string(action_val).map_err(|e| ParseError::InvalidField {
+                field: "action",
+                detail: format!("could not re-serialize nested value: {e}"),
+            })?
+        };
+
+        Ok(ChainOfThoughtOutput { thinking, action })
     }
 }
 
@@ -564,20 +785,18 @@ mod tests {
     fn grammar_kind_for_modes() {
         assert_eq!(
             GrammarKind::for_mode(InferenceMode::Planner),
-            GrammarKind::ActionPlan
+            Some(GrammarKind::ActionPlan)
         );
         assert_eq!(
             GrammarKind::for_mode(InferenceMode::Strategist),
-            GrammarKind::ActionPlan
+            Some(GrammarKind::ActionPlan)
         );
         assert_eq!(
             GrammarKind::for_mode(InferenceMode::Composer),
-            GrammarKind::DslSteps
+            Some(GrammarKind::DslSteps)
         );
-        assert_eq!(
-            GrammarKind::for_mode(InferenceMode::Conversational),
-            GrammarKind::FreeText
-        );
+        // Conversational returns None — no grammar constraint.
+        assert_eq!(GrammarKind::for_mode(InferenceMode::Conversational), None);
     }
 
     #[test]
@@ -668,41 +887,38 @@ mod tests {
     #[test]
     fn validate_action_plan_output() {
         let valid = r#"{"goal_description": "test", "steps": [], "estimated_duration_ms": 1000, "confidence": 0.9}"#;
-        assert!(validate_output(GrammarKind::ActionPlan, valid));
+        assert!(validate_output(GrammarKind::ActionPlan, valid).is_ok());
 
         let invalid = "just some text";
-        assert!(!validate_output(GrammarKind::ActionPlan, invalid));
+        assert!(validate_output(GrammarKind::ActionPlan, invalid).is_err());
     }
 
     #[test]
     fn validate_dsl_steps_output() {
         let valid = r#"[{"action": {"Tap": {"x": 1, "y": 2}}, "target": null, "timeout_ms": 1000, "on_failure": {"Retry": {"max": 3}}}]"#;
-        assert!(validate_output(GrammarKind::DslSteps, valid));
+        assert!(validate_output(GrammarKind::DslSteps, valid).is_ok());
 
         let empty_array = "[]";
-        assert!(validate_output(GrammarKind::DslSteps, empty_array));
+        assert!(validate_output(GrammarKind::DslSteps, empty_array).is_ok());
 
         let invalid = "not an array";
-        assert!(!validate_output(GrammarKind::DslSteps, invalid));
+        assert!(validate_output(GrammarKind::DslSteps, invalid).is_err());
     }
 
     #[test]
     fn validate_cot_output() {
         let valid = r#"{"thinking": "step by step", "action": "do something"}"#;
-        assert!(validate_output(GrammarKind::ChainOfThought, valid));
+        assert!(validate_output(GrammarKind::ChainOfThought, valid).is_ok());
 
         let missing_thinking = r#"{"action": "do something"}"#;
-        assert!(!validate_output(
-            GrammarKind::ChainOfThought,
-            missing_thinking
-        ));
+        assert!(validate_output(GrammarKind::ChainOfThought, missing_thinking).is_err());
     }
 
     #[test]
     fn validate_free_text() {
-        assert!(validate_output(GrammarKind::FreeText, "any text"));
-        assert!(!validate_output(GrammarKind::FreeText, ""));
-        assert!(!validate_output(GrammarKind::FreeText, "   "));
+        assert!(validate_output(GrammarKind::FreeText, "any text").is_ok());
+        assert!(validate_output(GrammarKind::FreeText, "").is_err());
+        assert!(validate_output(GrammarKind::FreeText, "   ").is_err());
     }
 
     #[test]
@@ -736,19 +952,22 @@ mod tests {
         assert!(!verdict.safe);
         assert_eq!(verdict.verdict, VerdictOutcome::Reject);
         assert!(verdict.needs_retry());
+        assert!(verdict.should_reject());
+        assert!(!verdict.is_approved());
+        assert_eq!(verdict.reason, "unsafe action");
     }
 
     #[test]
     fn parse_reflection_verdict_invalid_json() {
-        assert!(ReflectionVerdict::parse("not json").is_none());
-        assert!(ReflectionVerdict::parse("{}").is_none());
-        assert!(ReflectionVerdict::parse(r#"{"safe": true}"#).is_none());
+        assert!(ReflectionVerdict::parse("not json").is_err());
+        assert!(ReflectionVerdict::parse("{}").is_err());
+        assert!(ReflectionVerdict::parse(r#"{"safe": true}"#).is_err());
     }
 
     #[test]
     fn parse_chain_of_thought_valid() {
         let json = r#"{"thinking": "First I need to open settings, then find WiFi", "action": "open settings"}"#;
-        let cot = ChainOfThoughtOutput::parse(json);
+        let cot = ChainOfThoughtOutput::parse(json).unwrap();
         assert!(cot.thinking.contains("open settings"));
         assert_eq!(cot.action, "open settings");
     }
@@ -756,17 +975,21 @@ mod tests {
     #[test]
     fn parse_chain_of_thought_nested_action() {
         let json = r#"{"thinking": "planning steps", "action": {"goal": "test", "steps": []}}"#;
-        let cot = ChainOfThoughtOutput::parse(json);
+        let cot = ChainOfThoughtOutput::parse(json).unwrap();
         assert!(cot.thinking.contains("planning"));
         assert!(cot.action.contains("goal"));
     }
 
     #[test]
-    fn parse_chain_of_thought_fallback() {
-        let not_json = "just a plain response without CoT structure";
-        let cot = ChainOfThoughtOutput::parse(not_json);
-        assert!(cot.thinking.is_empty());
-        assert_eq!(cot.action, not_json);
+    fn parse_chain_of_thought_invalid_returns_err() {
+        // Non-JSON input must return Err, not silently fall back.
+        assert!(ChainOfThoughtOutput::parse("just a plain response without CoT structure").is_err());
+        // Valid JSON but not an object.
+        assert!(ChainOfThoughtOutput::parse("[1, 2, 3]").is_err());
+        // Object missing `thinking` field.
+        assert!(ChainOfThoughtOutput::parse(r#"{"action": "do it"}"#).is_err());
+        // Object missing `action` field.
+        assert!(ChainOfThoughtOutput::parse(r#"{"thinking": "hmm"}"#).is_err());
     }
 
     #[test]

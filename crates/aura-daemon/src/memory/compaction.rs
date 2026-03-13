@@ -43,33 +43,31 @@ impl ContextCompactor {
 
     /// Compacts a list of slots into a single summarized slot.
     #[instrument(skip_all)]
-    pub fn compact(&self, slots_to_compact: &[&WorkingSlot], now_ms: u64) -> WorkingSlot {
+    pub fn compact(&self, slots_to_compact: &[&WorkingSlot], _now_ms: u64) -> WorkingSlot {
         debug!("Compacting {} slots", slots_to_compact.len());
-        
+
         let mut combined_content = String::new();
         let mut min_ts = u64::MAX;
         let mut max_importance = 0.0_f32;
 
-        for (i, slot) in slots_to_compact.iter().enumerate() {
-            // Extractive summarization heuristic: keep first and last few events.
-            if i < 3 || i >= slots_to_compact.len().saturating_sub(2) {
-                combined_content.push_str(&slot.content);
+        for slot in slots_to_compact.iter() {
+            // Concatenate all content verbatim — no extractive summarization.
+            // The LLM is responsible for understanding and summarizing this content.
+            if !combined_content.is_empty() {
                 combined_content.push_str("; ");
-            } else if i == 3 {
-                combined_content.push_str("... ");
             }
+            combined_content.push_str(&slot.content);
             min_ts = min_ts.min(slot.timestamp_ms);
             max_importance = max_importance.max(slot.importance);
         }
 
-        let summary = format!("[Compacted Session ({} events)] {}", slots_to_compact.len(), combined_content);
-
         WorkingSlot {
-            content: summary,
+            // Raw concatenated content only — no labels, no injected strings.
+            content: combined_content,
             source: EventSource::Internal,
             importance: max_importance.max(0.5),
-            timestamp_ms: min_ts, 
-            ttl_ms: 10 * 60 * 60 * 1000, // 10 hours for a summary
+            timestamp_ms: min_ts,
+            ttl_ms: 10 * 60 * 60 * 1000, // 10 hours for a compacted slot
         }
     }
 }
@@ -90,12 +88,32 @@ mod tests {
         let s1 = WorkingSlot { content: "A".to_string(), source: EventSource::UserCommand, importance: 0.8, timestamp_ms: 100, ttl_ms: 0 };
         let s2 = WorkingSlot { content: "B".to_string(), source: EventSource::UserCommand, importance: 0.2, timestamp_ms: 110, ttl_ms: 0 };
         let s3 = WorkingSlot { content: "C".to_string(), source: EventSource::UserCommand, importance: 0.3, timestamp_ms: 120, ttl_ms: 0 };
-        
+
         let slots = [&s1, &s2, &s3];
-        let summary = compactor.compact(&slots, 200);
-        assert!(summary.content.contains("Compacted Session"));
-        assert!(summary.content.contains("A; B; C;"));
-        assert_eq!(summary.importance, 0.8);
-        assert_eq!(summary.timestamp_ms, 100);
+        let result = compactor.compact(&slots, 200);
+        // All content concatenated verbatim — no labels, no truncation, no heuristics.
+        assert_eq!(result.content, "A; B; C");
+        assert_eq!(result.importance, 0.8);
+        assert_eq!(result.timestamp_ms, 100);
+    }
+
+    #[test]
+    fn test_compaction_all_slots_preserved() {
+        // Verifies no extractive heuristic truncates beyond the first/last N.
+        let compactor = ContextCompactor::new();
+        let make_slot = |s: &str| WorkingSlot {
+            content: s.to_string(),
+            source: EventSource::UserCommand,
+            importance: 0.5,
+            timestamp_ms: 100,
+            ttl_ms: 0,
+        };
+        let slots_data: Vec<WorkingSlot> = (0..10).map(|i| make_slot(&format!("slot{i}"))).collect();
+        let refs: Vec<&WorkingSlot> = slots_data.iter().collect();
+        let result = compactor.compact(&refs, 200);
+        // Every slot must be present.
+        for i in 0..10 {
+            assert!(result.content.contains(&format!("slot{i}")), "slot{i} missing from compacted content");
+        }
     }
 }

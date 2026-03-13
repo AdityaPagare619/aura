@@ -40,6 +40,7 @@ const MAX_CONFIDENCE: f32 = 0.99;
 const MAX_TEMPLATES: usize = 128;
 
 /// Maximum number of parameters per template.
+#[allow(dead_code)] // Phase 8: used by goal template parameter validation bound
 const MAX_PARAMS_PER_TEMPLATE: usize = 16;
 
 /// Maximum number of learned templates.
@@ -643,51 +644,40 @@ impl GoalRegistry {
 
     /// Score how well a template matches a set of intent words.
     ///
-    /// Returns 0.0–1.0 based on keyword overlap.
+    /// Counts keyword intersections between the template's keywords and the intent words.
     fn template_match_score(template: &GoalTemplate, intent_words: &[&str]) -> f32 {
+        // Builtin templates: LLM matches — Rust returns 0.0 (Theater AGI banned).
+        // Learned templates: user explicitly provided keywords when teaching AURA.
+        //   Matching against those exact keywords is structural data retrieval, not
+        //   semantic reasoning — acceptable Rust per design philosophy.
+        if !template.learned {
+            return 0.0;
+        }
         if template.keywords.is_empty() || intent_words.is_empty() {
             return 0.0;
         }
-        let hits = template
+        let matches = template
             .keywords
             .iter()
             .filter(|kw| {
                 let kw_lower = kw.to_ascii_lowercase();
-                intent_words.iter().any(|w| w.contains(kw_lower.as_str()))
+                intent_words
+                    .iter()
+                    .any(|w| w.contains(kw_lower.as_str()) || kw_lower.contains(*w))
             })
             .count();
-        hits as f32 / template.keywords.len() as f32
+        matches as f32 / template.keywords.len() as f32
     }
 
     /// Extract parameter values from intent text based on a template's definitions.
     ///
-    /// Uses a very simple heuristic: if the intent text contains text after a
-    /// keyword that looks like a param value, capture it. This is intentionally
-    /// simplistic — the full NLU pipeline refines parameters later.
+    /// LLM extracts params — Rust returns empty vec as neutral default.
     fn extract_params_from_intent(
-        template: &GoalTemplate,
-        intent_lower: &str,
+        _template: &GoalTemplate,
+        _intent_lower: &str,
     ) -> Vec<(String, String)> {
-        let mut extracted = Vec::new();
-        for def in &template.params {
-            // Try to find the param name mentioned in the intent text and capture what follows.
-            let name_lower = def.name.to_ascii_lowercase().replace('_', " ");
-            if let Some(pos) = intent_lower.find(&name_lower) {
-                let after = &intent_lower[pos + name_lower.len()..];
-                let value = after
-                    .trim()
-                    .split_whitespace()
-                    .take(5)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if !value.is_empty() {
-                    extracted.push((def.name.clone(), value));
-                }
-            } else if let Some(ref default) = def.default_value {
-                extracted.push((def.name.clone(), default.clone()));
-            }
-        }
-        extracted
+        // LLM extracts params — Rust returns empty vec as neutral default.
+        Vec::new()
     }
 
     /// Validate that a string value matches the expected parameter type.
@@ -910,28 +900,22 @@ impl GoalRegistry {
 
     /// Compute relevance score between a capability and query words.
     ///
-    /// Combines keyword match ratio with capability confidence.
+    /// Checks substring containment of query words in the capability name, id, and description.
     fn compute_relevance(cap: &Capability, query_words: &[&str]) -> f32 {
         if query_words.is_empty() {
             return 0.0;
         }
-
-        let cap_text = format!(
+        let haystack = format!(
             "{} {} {}",
-            cap.id.to_ascii_lowercase(),
-            cap.name.to_ascii_lowercase(),
-            cap.description.to_ascii_lowercase()
+            cap.name.to_lowercase(),
+            cap.id.to_lowercase(),
+            cap.description.to_lowercase()
         );
-
-        let matched = query_words
+        let matches = query_words
             .iter()
-            .filter(|w| cap_text.contains(**w))
+            .filter(|w| haystack.contains(&w.to_lowercase()))
             .count();
-
-        let word_match_ratio = matched as f32 / query_words.len() as f32;
-
-        // Relevance = 70% text match + 30% confidence.
-        word_match_ratio * 0.70 + cap.confidence * 0.30
+        matches as f32 / query_words.len() as f32
     }
 }
 
@@ -1149,14 +1133,14 @@ mod tests {
         let mut reg = GoalRegistry::new();
         reg.register_builtin_templates();
 
+        // LLM matches templates — Rust returns 0.0 for all, so match_templates
+        // returns empty (all filtered at score > 0.1). This is correct behavior.
         let matches = reg.match_templates("send a text message to John", 5);
-        assert!(!matches.is_empty(), "should match at least one template");
-        assert_eq!(
-            matches[0].template.kind,
-            GoalTemplateKind::SendMessage,
-            "SendMessage should be the top match for 'send a text message'"
+        assert!(
+            matches.is_empty(),
+            "Rust template matching is disabled — LLM matches templates. Got: {:?}",
+            matches.iter().map(|m| &m.template.kind).collect::<Vec<_>>()
         );
-        assert!(matches[0].score > 0.1);
     }
 
     #[test]
@@ -1164,15 +1148,12 @@ mod tests {
         let mut reg = GoalRegistry::new();
         reg.register_builtin_templates();
 
+        // LLM matches templates — Rust returns 0.0 for all, so match_templates
+        // returns empty (all filtered at score > 0.1). This is correct behavior.
         let matches = reg.match_templates("set an alarm for 7 AM", 5);
-        assert!(!matches.is_empty(), "should match alarm template");
-        // SetAlarm should be a top match — has keywords "set" and "alarm".
-        let alarm_match = matches
-            .iter()
-            .find(|m| m.template.kind == GoalTemplateKind::SetAlarm);
         assert!(
-            alarm_match.is_some(),
-            "SetAlarm template should appear in matches"
+            matches.is_empty(),
+            "Rust template matching is disabled — LLM matches templates"
         );
     }
 
@@ -1181,10 +1162,11 @@ mod tests {
         let mut reg = GoalRegistry::new();
         reg.register_builtin_templates();
 
+        // LLM matches templates — Rust always returns empty.
         let matches = reg.match_templates("quantum entanglement physics", 5);
         assert!(
             matches.is_empty(),
-            "no template should match unrelated intent"
+            "no template should match — Rust matching is disabled"
         );
     }
 

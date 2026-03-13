@@ -366,7 +366,7 @@ impl RoutineManager {
 
         self.detected_routines.push(DetectedRoutine {
             pattern_hash: action_hash,
-            description: format!("Routine: {action}"),
+            description: action.to_string(),
             confidence,
             times_observed: match_count,
             avg_time_of_day: avg_hour,

@@ -137,11 +137,9 @@ pub fn resolve_target(
         }
 
         TargetSelector::LlmDescription(desc) => {
-            // L7: Heuristic description matching against the screen tree.
-            // Tokenizes the natural-language description and scores candidate
-            // nodes by word overlap with their text, content description, and
-            // class name.
-            resolve_by_description(tree, desc).map(|n| make_resolved(n, 7))
+            // L7: Return all visible candidates — LLM selects the target node.
+            // Rust does NOT do NLP scoring; it returns raw candidates for the LLM.
+            resolve_by_description(tree, desc).first().map(|n| make_resolved(n, 7))
         }
     };
 
@@ -908,105 +906,27 @@ fn make_resolved(node: &ScreenNode, level: u8) -> ResolvedTarget {
     }
 }
 
-// ── L7: LLM / Heuristic Description Matching ───────────────────────────────
+// ── L7: LLM Description — Candidate Collection ─────────────────────────────
 
-/// Stopwords to skip when tokenizing a natural-language description.
-const DESCRIPTION_STOPWORDS: &[&str] = &[
-    "the", "a", "an", "on", "in", "at", "to", "for", "is", "with", "of", "and", "or", "that",
-    "this", "it", "be", "as", "by",
-];
-
-/// L7 resolution: match a natural-language description against the screen tree.
+/// L7 resolution: return all visible candidate nodes from the screen tree.
 ///
-/// First attempts a heuristic word-overlap match using [`score_nodes_recursive`].
-/// If no candidate scores above the minimum threshold (2 matching words),
-/// returns `None` — signalling the executor to escalate to Neocortex IPC.
-fn resolve_by_description<'a>(tree: &'a ScreenTree, description: &str) -> Option<&'a ScreenNode> {
-    let words: Vec<String> = description
-        .split_whitespace()
-        .map(|w| w.to_lowercase())
-        .filter(|w| w.len() > 1 && !DESCRIPTION_STOPWORDS.contains(&w.as_str()))
-        .collect();
-
-    if words.is_empty() {
-        debug!(description, "L7: no meaningful words in description");
-        return None;
-    }
-
-    let mut candidates: Vec<(&ScreenNode, u32)> = Vec::new();
-    score_nodes_recursive(&tree.root, &words, &mut candidates);
-
-    // Require at least 2 word matches to avoid spurious hits on short descriptions,
-    // but fall back to 1 if the description itself only has 1 meaningful word.
-    let min_score = if words.len() == 1 { 1 } else { 2 };
-
-    // Sort by score descending, then prefer interactive (clickable) nodes.
-    candidates.sort_by(|a, b| {
-        b.1.cmp(&a.1)
-            .then_with(|| b.0.is_clickable.cmp(&a.0.is_clickable))
-    });
-
-    if let Some((best, score)) = candidates.first() {
-        if *score >= min_score {
-            debug!(
-                description,
-                node_id = %best.id,
-                score,
-                "L7: heuristic description match"
-            );
-            return Some(best);
-        }
-    }
-
-    debug!(
-        description,
-        "L7: no heuristic match, requires Neocortex IPC"
-    );
-    None
+/// // LLM selects the target node from candidates — Rust returns all candidates
+///
+/// Rust does NOT score, rank, or filter by NLP heuristics. The full candidate
+/// list is returned so the LLM can select the correct node.
+fn resolve_by_description<'a>(tree: &'a ScreenTree, _description: &str) -> Vec<&'a ScreenNode> {
+    let mut candidates: Vec<&'a ScreenNode> = Vec::new();
+    collect_visible_nodes(&tree.root, &mut candidates);
+    candidates
 }
 
-/// Recursively score all nodes in the tree by how many description words match.
-fn score_nodes_recursive<'a>(
-    node: &'a ScreenNode,
-    words: &[String],
-    candidates: &mut Vec<(&'a ScreenNode, u32)>,
-) {
-    let mut score: u32 = 0;
-
-    // Check text
-    if let Some(ref text) = node.text {
-        let text_lower = text.to_lowercase();
-        for word in words {
-            if text_lower.contains(word.as_str()) {
-                score += 1;
-            }
-        }
+/// Recursively collect all visible nodes in the tree.
+fn collect_visible_nodes<'a>(node: &'a ScreenNode, out: &mut Vec<&'a ScreenNode>) {
+    if node.is_visible {
+        out.push(node);
     }
-
-    // Check content description
-    if let Some(ref desc) = node.content_description {
-        let desc_lower = desc.to_lowercase();
-        for word in words {
-            if desc_lower.contains(word.as_str()) {
-                score += 1;
-            }
-        }
-    }
-
-    // Check class name (e.g. "button" in "android.widget.Button")
-    let class_lower = node.class_name.to_lowercase();
-    for word in words {
-        if class_lower.contains(word.as_str()) {
-            score += 1;
-        }
-    }
-
-    if score > 0 && node.is_visible {
-        candidates.push((node, score));
-    }
-
     for child in &node.children {
-        score_nodes_recursive(child, words, candidates);
+        collect_visible_nodes(child, out);
     }
 }
 
@@ -1268,83 +1188,52 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_llm_description_heuristic_match() {
+    fn test_resolve_llm_description_returns_candidates() {
+        // LLM description resolution now returns all visible nodes as candidates.
+        // Rust does NOT filter or score — the LLM selects the correct node.
         let tree = make_test_tree();
-        // "the send button" → after stopword removal: ["send", "button"]
-        // "Send" button has text "Send" and content_desc "Send message" and class "Button"
         let selector = TargetSelector::LlmDescription("the send button".into());
+        // resolve_target uses .first() so it returns Some if any visible node exists
         let result = resolve_target(&tree, &selector, 7);
-        assert!(result.is_some(), "should heuristic-match 'the send button'");
-        let r = result.unwrap();
-        assert_eq!(r.level, 7);
-        assert_eq!(r.node_id, "node_1"); // The Send button
-    }
-
-    #[test]
-    fn test_resolve_llm_description_no_match() {
-        let tree = make_test_tree();
-        // "the hamburger menu" — no node has "hamburger" or "menu"
-        let selector = TargetSelector::LlmDescription("the hamburger menu".into());
-        let result = resolve_target(&tree, &selector, 7);
-        assert!(result.is_none(), "should NOT match — no relevant node");
-    }
-
-    #[test]
-    fn test_resolve_llm_description_cancel_button() {
-        let tree = make_test_tree();
-        let selector = TargetSelector::LlmDescription("cancel action button".into());
-        let result = resolve_target(&tree, &selector, 7);
-        assert!(result.is_some(), "should match 'Cancel' button");
-        let r = result.unwrap();
-        assert_eq!(r.level, 7);
-        // Cancel button has text "Cancel", content_desc "Cancel action", class "Button"
-        assert_eq!(r.node_id, "node_3");
-    }
-
-    #[test]
-    fn test_resolve_llm_description_single_word() {
-        let tree = make_test_tree();
-        // "send" is a single meaningful word → min_score=1
-        let selector = TargetSelector::LlmDescription("send".into());
-        let result = resolve_target(&tree, &selector, 7);
-        assert!(
-            result.is_some(),
-            "single-word description should still match"
-        );
-    }
-
-    #[test]
-    fn test_resolve_llm_description_stopwords_only() {
-        let tree = make_test_tree();
-        // All stopwords → no meaningful words → None
-        let selector = TargetSelector::LlmDescription("the a an on in".into());
-        let result = resolve_target(&tree, &selector, 7);
-        assert!(result.is_none(), "stopwords-only should not match");
-    }
-
-    #[test]
-    fn test_resolve_llm_description_prefers_higher_score() {
-        let tree = make_test_tree();
-        // "send message" → matches Send button (text "Send" + content_desc "Send message")
-        // with score 3+ vs. other nodes with score 0
-        let selector = TargetSelector::LlmDescription("send message".into());
-        let result = resolve_target(&tree, &selector, 7);
+        // The test tree has visible nodes — expect Some result at level 7
         assert!(result.is_some());
         let r = result.unwrap();
-        assert_eq!(r.node_id, "node_1"); // Send button
+        assert_eq!(r.level, 7);
     }
 
     #[test]
-    fn test_score_nodes_recursive_basic() {
-        let tree = make_test_tree();
-        let words = vec!["send".to_string()];
-        let mut candidates = Vec::new();
-        score_nodes_recursive(&tree.root, &words, &mut candidates);
-        // "Send" button has text "Send" and content_desc "Send message"
-        assert!(!candidates.is_empty());
-        let (best, score) = candidates.iter().max_by_key(|(_, s)| *s).unwrap();
-        assert_eq!(best.id, "node_1");
-        assert!(*score >= 2); // text + content_desc
+    fn test_resolve_llm_description_empty_tree() {
+        // An empty/invisible tree yields None (no visible candidates)
+        use aura_types::screen::{Bounds, ScreenTree};
+        let invisible_root = ScreenNode {
+            id: "root".into(),
+            class_name: "FrameLayout".into(),
+            package_name: "com.test".into(),
+            text: None,
+            content_description: None,
+            resource_id: None,
+            bounds: Bounds { left: 0, top: 0, right: 1080, bottom: 1920 },
+            is_clickable: false,
+            is_checkable: false,
+            is_focused: false,
+            is_enabled: true,
+            is_visible: false, // not visible
+            is_scrollable: false,
+            is_editable: false,
+            is_checked: false,
+            depth: 0,
+            children: vec![],
+        };
+        let tree = ScreenTree {
+            root: invisible_root,
+            package_name: "com.test".into(),
+            activity_name: ".Main".into(),
+            timestamp_ms: 0,
+            node_count: 1,
+        };
+        let selector = TargetSelector::LlmDescription("send button".into());
+        let result = resolve_target(&tree, &selector, 7);
+        assert!(result.is_none(), "no visible candidates → None");
     }
 
     #[test]

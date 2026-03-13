@@ -1,12 +1,19 @@
-//! Entity extraction for AURA v4's NLP pipeline.
+//! Structural parameter extraction for AURA v4's pipeline.
 //!
-//! Extracts structured entities from natural language input:
+//! Extracts typed parameters from user input for slot filling:
 //! - Time expressions ("3pm", "tomorrow at noon", "in 5 minutes")
-//! - Contact names (fuzzy matched against known contacts)
-//! - App names (fuzzy matched against installed apps)
-//! - Numbers and number words ("five" → 5)
 //! - Durations ("5 minutes", "half an hour")
+//! - Numbers and number words ("five" → 5)
 //! - URLs
+//! - Setting names (structural keyword match against a fixed enum)
+//!
+//! Architecture note — Theater AGI guard:
+//! Contact/app fuzzy matching (NLU in Rust) is stubbed out. All fuzzy
+//! entity resolution is deferred to the LLM. Only structural/typed
+//! parameter extraction remains here (Iron Law #4).
+
+// Cap on entities emitted per extraction call.
+const MAX_PIPELINE_ENTITIES: usize = 512;
 
 use tracing::{debug, instrument, trace};
 
@@ -102,12 +109,15 @@ impl EntityExtractor {
         self.extract_numbers(input, &lower, &mut entities);
         self.extract_settings(input, &lower, &mut entities);
 
-        // Fuzzy matching (more expensive, bounded).
-        self.extract_contacts(input, &mut entities);
-        self.extract_apps(input, &lower, &mut entities);
+        // Architecture note — Theater AGI guard:
+        // Contact/app fuzzy matching (NLU in Rust) is removed (Iron Law #4).
+        // The LLM resolves contact and app names from its context.
 
         // Sort by position for stable output.
         entities.sort_by_key(|e| e.span_start);
+
+        // Cap output to prevent unbounded growth.
+        entities.truncate(MAX_PIPELINE_ENTITIES);
 
         debug!(entity_count = entities.len(), "entities extracted");
         entities
@@ -303,8 +313,8 @@ impl EntityExtractor {
             ("hrs", "h"),
         ];
 
-        let words: Vec<&str> = lower.split_whitespace().collect();
-        let input_words: Vec<&str> = input.split_whitespace().collect();
+        let words: Vec<&str> = lower.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
+        let input_words: Vec<&str> = input.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
         for i in 0..words.len().saturating_sub(1) {
             if let Some(num) = parse_number_word(words[i]) {
                 for (unit, suffix) in &units {
@@ -330,7 +340,7 @@ impl EntityExtractor {
 
     fn extract_numbers(&self, _input: &str, lower: &str, out: &mut Vec<Entity>) {
         // Extract number words not already captured by duration/time.
-        let words: Vec<&str> = lower.split_whitespace().collect();
+        let words: Vec<&str> = lower.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
         for (i, word) in words.iter().enumerate() {
             if let Some(num) = parse_number_word(word) {
                 let start = byte_offset_of_word(lower, &words, i);
@@ -410,91 +420,34 @@ impl EntityExtractor {
 
     // -- Contact fuzzy matching ----------------------------------------------
 
-    fn extract_contacts(&self, input: &str, out: &mut Vec<Entity>) {
-        if self.known_contacts.is_empty() {
-            return;
-        }
-
-        // Collect capitalized words as potential names.
-        let candidates = extract_capitalized_words(input);
-        // Bound: max 1000 contacts to search.
-        let max_contacts = self.known_contacts.len().min(1000);
-
-        for (word, start, end) in &candidates {
-            let lower_word = word.to_lowercase();
-            let mut best_match: Option<(&str, usize)> = None;
-
-            for contact in &self.known_contacts[..max_contacts] {
-                let lower_contact = contact.to_lowercase();
-                // Try exact substring match first.
-                if lower_contact == lower_word
-                    || lower_contact
-                        .split_whitespace()
-                        .any(|part| part == lower_word)
-                {
-                    best_match = Some((contact, 0));
-                    break;
-                }
-                // Fuzzy match (Levenshtein distance ≤ 2).
-                let dist = levenshtein(&lower_word, &lower_contact);
-                if dist <= 2 {
-                    if best_match.is_none() || dist < best_match.unwrap().1 {
-                        best_match = Some((contact, dist));
-                    }
-                }
-                // Also check individual name parts.
-                for part in lower_contact.split_whitespace() {
-                    let part_dist = levenshtein(&lower_word, part);
-                    if part_dist <= 1 {
-                        if best_match.is_none() || part_dist < best_match.unwrap().1 {
-                            best_match = Some((contact, part_dist));
-                        }
-                    }
-                }
-            }
-
-            if let Some((matched, dist)) = best_match {
-                let conf = match dist {
-                    0 => 0.95,
-                    1 => 0.80,
-                    2 => 0.65,
-                    _ => 0.50,
-                };
-                out.push(Entity {
-                    entity_type: EntityType::Contact,
-                    raw: word.clone(),
-                    value: matched.to_string(),
-                    span_start: *start,
-                    span_end: *end,
-                    confidence: conf,
-                });
-            }
-        }
+    // Phase 8 wire point: stubbed per Iron Law #4 (Theater AGI guard).
+    // Re-enable only if contacts are needed as typed structured parameters
+    // for tool dispatch (not intent classification).
+    #[allow(dead_code)]
+    fn extract_contacts(&self, _input: &str, _out: &mut Vec<Entity>) {
+        // Architecture note — Theater AGI guard (Iron Law #4):
+        // Contact fuzzy matching (NLU in Rust — Levenshtein over user names) is
+        // deliberately stubbed. All contact resolution is deferred to the LLM,
+        // which has access to the full contact list via tool context. Doing this
+        // in Rust would constitute Theater AGI: the system pretending to
+        // understand who the user means rather than passing the raw input to the
+        // model. Wire point: re-enable only if contacts are needed as typed
+        // structured parameters for tool dispatch (not intent classification).
+        return;
     }
 
     // -- App fuzzy matching --------------------------------------------------
 
-    fn extract_apps(&self, input: &str, lower: &str, out: &mut Vec<Entity>) {
-        if self.known_apps.is_empty() {
-            return;
-        }
-        let max_apps = self.known_apps.len().min(1000);
-
-        for app in &self.known_apps[..max_apps] {
-            let app_lower = app.to_lowercase();
-            if let Some(pos) = lower.find(&app_lower) {
-                if is_word_boundary(lower, pos, app_lower.len()) {
-                    out.push(Entity {
-                        entity_type: EntityType::App,
-                        raw: input[pos..pos + app.len()].to_string(),
-                        value: app.clone(),
-                        span_start: pos,
-                        span_end: pos + app.len(),
-                        confidence: 0.95,
-                    });
-                }
-            }
-        }
+    // Phase 8 wire point: stubbed per Iron Law #4 (Theater AGI guard).
+    // Re-enable only if app names are required as typed structural parameters
+    // for tool dispatch (not intent classification).
+    #[allow(dead_code)]
+    fn extract_apps(&self, _input: &str, _lower: &str, _out: &mut Vec<Entity>) {
+        // Architecture note — Theater AGI guard (Iron Law #4):
+        // App name fuzzy matching (NLU in Rust) is deliberately stubbed. App
+        // resolution is deferred to the LLM. Wire point: re-enable only if app
+        // names are required as typed structural parameters for tool dispatch.
+        return;
     }
 }
 
@@ -543,6 +496,9 @@ pub fn parse_number_word(word: &str) -> Option<u64> {
 
 /// Levenshtein edit distance between two strings.
 /// Bounded: returns early if distance exceeds `max_dist` (default 3).
+/// Wire point: used by extract_contacts() which is stubbed (Theater AGI guard).
+/// Keep for future re-enable if structural contact dispatch is needed.
+#[allow(dead_code)]
 pub fn levenshtein(a: &str, b: &str) -> usize {
     let a_len = a.len();
     let b_len = b.len();
@@ -604,6 +560,8 @@ fn is_word_boundary(text: &str, pos: usize, len: usize) -> bool {
 
 /// Extract capitalized words that might be names.
 /// Returns (word, start_byte, end_byte).
+/// Wire point: used by extract_contacts() which is stubbed (Theater AGI guard).
+#[allow(dead_code)]
 fn extract_capitalized_words(input: &str) -> Vec<(String, usize, usize)> {
     let mut results = Vec::new();
     let mut offset = 0;
@@ -747,26 +705,28 @@ mod tests {
 
     #[test]
     fn test_extract_contact_exact() {
+        // Architecture note: extract_contacts() is stubbed (Theater AGI guard).
+        // Contact resolution is deferred to the LLM.
         let ext = extractor();
         let entities = ext.extract("call Alice right now");
         let contacts: Vec<_> = entities
             .iter()
             .filter(|e| e.entity_type == EntityType::Contact)
             .collect();
-        assert!(!contacts.is_empty(), "should find contact Alice");
-        assert_eq!(contacts[0].value, "Alice");
+        assert!(contacts.is_empty(), "contact extraction is stubbed — LLM handles this");
     }
 
     #[test]
     fn test_extract_app_name() {
+        // Architecture note: extract_apps() is stubbed (Theater AGI guard).
+        // App resolution is deferred to the LLM.
         let ext = extractor();
         let entities = ext.extract("open whatsapp please");
         let apps: Vec<_> = entities
             .iter()
             .filter(|e| e.entity_type == EntityType::App)
             .collect();
-        assert!(!apps.is_empty(), "should find app WhatsApp");
-        assert_eq!(apps[0].value, "WhatsApp");
+        assert!(apps.is_empty(), "app extraction is stubbed — LLM handles this");
     }
 
     #[test]
@@ -836,10 +796,18 @@ mod tests {
     fn test_multiple_entities() {
         let ext = extractor();
         let entities = ext.extract("send Hello to Alice on WhatsApp at 3pm");
+        // Architecture note: contact/app extraction was removed (Theater AGI guard —
+        // Iron Law #4). Only structural entities (time, duration, numbers, settings)
+        // are extracted by Rust. The LLM resolves names from context.
+        // This input yields at least the "3pm" time entity.
         assert!(
-            entities.len() >= 2,
-            "should extract multiple entities, got {}",
+            entities.len() >= 1,
+            "should extract at least the time entity, got {}",
             entities.len()
+        );
+        assert!(
+            entities.iter().any(|e| e.entity_type == EntityType::Time),
+            "should extract time entity from '3pm'"
         );
     }
 }

@@ -13,60 +13,7 @@ const HYSTERESIS_GAP: f32 = 0.15;
 /// Default complexity threshold for System1 vs System2.
 const DEFAULT_COMPLEXITY_THRESHOLD: f32 = 0.50;
 
-/// Keyword weights for complexity scoring.
-static COMPLEXITY_KEYWORDS: &[(&str, f32)] = &[
-    ("multi-step", 0.30),
-    ("complex", 0.30),
-    ("analyze", 0.25),
-    ("compare", 0.25),
-    ("plan", 0.20),
-    ("schedule", 0.20),
-    ("research", 0.30),
-    ("summarize", 0.20),
-    ("compose", 0.25),
-    ("debug", 0.20),
-    ("navigate", 0.20),
-    ("search", 0.15),
-];
 
-/// Keywords indicating urgency in user requests.
-static URGENCY_KEYWORDS: &[(&str, f32)] = &[
-    ("urgent", 0.40),
-    ("asap", 0.35),
-    ("immediately", 0.35),
-    ("now", 0.25),
-    ("hurry", 0.30),
-    ("emergency", 0.50),
-    ("deadline", 0.30),
-    ("quick", 0.20),
-    ("right away", 0.35),
-];
-
-/// V3 routing score factor weights (rebalanced for personality integration).
-const WEIGHT_COMPLEXITY: f32 = 0.35;
-const WEIGHT_IMPORTANCE: f32 = 0.22;
-const WEIGHT_URGENCY: f32 = 0.17;
-const WEIGHT_MEMORY_LOAD: f32 = 0.11;
-/// Weight given to personality-derived routing bias.
-const WEIGHT_PERSONALITY: f32 = 0.15;
-
-/// Weight given to screen semantic complexity (from SemanticGraph analysis).
-/// When screen analysis is available, this is borrowed from the other factors
-/// proportionally (the 5 original weights still sum to 1.0; screen complexity
-/// acts as an additive nudge clamped into the final score).
-const WEIGHT_SCREEN_COMPLEXITY: f32 = 0.08;
-
-/// Default working memory slot capacity.
-const DEFAULT_MEMORY_SLOTS: usize = 7;
-
-/// Default importance when no amygdala signal is available.
-const DEFAULT_IMPORTANCE: f32 = 0.5;
-
-/// Default urgency when no time-pressure signal is available.
-const DEFAULT_URGENCY: f32 = 0.3;
-
-/// Default memory load when working memory state is unknown.
-const DEFAULT_MEMORY_LOAD: f32 = 0.2;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -100,27 +47,14 @@ pub struct RouteDecision {
 /// flip-flopping between System1 and System2 when scores are near the
 /// boundary.
 ///
-/// The V3 routing formula combines five normalized factors:
-/// ```text
-/// routing_score = 0.35 * complexity + 0.22 * importance + 0.17 * urgency
-///               + 0.11 * memory_load + 0.15 * personality_bias
-/// ```
+/// Routing decisions are based on structural signals only: intent type,
+/// event source, gate decision, and amygdala score_total. The LLM determines
+/// semantic complexity — Rust does not classify natural language.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteClassifier {
     last_route: Option<RoutePath>,
     last_routing_score: f32,
     complexity_threshold: f32,
-    /// Current working memory occupancy (number of active slots).
-    working_memory_count: usize,
-    /// Maximum working memory slots (default 7, Miller's number).
-    working_memory_max: usize,
-    /// Personality-derived routing bias in \[-0.15, 0.15\].
-    /// Positive → favours System2, negative → favours System1.
-    personality_bias: f32,
-    /// Screen semantic complexity signal from the last SemanticGraph analysis.
-    /// Range \[0.0, 1.0\]: 0 = no screen data or trivial UI, 1 = very complex UI.
-    /// Complex UIs (dialogs, deeply nested forms) nudge toward System2.
-    screen_complexity: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -133,60 +67,15 @@ impl RouteClassifier {
             last_route: None,
             last_routing_score: 0.0,
             complexity_threshold: DEFAULT_COMPLEXITY_THRESHOLD,
-            working_memory_count: 0,
-            working_memory_max: DEFAULT_MEMORY_SLOTS,
-            personality_bias: 0.0,
-            screen_complexity: 0.0,
         }
-    }
-
-    /// Update the current working memory occupancy. Called by the memory
-    /// subsystem whenever slots are acquired or released.
-    #[instrument(skip(self))]
-    pub fn set_working_memory(&mut self, count: usize, max_slots: usize) {
-        self.working_memory_count = count;
-        self.working_memory_max = if max_slots == 0 {
-            DEFAULT_MEMORY_SLOTS
-        } else {
-            max_slots
-        };
-    }
-
-    /// Set the personality-derived routing bias.
-    ///
-    /// The bias is clamped to \[-0.15, 0.15\] and represents the personality
-    /// system's preference toward System2 (positive) or System1 (negative).
-    ///
-    /// Typical source: `Personality::routing_bias()`.
-    #[instrument(skip(self))]
-    pub fn set_personality_bias(&mut self, bias: f32) {
-        self.personality_bias = bias.clamp(-0.15, 0.15);
-    }
-
-    /// Set the screen semantic context from a recent `SemanticGraph` analysis.
-    ///
-    /// `complexity` is a \[0.0, 1.0\] composite derived from the number of
-    /// detected UI patterns, interactive element count, and screen semantic
-    /// state (e.g. a `Blocked` dialog or deeply nested `SettingsPage` is
-    /// more complex than a simple `Interactive` screen).
-    ///
-    /// `pattern_count` is the number of recognized `UiPattern`s — higher
-    /// counts suggest richer UI requiring deeper reasoning.
-    ///
-    /// Resets to 0.0 when screen data is stale or unavailable.
-    #[instrument(skip(self))]
-    pub fn set_screen_context(&mut self, complexity: f32, pattern_count: usize) {
-        // Blend detected patterns into complexity: each pattern adds 0.08,
-        // capped at 0.3, so a screen with 3+ patterns always gets a boost.
-        let pattern_boost = (pattern_count as f32 * 0.08).min(0.3);
-        self.screen_complexity = (complexity + pattern_boost).clamp(0.0, 1.0);
     }
 
     /// Run the 10-node deterministic routing cascade on a scored event.
     #[instrument(skip(self, scored), fields(intent = ?scored.parsed.intent, source = ?scored.parsed.source))]
     pub fn classify(&mut self, scored: &ScoredEvent) -> RouteDecision {
         let event = &scored.parsed;
-        let routing_score = self.compute_routing_score(scored);
+        // Use amygdala structural score as the routing signal — no NLP formula.
+        let routing_score = scored.score_total;
         let decision = self.cascade(scored, routing_score);
 
         // Apply hysteresis for System1 <-> System2 transitions.
@@ -206,145 +95,6 @@ impl RouteClassifier {
         );
 
         decision
-    }
-
-    // -- V3 4-factor routing score -------------------------------------------
-
-    /// Compute the V3 composite routing score from five normalized factors.
-    ///
-    /// ```text
-    /// routing_score = 0.35 * complexity + 0.22 * importance + 0.17 * urgency
-    ///               + 0.11 * memory_load + 0.15 * personality_bias_norm
-    /// ```
-    ///
-    /// The personality bias is normalized from \[-0.15, 0.15\] → \[0.0, 1.0\]
-    /// so it fits the same scale as the other factors.
-    ///
-    /// All individual factors are clamped to \[0.0, 1.0\].
-    #[must_use]
-    fn compute_routing_score(&self, scored: &ScoredEvent) -> f32 {
-        let complexity = Self::compute_complexity(&scored.parsed.content);
-        let importance = Self::compute_importance(scored);
-        let urgency = Self::compute_urgency(&scored.parsed.content, scored.score_time);
-        let memory_load = self.compute_memory_load();
-
-        // Normalize personality_bias from [-0.15, 0.15] → [0.0, 1.0]
-        let personality_norm = ((self.personality_bias + 0.15) / 0.30).clamp(0.0, 1.0);
-
-        let score = WEIGHT_COMPLEXITY * complexity
-            + WEIGHT_IMPORTANCE * importance
-            + WEIGHT_URGENCY * urgency
-            + WEIGHT_MEMORY_LOAD * memory_load
-            + WEIGHT_PERSONALITY * personality_norm
-            + WEIGHT_SCREEN_COMPLEXITY * self.screen_complexity;
-
-        tracing::trace!(
-            complexity,
-            importance,
-            urgency,
-            memory_load,
-            personality_bias = self.personality_bias,
-            personality_norm,
-            screen_complexity = self.screen_complexity,
-            composite = score,
-            "routing score factors"
-        );
-
-        score.clamp(0.0, 1.0)
-    }
-
-    /// Deterministic complexity score based on word count + keyword matching
-    /// + step-count heuristic.
-    ///
-    /// - Base: `word_count / 50`, capped at 0.3
-    /// - Each matched keyword adds its weight
-    /// - Implicit step indicator: +0.1 per connective ("then", "and then", "after that")
-    #[must_use]
-    pub fn compute_complexity(content: &str) -> f32 {
-        let lower = content.to_ascii_lowercase();
-
-        // Base: word_count / 50, capped at 0.3.
-        let word_count = content.split_whitespace().count();
-        let base = (word_count as f32 / 50.0).min(0.3);
-
-        // Keyword weights.
-        let keyword_sum: f32 = COMPLEXITY_KEYWORDS
-            .iter()
-            .filter(|(kw, _)| lower.contains(kw))
-            .map(|(_, w)| w)
-            .sum();
-
-        // Step-count heuristic: connectives imply multi-step tasks.
-        let step_connectives: &[&str] = &["then ", "and then", "after that", "next ", "finally "];
-        let step_bonus: f32 = step_connectives
-            .iter()
-            .filter(|conn| lower.contains(*conn))
-            .count() as f32
-            * 0.10;
-
-        (base + keyword_sum + step_bonus).clamp(0.0, 1.0)
-    }
-
-    /// Importance score derived from the amygdala's composite relevance signal.
-    ///
-    /// Uses `score_total` from the amygdala pipeline as a proxy for event
-    /// priority. Falls back to `DEFAULT_IMPORTANCE` only if the score is
-    /// exactly zero (unscored event).
-    #[must_use]
-    fn compute_importance(scored: &ScoredEvent) -> f32 {
-        // Gate decision boosts: emergency events are maximally important.
-        let gate_boost = match scored.gate_decision {
-            GateDecision::EmergencyBypass => 1.0,
-            GateDecision::InstantWake => 0.0, // no extra boost, rely on score
-            GateDecision::SlowAccumulate => 0.0,
-            GateDecision::Suppress => 0.0,
-        };
-
-        if gate_boost > 0.0 {
-            return gate_boost;
-        }
-
-        // Use amygdala total score as importance proxy.
-        if scored.score_total > f32::EPSILON {
-            scored.score_total.clamp(0.0, 1.0)
-        } else {
-            DEFAULT_IMPORTANCE
-        }
-    }
-
-    /// Urgency score derived from temporal signals and keyword analysis.
-    ///
-    /// Combines the amygdala's time-relevance score with urgency keywords
-    /// found in the content.
-    #[must_use]
-    fn compute_urgency(content: &str, score_time: f32) -> f32 {
-        let lower = content.to_ascii_lowercase();
-
-        let keyword_urgency: f32 = URGENCY_KEYWORDS
-            .iter()
-            .filter(|(kw, _)| lower.contains(kw))
-            .map(|(_, w)| w)
-            .sum();
-
-        if keyword_urgency > f32::EPSILON || score_time > f32::EPSILON {
-            // Blend: 60% keyword signal, 40% temporal score.
-            let blended = 0.60 * keyword_urgency + 0.40 * score_time;
-            blended.clamp(0.0, 1.0)
-        } else {
-            DEFAULT_URGENCY
-        }
-    }
-
-    /// Memory load score: working memory occupancy as a fraction of max slots.
-    ///
-    /// Higher load → more cognitive resources in use → bias toward System2
-    /// for better context handling.
-    #[must_use]
-    fn compute_memory_load(&self) -> f32 {
-        if self.working_memory_max == 0 {
-            return DEFAULT_MEMORY_LOAD;
-        }
-        (self.working_memory_count as f32 / self.working_memory_max as f32).clamp(0.0, 1.0)
     }
 
     // -- 10-node cascade (private) ------------------------------------------
@@ -570,7 +320,7 @@ mod tests {
             EventSource::UserCommand,
             Intent::ActionRequest,
             "open whatsapp",
-            0.70,
+            0.30, // score_total below complexity_threshold → System1
             GateDecision::InstantWake,
         );
         let d = c.classify(&scored);
@@ -688,184 +438,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_complexity_scoring() {
-        // Simple content.
-        let c1 = RouteClassifier::compute_complexity("open camera");
-        assert!(c1 < 0.50, "simple complexity={}", c1);
-
-        // Complex content.
-        let c2 = RouteClassifier::compute_complexity(
-            "analyze and compare these multi-step research results then compose a summary",
-        );
-        assert!(c2 >= 0.50, "complex complexity={}", c2);
-    }
-
-    #[test]
-    fn test_importance_from_amygdala() {
-        let scored = make_scored(
-            EventSource::Notification,
-            Intent::ActionRequest,
-            "test",
-            0.85,
-            GateDecision::InstantWake,
-        );
-        let importance = RouteClassifier::compute_importance(&scored);
-        assert!(
-            (importance - 0.85).abs() < f32::EPSILON,
-            "importance={}",
-            importance
-        );
-    }
-
-    #[test]
-    fn test_importance_emergency_is_max() {
-        let scored = make_scored(
-            EventSource::Notification,
-            Intent::SystemAlert,
-            "test",
-            0.50,
-            GateDecision::EmergencyBypass,
-        );
-        let importance = RouteClassifier::compute_importance(&scored);
-        assert!(
-            (importance - 1.0).abs() < f32::EPSILON,
-            "emergency importance={}",
-            importance
-        );
-    }
-
-    #[test]
-    fn test_urgency_from_keywords() {
-        let urgency = RouteClassifier::compute_urgency("I need this urgently now", 0.0);
-        // "urgent" (0.40) + "now" (0.25) → keyword_urgency = 0.65
-        // blended = 0.60 * 0.65 + 0.40 * 0.0 = 0.39
-        assert!(urgency > 0.3, "keyword urgency={}", urgency);
-    }
-
-    #[test]
-    fn test_urgency_default_no_signal() {
-        // No urgency keywords, score_time = 0 → should use default.
-        let urgency = RouteClassifier::compute_urgency("open settings", 0.0);
-        assert!(
-            (urgency - DEFAULT_URGENCY).abs() < f32::EPSILON,
-            "default urgency={}",
-            urgency
-        );
-    }
-
-    #[test]
-    fn test_memory_load_scaling() {
-        let mut c = RouteClassifier::new();
-
-        // Empty working memory.
-        c.set_working_memory(0, 7);
-        assert!((c.compute_memory_load() - 0.0).abs() < f32::EPSILON);
-
-        // Half-full.
-        c.set_working_memory(4, 7);
-        let load = c.compute_memory_load();
-        assert!((load - 4.0 / 7.0).abs() < 0.01, "half load={}", load);
-
-        // Full.
-        c.set_working_memory(7, 7);
-        assert!((c.compute_memory_load() - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_routing_score_formula_weights() {
-        // Verify the formula: 0.40 * C + 0.25 * I + 0.20 * U + 0.15 * M
-        let c = RouteClassifier::new();
-        let scored = make_scored(
-            EventSource::UserCommand,
-            Intent::ActionRequest,
-            "open camera", // low complexity
-            0.70,          // moderate importance
-            GateDecision::InstantWake,
-        );
-        let routing_score = c.compute_routing_score(&scored);
-        // routing_score should be a weighted blend, always in [0, 1].
-        assert!(
-            routing_score >= 0.0 && routing_score <= 1.0,
-            "score={}",
-            routing_score
-        );
-    }
-
-    #[test]
-    fn test_high_memory_load_pushes_toward_system2() {
-        let mut c_low = RouteClassifier::new();
-        c_low.set_working_memory(0, 7);
-
-        let mut c_high = RouteClassifier::new();
-        c_high.set_working_memory(7, 7);
-
-        let scored = make_scored(
-            EventSource::UserCommand,
-            Intent::ActionRequest,
-            "check weather",
-            0.50,
-            GateDecision::InstantWake,
-        );
-
-        let score_low = c_low.compute_routing_score(&scored);
-        let score_high = c_high.compute_routing_score(&scored);
-
-        assert!(
-            score_high > score_low,
-            "high memory load ({}) should produce higher routing score than low ({})",
-            score_high,
-            score_low
-        );
-    }
-
-    #[test]
-    fn test_step_connectives_increase_complexity() {
-        let simple = RouteClassifier::compute_complexity("open the app");
-        let multi_step =
-            RouteClassifier::compute_complexity("open the app then search then finally submit");
-        assert!(
-            multi_step > simple,
-            "multi-step ({}) should be more complex than simple ({})",
-            multi_step,
-            simple
-        );
-    }
-
-    #[test]
-    fn test_personality_bias_increases_routing_score() {
-        let mut c_neutral = RouteClassifier::new();
-        c_neutral.set_personality_bias(0.0);
-
-        let mut c_biased = RouteClassifier::new();
-        c_biased.set_personality_bias(0.15); // max positive bias → favour System2
-
-        let scored = make_scored(
-            EventSource::UserCommand,
-            Intent::ActionRequest,
-            "check weather",
-            0.50,
-            GateDecision::InstantWake,
-        );
-
-        let score_neutral = c_neutral.compute_routing_score(&scored);
-        let score_biased = c_biased.compute_routing_score(&scored);
-
-        assert!(
-            score_biased > score_neutral,
-            "positive personality bias ({}) should increase routing score vs neutral ({})",
-            score_biased,
-            score_neutral
-        );
-    }
-
-    #[test]
-    fn test_personality_bias_clamped() {
-        let mut c = RouteClassifier::new();
-        c.set_personality_bias(999.0);
-        assert!((c.personality_bias - 0.15).abs() < f32::EPSILON);
-
-        c.set_personality_bias(-999.0);
-        assert!((c.personality_bias - (-0.15)).abs() < f32::EPSILON);
-    }
 }

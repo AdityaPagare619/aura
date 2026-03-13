@@ -5,6 +5,7 @@
 //! so established patterns resist change while new patterns adapt quickly.
 
 use std::collections::VecDeque;
+use std::collections::HashMap;
 
 use aura_types::errors::{AuraError, MemError};
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,9 @@ pub struct PatternEngine {
     max_action_patterns: usize,
     max_temporal_patterns: usize,
     max_recent_events: usize,
+    /// Hebbian co-occurrence map for memory retrieval: (id_a, id_b) → strength.
+    /// Key is always ordered (min, max) to avoid duplicates.
+    co_occurrences: HashMap<(u64, u64), f32>,
 }
 
 impl Default for PatternEngine {
@@ -87,6 +91,7 @@ impl PatternEngine {
             max_action_patterns: MAX_ACTION_PATTERNS,
             max_temporal_patterns: MAX_TEMPORAL_PATTERNS,
             max_recent_events: MAX_RECENT_EVENTS,
+            co_occurrences: HashMap::new(),
         }
     }
 
@@ -354,6 +359,7 @@ impl PatternEngine {
         let data = ExportData {
             action_patterns: self.action_patterns.clone(),
             temporal_patterns: self.temporal_patterns.clone(),
+            co_occurrences: self.co_occurrences.clone(),
         };
         bincode::serde::encode_to_vec(&data, bincode::config::standard()).map_err(|e| {
             AuraError::Memory(MemError::SerializationFailed(format!(
@@ -375,6 +381,7 @@ impl PatternEngine {
         let mut engine = Self::new();
         engine.action_patterns = exported.action_patterns;
         engine.temporal_patterns = exported.temporal_patterns;
+        engine.co_occurrences = exported.co_occurrences;
         // Enforce bounds.
         engine.action_patterns.truncate(MAX_ACTION_PATTERNS);
         engine.temporal_patterns.truncate(MAX_TEMPORAL_PATTERNS);
@@ -390,6 +397,63 @@ impl PatternEngine {
     pub fn temporal_pattern_count(&self) -> usize {
         self.temporal_patterns.len()
     }
+
+    // -----------------------------------------------------------------------
+    // Memory-retrieval Hebbian co-occurrence
+    // -----------------------------------------------------------------------
+
+    /// Record co-retrieval of a set of memory IDs.
+    ///
+    /// Called after any semantic/episodic retrieval to capture co-occurrence.
+    /// Every pair (id_a, id_b) in `retrieved_ids` is updated:
+    ///
+    ///   new_strength = old_strength * 0.95 + 0.05
+    ///
+    /// The 0.05 potentiation is intentionally small — co-retrieval is a weaker
+    /// signal than deliberate Hebbian reinforcement (which uses 0.1–0.3).
+    pub fn record_co_retrieval(&mut self, retrieved_ids: &[u64]) {
+        if retrieved_ids.len() < 2 {
+            return;
+        }
+        for i in 0..retrieved_ids.len() {
+            for j in (i + 1)..retrieved_ids.len() {
+                let key = (
+                    retrieved_ids[i].min(retrieved_ids[j]),
+                    retrieved_ids[i].max(retrieved_ids[j]),
+                );
+                let strength = self.co_occurrences.entry(key).or_insert(0.0);
+                *strength = (*strength * 0.95 + 0.05).clamp(0.0, 1.0);
+            }
+        }
+        // Prune if map grows too large (cap at 8192 pairs).
+        if self.co_occurrences.len() > 8192 {
+            // Remove the weakest 25%.
+            let mut pairs: Vec<((u64, u64), f32)> =
+                self.co_occurrences.drain().collect();
+            pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            pairs.truncate(6144);
+            self.co_occurrences = pairs.into_iter().collect();
+        }
+    }
+
+    /// Compute the Hebbian association boost for `memory_id` given a set of
+    /// recently retrieved memory IDs.
+    ///
+    /// Returns a value in [0.0, 1.0] representing the maximum co-occurrence
+    /// strength between `memory_id` and any member of `recently_retrieved`.
+    /// Returns 0.0 if no association exists.
+    pub fn get_association_boost(&self, memory_id: u64, recently_retrieved: &[u64]) -> f32 {
+        recently_retrieved
+            .iter()
+            .filter_map(|&peer_id| {
+                if peer_id == memory_id {
+                    return None;
+                }
+                let key = (memory_id.min(peer_id), memory_id.max(peer_id));
+                self.co_occurrences.get(&key).copied()
+            })
+            .fold(0.0_f32, f32::max)
+    }
 }
 
 /// Internal serialization wrapper.
@@ -397,6 +461,8 @@ impl PatternEngine {
 struct ExportData {
     action_patterns: Vec<ActionPattern>,
     temporal_patterns: Vec<TemporalPattern>,
+    #[serde(default)]
+    co_occurrences: HashMap<(u64, u64), f32>,
 }
 
 // ===========================================================================

@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use tracing::{info, debug};
 use aura_types::errors::MemError;
 use crate::execution::learning::workflows::WorkflowPattern;
@@ -75,9 +75,6 @@ impl WorkflowMemory {
                 params![seq_json, p.frequency as i64, p.avg_time_ms as i64, now_ms as i64]
             ).map_err(|e| MemError::DatabaseError(format!("workflow store failed: {}", e)))?;
 
-            let id = conn.last_insert_rowid() as u64;
-            // Since `id` might not be accurate on an UPDATE conflict in some sqlite versions,
-            // we query for the id based on sequence_json if needed, but for simple tracking it's fine.
             let correct_id: i64 = conn.query_row(
                 "SELECT id FROM workflow_patterns WHERE sequence_json = ?1",
                 params![seq_json],

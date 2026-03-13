@@ -1,8 +1,18 @@
 //! User profile — persistent representation of the user AURA is serving.
 //!
 //! Stores name, preferences, interests, daily patterns, privacy settings,
-//! and provides persistence to/from SQLite. The profile evolves over time
-//! as AURA learns more about its user through interactions.
+//! and provides persistence to/from SQLite and a two-tier file-backed system.
+//!
+//! # Two-tier persistence
+//!
+//! - **Public tier** (`user_profile.json`): human-readable/editable preferences
+//!   (name, locale, timezone, behavior modifiers). Written atomically via
+//!   a temp-file rename so partial writes never corrupt the file.
+//! - **Private tier** (vault, AES-256-GCM): trust tier, relationship history,
+//!   personal revelations. Stored under the `user_profile_sensitive` vault key.
+//!   Gracefully skipped if the vault is unavailable.
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -202,7 +212,13 @@ impl Default for UserProfile {
             preferences: UserPreferences::default(),
             privacy: PrivacySettings::default(),
             proactive_settings: ProactiveSettings::default(),
-            ocean_adjustments: OceanTraits::DEFAULT,
+            ocean_adjustments: OceanTraits {
+                openness: 0.0,
+                conscientiousness: 0.0,
+                extraversion: 0.0,
+                agreeableness: 0.0,
+                neuroticism: 0.0,
+            },
             created_at_ms: 0,
             updated_at_ms: 0,
             onboarding_completed: false,
@@ -322,19 +338,19 @@ impl UserProfile {
     }
 
     /// Compute the effective OCEAN traits (defaults + calibration adjustments).
+    ///
+    /// `ocean_adjustments` stores *deltas* from `OceanTraits::DEFAULT`.
+    /// A zero-delta profile returns DEFAULT exactly.
     pub fn effective_ocean(&self) -> OceanTraits {
         let mut traits = OceanTraits {
-            openness: OceanTraits::DEFAULT.openness
-                + (self.ocean_adjustments.openness - OceanTraits::DEFAULT.openness),
+            openness: OceanTraits::DEFAULT.openness + self.ocean_adjustments.openness,
             conscientiousness: OceanTraits::DEFAULT.conscientiousness
-                + (self.ocean_adjustments.conscientiousness
-                    - OceanTraits::DEFAULT.conscientiousness),
+                + self.ocean_adjustments.conscientiousness,
             extraversion: OceanTraits::DEFAULT.extraversion
-                + (self.ocean_adjustments.extraversion - OceanTraits::DEFAULT.extraversion),
+                + self.ocean_adjustments.extraversion,
             agreeableness: OceanTraits::DEFAULT.agreeableness
-                + (self.ocean_adjustments.agreeableness - OceanTraits::DEFAULT.agreeableness),
-            neuroticism: OceanTraits::DEFAULT.neuroticism
-                + (self.ocean_adjustments.neuroticism - OceanTraits::DEFAULT.neuroticism),
+                + self.ocean_adjustments.agreeableness,
+            neuroticism: OceanTraits::DEFAULT.neuroticism + self.ocean_adjustments.neuroticism,
         };
         traits.clamp_all();
         traits
@@ -465,6 +481,286 @@ impl UserProfile {
         info!("user profile deleted from DB (right to erasure)");
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Two-tier file-backed persistence
+    // -----------------------------------------------------------------------
+
+    /// Load the profile from the two-tier system, or create a default if absent.
+    ///
+    /// - Public tier: `{config_dir}/user_profile.json` (plain JSON)
+    /// - Private tier: vault key `user_profile_sensitive` (if vault available)
+    ///
+    /// Returns a fresh default profile on first run (neither file nor vault entry
+    /// exists). Vault errors are logged as warnings and do not prevent loading.
+    pub fn load_or_create(
+        config_dir: &Path,
+        vault: Option<&mut crate::persistence::vault::CriticalVault>,
+    ) -> Result<Self, OnboardingError> {
+        let profile_path = config_dir.join("user_profile.json");
+
+        let mut profile = if profile_path.exists() {
+            let raw = std::fs::read(&profile_path).map_err(|e| {
+                OnboardingError::PersistenceFailed(format!(
+                    "read user_profile.json: {e}"
+                ))
+            })?;
+            let p: ProfilePreferences = serde_json::from_slice(&raw).map_err(|e| {
+                OnboardingError::PersistenceFailed(format!(
+                    "parse user_profile.json: {e}"
+                ))
+            })?;
+            debug!("user profile preferences loaded from file");
+            let mut profile = UserProfile::default();
+            profile.name = p.name;
+            profile.preferences.locale = p.preferred_language;
+            profile.preferences.communication_style = match p.behavior_modifiers.verbosity.as_str() {
+                "concise" => CommunicationStyle::Concise,
+                "detailed" => CommunicationStyle::Detailed,
+                _ => CommunicationStyle::Balanced,
+            };
+            if let Some(ts) = p.created_at_ms {
+                profile.created_at_ms = ts;
+            }
+            if let Some(ts) = p.last_seen_ms {
+                profile.updated_at_ms = ts;
+            }
+            profile
+        } else {
+            debug!("no user_profile.json found — using default profile");
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let mut p = UserProfile::default();
+            p.created_at_ms = now_ms;
+            p.updated_at_ms = now_ms;
+            p
+        };
+
+        // Load sensitive tier from vault (non-fatal).
+        if let Some(vault) = vault {
+            match vault.retrieve(
+                "user_profile_sensitive",
+                "user_profile",
+                true,
+            ) {
+                Ok(bytes) => {
+                    match serde_json::from_slice::<ProfileSensitive>(&bytes) {
+                        Ok(sensitive) => {
+                            // Merge sensitive fields back into profile.
+                            profile.interests = sensitive.interests;
+                            debug!("user profile sensitive data loaded from vault");
+                        }
+                        Err(e) => {
+                            warn!("failed to parse sensitive profile from vault: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Not found or vault not configured — not an error on first run.
+                    debug!("sensitive profile not in vault (may be first run): {e:?}");
+                }
+            }
+        }
+
+        Ok(profile)
+    }
+
+    /// Save the public (non-sensitive) preferences tier to `{config_dir}/user_profile.json`.
+    ///
+    /// Uses an atomic temp-file rename to prevent partial writes.
+    pub fn save_preferences(&self, config_dir: &Path) -> Result<(), OnboardingError> {
+        std::fs::create_dir_all(config_dir).map_err(|e| {
+            OnboardingError::PersistenceFailed(format!("create config dir: {e}"))
+        })?;
+
+        let prefs = ProfilePreferences {
+            version: PROFILE_SCHEMA_VERSION,
+            name: self.name.clone(),
+            preferred_language: self.preferences.locale.clone(),
+            timezone: String::new(), // Reserved for future use.
+            behavior_modifiers: BehaviorModifiers {
+                verbosity: match self.preferences.communication_style {
+                    CommunicationStyle::Concise => "concise".to_string(),
+                    CommunicationStyle::Balanced => "balanced".to_string(),
+                    CommunicationStyle::Detailed => "detailed".to_string(),
+                },
+                formality: "neutral".to_string(),
+                proactivity: if self.proactive_settings.consent.is_allowed() {
+                    "high".to_string()
+                } else {
+                    "low".to_string()
+                },
+            },
+            created_at_ms: Some(self.created_at_ms),
+            last_seen_ms: Some(self.updated_at_ms),
+        };
+
+        let json = serde_json::to_vec_pretty(&prefs).map_err(|e| {
+            OnboardingError::PersistenceFailed(format!("serialize preferences: {e}"))
+        })?;
+
+        // Atomic write via temp file.
+        let profile_path = config_dir.join("user_profile.json");
+        let tmp_path = config_dir.join("user_profile.json.tmp");
+        std::fs::write(&tmp_path, &json).map_err(|e| {
+            OnboardingError::PersistenceFailed(format!("write tmp preferences: {e}"))
+        })?;
+        std::fs::rename(&tmp_path, &profile_path).map_err(|e| {
+            OnboardingError::PersistenceFailed(format!("rename preferences file: {e}"))
+        })?;
+
+        debug!(size_bytes = json.len(), "user profile preferences saved to file");
+        Ok(())
+    }
+
+    /// Save sensitive profile data to the vault.
+    ///
+    /// Stored under key `user_profile_sensitive` at `DataTier::Personal`.
+    /// If the vault is `None` or not configured, this is a no-op with a warning.
+    pub fn save_sensitive(
+        &self,
+        vault: Option<&mut crate::persistence::vault::CriticalVault>,
+    ) -> Result<(), OnboardingError> {
+        let vault = match vault {
+            Some(v) => v,
+            None => {
+                warn!("vault not available — skipping sensitive profile save");
+                return Ok(());
+            }
+        };
+
+        let sensitive = ProfileSensitive {
+            interests: self.interests.clone(),
+        };
+
+        let bytes = serde_json::to_vec(&sensitive).map_err(|e| {
+            OnboardingError::PersistenceFailed(format!("serialize sensitive profile: {e}"))
+        })?;
+
+        vault
+            .store(
+                "user_profile_sensitive",
+                &bytes,
+                crate::persistence::vault::DataTier::Personal,
+                crate::persistence::vault::EntryMetadata {
+                    description: "User profile sensitive data (interests, personal context)".to_string(),
+                    category: crate::persistence::vault::DataCategory::Personal,
+                    auto_classified: false,
+                    expiry_ms: None,
+                },
+            )
+            .map_err(|e| {
+                OnboardingError::PersistenceFailed(format!("vault store sensitive profile: {e:?}"))
+            })?;
+
+        debug!("user profile sensitive data saved to vault");
+        Ok(())
+    }
+
+    /// Save both tiers: preferences to JSON file and sensitive data to vault.
+    ///
+    /// Equivalent to calling `save_preferences` then `save_sensitive`.
+    pub fn save(
+        &self,
+        config_dir: &Path,
+        vault: Option<&mut crate::persistence::vault::CriticalVault>,
+    ) -> Result<(), OnboardingError> {
+        self.save_preferences(config_dir)?;
+        self.save_sensitive(vault)?;
+        info!("user profile saved (both tiers)");
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Fixed-path convenience persistence (no-arg variants)
+    // -----------------------------------------------------------------------
+
+    /// Return the canonical config path: `~/.config/aura/user_profile.json`.
+    pub fn config_path() -> std::path::PathBuf {
+        let home = if let Ok(h) = std::env::var("HOME") {
+            std::path::PathBuf::from(h)
+        } else {
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(up) = std::env::var("USERPROFILE") {
+                    std::path::PathBuf::from(up)
+                } else {
+                    let drive = std::env::var("HOMEDRIVE").unwrap_or_else(|_| "C:".to_string());
+                    let homepath = std::env::var("HOMEPATH")
+                        .unwrap_or_else(|_| "\\Users\\user".to_string());
+                    std::path::PathBuf::from(format!("{}{}", drive, homepath))
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            std::path::PathBuf::from("/tmp")
+        };
+        home.join(".config").join("aura").join("user_profile.json")
+    }
+
+    /// Serialize non-sensitive fields to `~/.config/aura/user_profile.json`.
+    ///
+    /// Uses an atomic temp-file rename to prevent partial writes.
+    /// This is a convenience wrapper around [`save_preferences`] using the
+    /// fixed path returned by [`config_path`].
+    pub fn save_preferences_default(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::config_path();
+        let config_dir = path
+            .parent()
+            .ok_or("config path has no parent directory")?;
+        self.save_preferences(config_dir)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+
+    /// Deserialize from `~/.config/aura/user_profile.json`, returning a
+    /// fresh default profile if the file is absent or cannot be parsed.
+    ///
+    /// This is a convenience wrapper around [`load_or_create`] that uses the
+    /// fixed path returned by [`config_path`] and no vault.
+    pub fn load_preferences_default() -> Result<Self, Box<dyn std::error::Error>> {
+        let path = Self::config_path();
+        let config_dir = path
+            .parent()
+            .ok_or("config path has no parent directory")?;
+        Self::load_or_create(config_dir, None)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File-backed persistence helper types
+// ---------------------------------------------------------------------------
+
+/// Public (human-readable) tier stored in `user_profile.json`.
+#[derive(Debug, Serialize, Deserialize)]
+struct ProfilePreferences {
+    version: u32,
+    name: String,
+    preferred_language: String,
+    timezone: String,
+    behavior_modifiers: BehaviorModifiers,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_seen_ms: Option<u64>,
+}
+
+/// Behavior modifier fields within the public preferences JSON.
+#[derive(Debug, Serialize, Deserialize)]
+struct BehaviorModifiers {
+    /// verbosity: "concise" | "balanced" | "detailed"
+    verbosity: String,
+    /// formality: "casual" | "neutral" | "formal"
+    formality: String,
+    /// proactivity: "low" | "medium" | "high"
+    proactivity: String,
+}
+
+/// Private (vault) tier — sensitive interests and personal data.
+#[derive(Debug, Serialize, Deserialize)]
+struct ProfileSensitive {
+    interests: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +899,7 @@ mod tests {
     fn test_effective_ocean() {
         let p = UserProfile::default();
         let effective = p.effective_ocean();
-        // With default adjustments (same as DEFAULT), effective should equal DEFAULT.
+        // With zero adjustments (no calibration), effective should equal DEFAULT.
         assert!((effective.openness - OceanTraits::DEFAULT.openness).abs() < f32::EPSILON);
     }
 

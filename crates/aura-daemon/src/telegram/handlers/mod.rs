@@ -24,7 +24,7 @@ use super::commands::TelegramCommand;
 use super::queue::MessageQueue;
 use super::security::SecurityGate;
 use super::voice_handler::{
-    CommunicationContext, CommunicationMode, VoiceHandler, VoiceModePreference,
+    CommunicationContext, CommunicationMode, VoiceHandler,
 };
 
 // ─── Handler context ────────────────────────────────────────────────────────

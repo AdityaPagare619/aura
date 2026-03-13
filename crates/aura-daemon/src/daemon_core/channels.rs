@@ -4,7 +4,7 @@
 //! This module defines the message types and a factory that creates all channels
 //! with correct capacities.
 
-use aura_types::events::{NotificationEvent, RawEvent};
+use aura_types::events::{DaemonEvent, NotificationEvent, RawEvent};
 use aura_types::ipc::NeocortexToDaemon;
 use tokio::sync::mpsc;
 
@@ -117,6 +117,9 @@ pub struct DaemonResponse {
     pub destination: InputSource,
     /// The response text.
     pub text: String,
+    /// LLM mood hint forwarded from `ConversationReply.mood_hint` (valence, [-1.0, 1.0]).
+    /// Used by VoiceBridge to set TTS voice parameters.
+    pub mood_hint: Option<f32>,
 }
 
 pub type DaemonResponseTx = mpsc::Sender<DaemonResponse>;
@@ -177,6 +180,9 @@ pub type DbWriteRx = mpsc::Receiver<DbWriteRequest>;
 pub type CronTickTx = mpsc::Sender<CronTick>;
 pub type CronTickRx = mpsc::Receiver<CronTick>;
 
+pub type HealthEventTx = mpsc::Sender<DaemonEvent>;
+pub type HealthEventRx = mpsc::Receiver<DaemonEvent>;
+
 /// Capacity for the daemon→bridge response channel.
 const RESPONSE_CAPACITY: usize = 64;
 
@@ -198,6 +204,8 @@ const IPC_INBOUND_CAPACITY: usize = 4;
 const DB_WRITE_CAPACITY: usize = 256;
 /// Cron ticks — 31 jobs, but they don't all fire at once.
 const CRON_TICK_CAPACITY: usize = 32;
+/// Health events — heartbeat + pressure events, small bounded queue.
+const HEALTH_EVENT_CAPACITY: usize = 32;
 
 // ---------------------------------------------------------------------------
 // DaemonChannels — the aggregate
@@ -240,6 +248,10 @@ pub struct DaemonChannels {
     // Daemon → bridge response channel
     pub response_tx: DaemonResponseTx,
     pub response_rx: DaemonResponseRx,
+
+    // Health / heartbeat events (emitted by run_heartbeat_loop task)
+    pub health_event_tx: HealthEventTx,
+    pub health_event_rx: HealthEventRx,
 }
 
 /// Receiver halves only — owned exclusively by the main loop's `select!`.
@@ -255,6 +267,7 @@ pub struct ChannelReceivers {
     pub db_write_rx: DbWriteRx,
     pub cron_tick_rx: CronTickRx,
     pub response_rx: DaemonResponseRx,
+    pub health_event_rx: HealthEventRx,
 }
 
 /// Transmitter halves only — distributed to producers.
@@ -269,6 +282,7 @@ pub struct ChannelSenders {
     pub db_write_tx: DbWriteTx,
     pub cron_tick_tx: CronTickTx,
     pub response_tx: DaemonResponseTx,
+    pub health_event_tx: HealthEventTx,
 }
 
 impl DaemonChannels {
@@ -282,6 +296,7 @@ impl DaemonChannels {
         let (db_write_tx, db_write_rx) = mpsc::channel(DB_WRITE_CAPACITY);
         let (cron_tick_tx, cron_tick_rx) = mpsc::channel(CRON_TICK_CAPACITY);
         let (response_tx, response_rx) = mpsc::channel(RESPONSE_CAPACITY);
+        let (health_event_tx, health_event_rx) = mpsc::channel(HEALTH_EVENT_CAPACITY);
 
         Self {
             a11y_tx,
@@ -300,6 +315,8 @@ impl DaemonChannels {
             cron_tick_rx,
             response_tx,
             response_rx,
+            health_event_tx,
+            health_event_rx,
         }
     }
 
@@ -318,6 +335,7 @@ impl DaemonChannels {
             db_write_tx: self.db_write_tx,
             cron_tick_tx: self.cron_tick_tx,
             response_tx: self.response_tx,
+            health_event_tx: self.health_event_tx,
         };
         let receivers = ChannelReceivers {
             a11y_rx: self.a11y_rx,
@@ -328,6 +346,7 @@ impl DaemonChannels {
             db_write_rx: self.db_write_rx,
             cron_tick_rx: self.cron_tick_rx,
             response_rx: self.response_rx,
+            health_event_rx: self.health_event_rx,
         };
         (senders, receivers)
     }
@@ -362,6 +381,7 @@ mod tests {
                 content_description: None,
                 timestamp_ms: 1000 + u64::from(i),
                 source_node_id: None,
+                raw_nodes: None,
             };
             channels
                 .a11y_tx

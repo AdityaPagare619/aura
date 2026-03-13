@@ -9,6 +9,26 @@ use crate::identity::personality::{ConsistencyReport, Personality};
 use crate::identity::RelationshipTracker;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum number of verification issues retained in a single report.
+/// Prevents unbounded Vec growth when many users or traits are checked.
+const MAX_VERIFICATION_ISSUES: usize = 256;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Push a `VerificationIssue` only if the cap has not been reached.
+#[inline]
+fn push_issue(issues: &mut Vec<VerificationIssue>, issue: VerificationIssue) {
+    if issues.len() < MAX_VERIFICATION_ISSUES {
+        issues.push(issue);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // VerificationSeverity
 // ---------------------------------------------------------------------------
 
@@ -129,13 +149,13 @@ impl IntegrityVerifier {
         // Check bounds: all traits must be in [0.1, 0.9].
         let check_bound = |name: &str, val: f32, issues: &mut Vec<VerificationIssue>| {
             if val < 0.0 || val > 1.0 {
-                issues.push(VerificationIssue {
+                push_issue(issues, VerificationIssue {
                     severity: VerificationSeverity::Critical,
                     subsystem: "personality",
                     message: format!("{name} out of valid range: {val:.4} (expected [0.0, 1.0])"),
                 });
             } else if val < 0.1 || val > 0.9 {
-                issues.push(VerificationIssue {
+                push_issue(issues, VerificationIssue {
                     severity: VerificationSeverity::Warning,
                     subsystem: "personality",
                     message: format!("{name} outside safe range: {val:.4} (expected [0.1, 0.9])"),
@@ -152,7 +172,7 @@ impl IntegrityVerifier {
         // Check NaN/Inf — critical data corruption indicator.
         let check_finite = |name: &str, val: f32, issues: &mut Vec<VerificationIssue>| {
             if !val.is_finite() {
-                issues.push(VerificationIssue {
+                push_issue(issues, VerificationIssue {
                     severity: VerificationSeverity::Critical,
                     subsystem: "personality",
                     message: format!("{name} is not finite: {val}"),
@@ -176,7 +196,7 @@ impl IntegrityVerifier {
             };
 
             for issue_msg in &report.issues {
-                issues.push(VerificationIssue {
+                push_issue(issues, VerificationIssue {
                     severity,
                     subsystem: "personality",
                     message: issue_msg.clone(),
@@ -196,13 +216,13 @@ impl IntegrityVerifier {
             if let Some(rel) = relationships.get_relationship(user_id) {
                 // Trust must be in [0.0, 1.0].
                 if !rel.trust.is_finite() {
-                    issues.push(VerificationIssue {
+                    push_issue(issues, VerificationIssue {
                         severity: VerificationSeverity::Critical,
                         subsystem: "trust",
                         message: format!("user '{user_id}' has non-finite trust: {}", rel.trust),
                     });
                 } else if rel.trust < 0.0 || rel.trust > 1.0 {
-                    issues.push(VerificationIssue {
+                    push_issue(issues, VerificationIssue {
                         severity: VerificationSeverity::Warning,
                         subsystem: "trust",
                         message: format!(
@@ -215,7 +235,7 @@ impl IntegrityVerifier {
         }
 
         if all_users.len() > 500 {
-            issues.push(VerificationIssue {
+            push_issue(issues, VerificationIssue {
                 severity: VerificationSeverity::Warning,
                 subsystem: "trust",
                 message: format!(
@@ -232,7 +252,7 @@ impl IntegrityVerifier {
         issues: &mut Vec<VerificationIssue>,
     ) {
         if goal_count > 64 {
-            issues.push(VerificationIssue {
+            push_issue(issues, VerificationIssue {
                 severity: VerificationSeverity::Warning,
                 subsystem: "goals",
                 message: format!(
@@ -249,7 +269,7 @@ impl IntegrityVerifier {
         issues: &mut Vec<VerificationIssue>,
     ) {
         if journal_corruption {
-            issues.push(VerificationIssue {
+            push_issue(issues, VerificationIssue {
                 severity: VerificationSeverity::Critical,
                 subsystem: "journal",
                 message: "journal corruption detected during recovery — \
@@ -259,7 +279,7 @@ impl IntegrityVerifier {
         }
 
         if !journal_recovered {
-            issues.push(VerificationIssue {
+            push_issue(issues, VerificationIssue {
                 severity: VerificationSeverity::Info,
                 subsystem: "journal",
                 message: "no journal found — starting with defaults".to_string(),

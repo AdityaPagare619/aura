@@ -419,11 +419,7 @@ impl MedicationManager {
                     med_id: med.id,
                     med_name: med.name.clone(),
                     nudge_type: NudgeType::AdherenceAlert,
-                    message: format!(
-                        "Your {} adherence has dropped to {:.0}% — try setting a reminder",
-                        med.name,
-                        rate * 100.0
-                    ),
+                    signal: "adherence_alert",
                     confidence: (1.0 - rate).clamp(0.0, 1.0),
                 });
             }
@@ -434,11 +430,7 @@ impl MedicationManager {
                     med_id: med.id,
                     med_name: med.name.clone(),
                     nudge_type: NudgeType::PositiveReinforcement,
-                    message: format!(
-                        "Great job maintaining {:.0}% adherence with {}!",
-                        rate * 100.0,
-                        med.name
-                    ),
+                    signal: "positive_reinforcement",
                     confidence: 0.8,
                 });
             }
@@ -454,15 +446,11 @@ impl MedicationManager {
                 let avg_lateness = taken_doses.iter().map(|r| r.lateness_secs).sum::<i64>() as f64
                     / taken_doses.len() as f64;
                 if avg_lateness > 600.0 {
-                    let mins = (avg_lateness / 60.0).round() as i64;
                     nudges.push(MedicationNudge {
                         med_id: med.id,
                         med_name: med.name.clone(),
                         nudge_type: NudgeType::TimingOptimization,
-                        message: format!(
-                            "You tend to take {} about {} minutes late — consider adjusting your reminder time",
-                            med.name, mins
-                        ),
+                        signal: "timing_optimization",
                         confidence: (avg_lateness as f32 / 1800.0).min(1.0),
                     });
                 }
@@ -512,8 +500,9 @@ pub struct MedicationNudge {
     pub med_name: String,
     /// Type of nudge.
     pub nudge_type: NudgeType,
-    /// Human-readable nudge text.
-    pub message: String,
+    /// Signal key passed to the LLM — not user-facing prose.
+    /// Values: "adherence_alert", "positive_reinforcement", "timing_optimization".
+    pub signal: &'static str,
     /// Confidence that this nudge is relevant (0.0–1.0).
     pub confidence: f32,
 }
@@ -690,7 +679,7 @@ mod tests {
         let nudges = mgr.generate_nudges();
         assert!(!nudges.is_empty(), "should generate adherence alert");
         assert_eq!(nudges[0].nudge_type, NudgeType::AdherenceAlert);
-        assert!(nudges[0].message.contains("Aspirin"));
+        assert_eq!(nudges[0].med_name, "Aspirin");
     }
 
     #[test]
@@ -709,6 +698,9 @@ mod tests {
             .iter()
             .any(|n| n.nudge_type == NudgeType::PositiveReinforcement);
         assert!(positive, "should generate positive reinforcement");
+        // Verify the signal key is correct (not user-facing prose).
+        let pos_nudge = nudges.iter().find(|n| n.nudge_type == NudgeType::PositiveReinforcement).unwrap();
+        assert_eq!(pos_nudge.signal, "positive_reinforcement");
     }
 
     #[test]

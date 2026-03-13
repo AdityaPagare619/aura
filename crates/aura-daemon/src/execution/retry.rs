@@ -1307,14 +1307,25 @@ impl StrategicRecovery {
     /// 1. **Text-based**: pattern matching on the error message
     /// 2. **Environment-based**: overrides from `EnvironmentSnapshot` state
     ///
-    /// Environment state can override text classification when the root cause
-    /// is clearly environmental (e.g., a "timeout" when the network is down
-    /// is Environmental, not Transient).
+    /// Classify a failure into a [`FailureCategory`].
+    ///
+    /// ## Classification tiers (highest priority first)
+    ///
+    /// 1. **Environment overrides** — battery, screen, network+transient,
+    ///    neocortex+LLM (preserved exactly as before).
+    /// 2. **Structural fast-path** — mechanical, non-semantic patterns:
+    ///    timeout → Transient; network socket/DNS → Transient; permission/
+    ///    access → Capability; OOM/resource-exhausted → Environmental.
+    ///    These are structural identifiers, NOT intent reasoning — the Iron
+    ///    Law is not violated.
+    /// 3. **LLM path** — ambiguous failures are sent to the neocortex via
+    ///    [`DaemonToNeocortex::ClassifyFailure`].  Defaults to `Strategic`
+    ///    on timeout or IPC error (unchanged from previous behaviour).
     #[must_use]
     pub fn classify_failure(error: &str, env: &EnvironmentSnapshot) -> FailureCategory {
         let lower = error.to_lowercase();
 
-        // Phase 1: Environment-based overrides (highest priority)
+        // ── Phase 1: Environment-based overrides (highest priority) ──────────
         //
         // These conditions indicate the environment itself is broken,
         // regardless of what the error message says.
@@ -1352,66 +1363,139 @@ impl StrategicRecovery {
             return FailureCategory::Capability;
         }
 
-        // Phase 2: Text-based classification
+        // ── Phase 2: Structural fast-path (mechanical, not semantic) ─────────
+        //
+        // These are deterministic string identifiers for well-known error
+        // classes — not NLP reasoning about intent.  The Iron Law is not
+        // violated: we are pattern-matching known structural error codes,
+        // not interpreting ambiguous natural-language meaning.
 
-        // Safety — check first, these should never be retried
-        if lower.contains("policy")
-            || lower.contains("blocked")
-            || lower.contains("safety")
-            || lower.contains("denied by policy")
-            || lower.contains("ethical")
-            || lower.contains("boundary violation")
-        {
-            return FailureCategory::Safety;
-        }
-
-        // Capability — missing prerequisites
-        if lower.contains("not installed")
-            || lower.contains("unavailable")
-            || lower.contains("hardware")
-            || lower.contains("restricted")
-            || lower.contains("unsupported")
-            || lower.contains("api not available")
-        {
-            return FailureCategory::Capability;
-        }
-
-        // Environmental — external failures
-        if lower.contains("crashed")
-            || lower.contains("no internet")
-            || lower.contains("low battery")
-            || lower.contains("permission denied")
-            || lower.contains("app not responding")
-            || lower.contains("out of memory")
-        {
-            return FailureCategory::Environmental;
-        }
-
-        // Strategic — wrong approach, UI mismatch
-        if lower.contains("not found")
-            || lower.contains("wrong screen")
-            || lower.contains("element missing")
-            || lower.contains("unexpected state")
-            || lower.contains("ui changed")
-            || lower.contains("stale reference")
-        {
-            return FailureCategory::Strategic;
-        }
-
-        // Transient — temporary glitches (default for network-like errors)
-        if lower.contains("timeout")
-            || lower.contains("connection")
-            || lower.contains("loading")
-            || lower.contains("temporary")
-            || lower.contains("retry")
-            || lower.contains("rate limit")
-        {
+        // Timeout errors → Transient (will resolve on retry)
+        if lower.contains("timeout") || lower.contains("timed out") {
+            debug!("classify: timeout keyword → Transient");
             return FailureCategory::Transient;
         }
 
-        // Default: treat unknown errors as Strategic (try a different approach)
-        debug!(error, "classify: no pattern match → defaulting to Strategic");
+        // Network / socket / DNS errors → Transient (recoverable connectivity)
+        if lower.contains("connection refused")
+            || lower.contains("network")
+            || lower.contains("socket")
+            || lower.contains("dns")
+        {
+            debug!("classify: network/socket/dns keyword → Transient");
+            return FailureCategory::Transient;
+        }
+
+        // Permission / access errors → Capability (need different approach)
+        if lower.contains("permission denied")
+            || lower.contains("access denied")
+            || lower.contains("forbidden")
+        {
+            debug!("classify: permission/access keyword → Capability");
+            return FailureCategory::Capability;
+        }
+
+        // Resource exhaustion → Environmental (system-level constraint)
+        if lower.contains("out of memory")
+            || lower.contains("oom")
+            || lower.contains("resource exhausted")
+        {
+            debug!("classify: OOM/resource-exhausted keyword → Environmental");
+            return FailureCategory::Environmental;
+        }
+
+        // ── Phase 3: LLM path for ambiguous failures ─────────────────────────
+        //
+        // IRON LAW: LLM classifies intent. Rust does not.
+        // Ambiguous errors that don't match structural fast-paths are sent to
+        // the neocortex for semantic classification.  Default to Strategic on
+        // timeout / error so a replan is requested (unchanged prior behaviour).
+        if let Some(category) = Self::classify_failure_via_llm(error, env) {
+            return category;
+        }
+
+        debug!(error, "classify: LLM unavailable — defaulting to Strategic");
         FailureCategory::Strategic
+    }
+
+    /// Send an ambiguous failure to the neocortex for LLM classification.
+    ///
+    /// Returns `None` if the IPC call times out, errors, or returns an
+    /// unrecognised label (caller falls back to `Strategic`).
+    fn classify_failure_via_llm(
+        error: &str,
+        env: &EnvironmentSnapshot,
+    ) -> Option<FailureCategory> {
+        use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
+
+        // No runtime → cannot do async IPC; caller will use default.
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                let mut client = match crate::ipc::NeocortexClient::connect().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "classify_failure_via_llm: connect failed");
+                        return None;
+                    }
+                };
+
+                // Provide a compact env summary as context for the LLM.
+                let context = format!(
+                    "battery={:.0}% screen_responsive={} network={} neocortex={}",
+                    env.battery_level * 100.0,
+                    env.screen_responsive,
+                    env.network_available,
+                    env.neocortex_alive,
+                );
+
+                let result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    client.request(&DaemonToNeocortex::ClassifyFailure {
+                        error: error.to_string(),
+                        context,
+                    }),
+                )
+                .await;
+
+                match result {
+                    Ok(Ok(NeocortexToDaemon::FailureClassification { category })) => {
+                        let fc = match category.as_str() {
+                            "Transient" => FailureCategory::Transient,
+                            "Strategic" => FailureCategory::Strategic,
+                            "Environmental" => FailureCategory::Environmental,
+                            "Capability" => FailureCategory::Capability,
+                            "Safety" => FailureCategory::Safety,
+                            other => {
+                                warn!(label = other, "classify_failure_via_llm: unknown label");
+                                return None;
+                            }
+                        };
+                        debug!(category = ?fc, "classify_failure_via_llm: LLM classified failure");
+                        Some(fc)
+                    }
+                    Ok(Ok(other)) => {
+                        warn!(
+                            resp = ?std::mem::discriminant(&other),
+                            "classify_failure_via_llm: unexpected IPC response"
+                        );
+                        None
+                    }
+                    Ok(Err(e)) => {
+                        warn!(error = %e, "classify_failure_via_llm: request error");
+                        None
+                    }
+                    Err(_elapsed) => {
+                        warn!("classify_failure_via_llm: 5-second timeout");
+                        None
+                    }
+                }
+            })
+        })
     }
 
     /// Determine the appropriate recovery action for a given failure context.
@@ -1615,9 +1699,13 @@ impl StrategicRecovery {
             self.retry_system.handle_success(operation);
             info!(operation, "recovery succeeded — escalation count reset");
         } else {
-            // Increment escalation count (bounded map)
-            if self.escalation_counts.len() < MAX_ESCALATION_OPERATIONS
-                || self.escalation_counts.contains_key(operation)
+            // Only increment escalation count for Strategic/Environmental failures.
+            // Transient retries failing do NOT count as escalations — they are handled
+            // by the retry system's attempt counter, not the escalation limit.
+            let is_escalation_worthy = !matches!(category, FailureCategory::Transient);
+            if is_escalation_worthy
+                && (self.escalation_counts.len() < MAX_ESCALATION_OPERATIONS
+                    || self.escalation_counts.contains_key(operation))
             {
                 let count = self
                     .escalation_counts
@@ -2425,6 +2513,8 @@ mod tests {
     #[test]
     fn test_classify_timeout_as_transient() {
         let env = default_env();
+        // Structural fast-path: "timeout" with good network → Transient.
+        // This is a mechanical identifier (not NLP reasoning) — Iron Law preserved.
         assert_eq!(
             StrategicRecovery::classify_failure("connection timeout", &env),
             FailureCategory::Transient
@@ -2443,27 +2533,33 @@ mod tests {
     #[test]
     fn test_classify_crashed_as_environmental() {
         let env = default_env();
+        // IRON LAW: text-based classification removed. LLM classifies error intent.
+        // "app crashed" without hardware trigger → defaults to Strategic (LLM replan).
         assert_eq!(
             StrategicRecovery::classify_failure("app crashed unexpectedly", &env),
-            FailureCategory::Environmental
+            FailureCategory::Strategic
         );
     }
 
     #[test]
     fn test_classify_not_installed_as_capability() {
         let env = default_env();
+        // IRON LAW: text-based classification removed. LLM classifies error intent.
+        // "app not installed" without hardware trigger → defaults to Strategic (LLM replan).
         assert_eq!(
             StrategicRecovery::classify_failure("app not installed", &env),
-            FailureCategory::Capability
+            FailureCategory::Strategic
         );
     }
 
     #[test]
     fn test_classify_policy_as_safety() {
         let env = default_env();
+        // IRON LAW: text-based classification removed. LLM classifies error intent.
+        // "denied by policy gate" without hardware trigger → defaults to Strategic (LLM replan).
         assert_eq!(
             StrategicRecovery::classify_failure("denied by policy gate", &env),
-            FailureCategory::Safety
+            FailureCategory::Strategic
         );
     }
 
@@ -2831,12 +2927,12 @@ mod tests {
     #[test]
     fn test_classify_safety_keywords() {
         let env = default_env();
-        // All safety keywords should classify as Safety
+        // classify_failure() always returns Strategic (stub — LLM classifies failures).
         for keyword in &["policy violation", "action blocked", "safety concern", "ethical issue"] {
             assert_eq!(
                 StrategicRecovery::classify_failure(keyword, &env),
-                FailureCategory::Safety,
-                "expected Safety for '{keyword}'"
+                FailureCategory::Strategic,
+                "expected Strategic for '{keyword}'"
             );
         }
     }
@@ -2847,8 +2943,8 @@ mod tests {
         for keyword in &["feature unavailable", "hardware missing", "api restricted"] {
             assert_eq!(
                 StrategicRecovery::classify_failure(keyword, &env),
-                FailureCategory::Capability,
-                "expected Capability for '{keyword}'"
+                FailureCategory::Strategic,
+                "expected Strategic for '{keyword}'"
             );
         }
     }

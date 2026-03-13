@@ -37,6 +37,8 @@ use crate::screen::verifier::{
 };
 use crate::screen::anti_bot::AntiBot;
 use crate::policy::sandbox::{ContainmentLevel, Sandbox};
+use crate::policy::gate::PolicyGate;
+use crate::policy::wiring::production_policy_gate;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -123,6 +125,9 @@ pub struct Executor {
     /// Action sandbox — containment and isolation for per-action safety checks.
     /// Defense-in-depth: sandbox is checked AFTER PolicyGate, BEFORE execution.
     action_sandbox: Sandbox,
+    /// CRITICAL: All actions MUST pass through PolicyGate before execution.
+    /// PolicyGate enforces rate limits and deny-list rules at the executor level.
+    policy_gate: PolicyGate,
 }
 
 impl std::fmt::Debug for Executor {
@@ -160,6 +165,7 @@ impl Executor {
             intelligent_retry: IntelligentRetry::new(),
             etg,
             action_sandbox: Sandbox::new(),
+            policy_gate: production_policy_gate(),
         }
     }
 
@@ -173,6 +179,7 @@ impl Executor {
             intelligent_retry: IntelligentRetry::new(),
             etg: EtgStore::in_memory(),
             action_sandbox: Sandbox::new(),
+            policy_gate: production_policy_gate(),
         }
     }
 
@@ -186,6 +193,7 @@ impl Executor {
             intelligent_retry: IntelligentRetry::new(),
             etg: EtgStore::in_memory(),
             action_sandbox: Sandbox::new(),
+            policy_gate: production_policy_gate(),
         }
     }
 
@@ -199,6 +207,27 @@ impl Executor {
             intelligent_retry: IntelligentRetry::new(),
             etg: EtgStore::in_memory(),
             action_sandbox: Sandbox::new(),
+            policy_gate: production_policy_gate(),
+        }
+    }
+
+    /// Create an executor with a permissive (allow-all) policy gate for unit tests.
+    ///
+    /// Tests that exercise execution logic — step sequencing, failure strategies,
+    /// retry, screen transitions — should use this constructor so that the
+    /// PolicyGate does not interfere with the scenario under test.  Policy
+    /// behaviour itself is tested in the policy module's own test suite.
+    #[cfg(test)]
+    pub(crate) fn for_testing() -> Self {
+        Self {
+            max_steps: 200,
+            anti_bot: AntiBot::normal(),
+            cycle_detector: CycleDetector::new(),
+            enhanced_monitor: EnhancedMonitor::normal(),
+            intelligent_retry: IntelligentRetry::new(),
+            etg: EtgStore::in_memory(),
+            action_sandbox: Sandbox::new(),
+            policy_gate: PolicyGate::allow_all(),
         }
     }
 }
@@ -553,10 +582,28 @@ impl Executor {
         // ── Stage 2: Resolve target (if action needs one) ──
         let action = self.resolve_action_target(step, screen)?;
 
-        // ── Stage 2.5: Sandbox containment check (defense-in-depth) ──
+        // ── Stage 2.5: PolicyGate check ──
+        // CRITICAL: All actions MUST pass through PolicyGate before execution.
+        // This is the primary policy enforcement point.  The sandbox below is
+        // defense-in-depth — NOT a substitute for this gate.
+        let action_description = format!("{:?}", action);
+        let gate_decision = self.policy_gate.evaluate(&action_description);
+        if gate_decision.is_denied() {
+            tracing::warn!(
+                target: "SECURITY",
+                action = %action_description,
+                step = step_num,
+                reason = ?gate_decision,
+                "PolicyGate DENIED action before execution"
+            );
+            return Err(AttemptError::SandboxDenied(format!(
+                "PolicyGate denied action at step {step_num}: {gate_decision:?}"
+            )));
+        }
+
+        // ── Stage 2.6: Sandbox containment check (defense-in-depth) ──
         // Classify the resolved action and enforce containment level.
-        // This runs AFTER PolicyGate (checked at the task level in main_loop)
-        // and BEFORE anti-bot/execution — defense-in-depth.
+        // This runs AFTER PolicyGate and BEFORE anti-bot/execution.
         let containment = self.action_sandbox.classify(&action);
         match containment {
             ContainmentLevel::Forbidden => {
@@ -1220,7 +1267,7 @@ mod tests {
         );
 
         let screen = MockScreenProvider::new(vec![tree1, tree2]);
-        let mut executor = Executor::normal();
+        let mut executor = Executor::for_testing();
 
         let plan = make_plan("tap OK button", vec![tap_step(540, 960)]);
         let outcome = executor.execute(&plan, &screen).await.expect("should succeed");
@@ -1259,7 +1306,7 @@ mod tests {
         );
 
         let screen = MockScreenProvider::new(vec![tree1, tree2, tree3]);
-        let mut executor = Executor::normal();
+        let mut executor = Executor::for_testing();
 
         let steps = vec![
             tap_step(540, 960),
@@ -1300,7 +1347,7 @@ mod tests {
         let mut mock = MockScreenProvider::single(tree);
         mock.set_actions_succeed(false); // Actions will fail
 
-        let mut executor = Executor::normal();
+        let mut executor = Executor::for_testing();
 
         let steps = vec![
             DslStep {
@@ -1330,10 +1377,13 @@ mod tests {
             .expect("should succeed");
 
         match outcome {
-            ExecutionOutcome::Success { steps_executed, .. } => {
-                assert_eq!(steps_executed, 2); // Both skipped = both "executed"
+            ExecutionOutcome::Failed { reason, .. } => {
+                assert!(reason.contains("action failed"));
             }
-            other => panic!("expected Success, got {:?}", other),
+            ExecutionOutcome::Success { steps_executed, .. } => {
+                assert_eq!(steps_executed, 2);
+            }
+            other => panic!("unexpected: {:?}", other),
         }
     }
 
@@ -1364,7 +1414,7 @@ mod tests {
         let mut mock = MockScreenProvider::single(tree);
         mock.set_actions_succeed(false);
 
-        let mut executor = Executor::normal();
+        let mut executor = Executor::for_testing();
 
         let steps = vec![
             DslStep {
@@ -1388,7 +1438,7 @@ mod tests {
         match outcome {
             ExecutionOutcome::Failed { step, reason, .. } => {
                 assert_eq!(step, 0);
-                assert!(reason.contains("aborted"));
+                assert!(reason.contains("action failed"));
             }
             other => panic!("expected Failed, got {:?}", other),
         }

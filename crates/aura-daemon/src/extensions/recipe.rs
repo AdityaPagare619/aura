@@ -37,15 +37,17 @@ impl RecipeTemplate {
 
         for step in &recipe.steps {
             let mut template_args = HashMap::new();
-            for (k, v) in &step.args {
-                // In a privacy-safe export, we'd replace actual data with Role bindings.
-                // For this MVP, we just take the string representation.
-                let val_str = v.to_string().replace("\"", "");
-                template_args.insert(k.clone(), val_str);
+            if let Some(obj) = step.parameters_template.as_object() {
+                for (k, v) in obj {
+                    // In a privacy-safe export, we'd replace actual data with Role bindings.
+                    // For this MVP, we just take the string representation.
+                    let val_str = v.to_string().replace("\"", "");
+                    template_args.insert(k.clone(), val_str);
+                }
             }
 
             template_steps.push(TemplateStep {
-                skill_id: step.skill_id.clone(),
+                skill_id: step.tool_or_skill_id.clone(),
                 template_args,
             });
         }
@@ -76,9 +78,8 @@ impl RecipeTemplate {
             }
 
             steps.push(RecipeStep {
-                skill_id: t_step.skill_id.clone(),
-                args: serde_json::Value::Object(args),
-                condition: None, // Logic for conditions could also be templated
+                tool_or_skill_id: t_step.skill_id.clone(),
+                parameters_template: serde_json::Value::Object(args),
             });
         }
 

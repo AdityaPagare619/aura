@@ -15,10 +15,12 @@
 
 use std::collections::{HashMap, VecDeque};
 use aura_types::actions::ActionType;
-use aura_types::dsl::{DslStep, FailureStrategy};
 use aura_types::etg::ActionPlan;
-use aura_types::extensions::RecipeStep;
 use serde::{Deserialize, Serialize};
+
+/// Maximum number of execution traces retained in the history buffer.
+/// Enforced in `observe_success` to prevent unbounded growth.
+const MAX_TRACE_HISTORY: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionTrace {
@@ -61,11 +63,11 @@ impl WorkflowObserver {
     pub fn observe_success(&mut self, plan: &ActionPlan, current_time_ms: u64) {
         let trace = ExecutionTrace {
             goal_description: plan.goal_description.clone(),
-            steps: plan.steps.iter().filter_map(|s| s.action.clone()).collect(),
+            steps: plan.steps.iter().map(|s| s.action.clone()).collect(),
             timestamp_ms: current_time_ms,
         };
 
-        if self.trace_history.len() >= 100 {
+        if self.trace_history.len() >= MAX_TRACE_HISTORY {
             self.trace_history.pop_front();
         }
         self.trace_history.push_back(trace);
@@ -74,20 +76,22 @@ impl WorkflowObserver {
     /// Abstract the history buffer to find repeating sequences of actions (minimum length 3).
     /// Returns the most frequent pattern if it crosses the `min_frequency_threshold`.
     pub fn extract_automation_candidate(&self) -> Option<WorkflowPattern> {
-        let mut sequence_counts: HashMap<Vec<ActionType>, u32> = HashMap::new();
+        // Use JSON serialization of the sequence as a hashable key.
+        let mut sequence_counts: HashMap<String, (Vec<ActionType>, u32)> = HashMap::new();
 
         // O(N^2) extraction over small fixed buffer.
         // In deep learning systems this would be LSTM/Transformer based sequence modeling.
         for trace in &self.trace_history {
             // We only care about workflows that are at least 3 steps long
             if trace.steps.len() >= 3 {
-                let count = sequence_counts.entry(trace.steps.clone()).or_insert(0);
-                *count += 1;
+                let key = serde_json::to_string(&trace.steps).unwrap_or_default();
+                let entry = sequence_counts.entry(key).or_insert_with(|| (trace.steps.clone(), 0));
+                entry.1 += 1;
             }
         }
 
         let best_pattern = sequence_counts
-            .into_iter()
+            .into_values()
             .filter(|(_, count)| *count >= self.min_frequency_threshold)
             .max_by_key(|(_, count)| *count);
 
@@ -106,7 +110,7 @@ impl WorkflowObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_types::actions::{ClickTarget, ActionType};
+    use aura_types::actions::ActionType;
 
     #[test]
     fn test_workflow_extraction() {
@@ -114,8 +118,8 @@ mod tests {
         let plan = ActionPlan {
             goal_description: "Check messages".to_string(),
             steps: vec![
-                DslStep {
-                    action: Some(ActionType::OpenApp { package: "com.whatsapp".to_string() }),
+                aura_types::dsl::DslStep {
+                    action: ActionType::OpenApp { package: "com.whatsapp".to_string() },
                     target: None,
                     timeout_ms: 1000,
                     on_failure: Default::default(),
@@ -123,8 +127,8 @@ mod tests {
                     postcondition: None,
                     label: None,
                 },
-                DslStep {
-                    action: Some(ActionType::Click { target: ClickTarget::Text("Aura".to_string()) }),
+                aura_types::dsl::DslStep {
+                    action: ActionType::Tap { x: 100, y: 200 },
                     target: None,
                     timeout_ms: 1000,
                     on_failure: Default::default(),
@@ -132,8 +136,8 @@ mod tests {
                     postcondition: None,
                     label: None,
                 },
-                DslStep {
-                    action: Some(ActionType::ExtractText { field_name: "latest_message".to_string() }),
+                aura_types::dsl::DslStep {
+                    action: ActionType::Back,
                     target: None,
                     timeout_ms: 1000,
                     on_failure: Default::default(),

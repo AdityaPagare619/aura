@@ -190,11 +190,12 @@ impl EtgStore {
             } else {
                 edge.fail_count += 1;
             }
-            // Running average of duration
+            // Running Welford online average of duration (EtgEdge uses f32)
             let total = edge.success_count + edge.fail_count;
-            edge.avg_duration_ms = ((edge.avg_duration_ms as u64 * (total as u64 - 1)
-                + duration_ms as u64)
-                / total as u64) as u32;
+            let delta = duration_ms as f32 - edge.avg_duration_ms;
+            edge.avg_duration_ms += delta / total as f32;
+            let delta2 = duration_ms as f32 - edge.avg_duration_ms;
+            edge.m2_duration_ms += delta * delta2;
             edge.last_used_ms = self.current_time_ms;
         } else {
             // Evict if at capacity
@@ -209,7 +210,8 @@ impl EtgStore {
                 action: action.clone(),
                 success_count: if success { 1 } else { 0 },
                 fail_count: if success { 0 } else { 1 },
-                avg_duration_ms: duration_ms,
+                avg_duration_ms: duration_ms as f32,
+                m2_duration_ms: 0.0,
                 last_used_ms: self.current_time_ms,
             };
 
@@ -301,7 +303,7 @@ impl EtgStore {
                 }
 
                 let path_reliability = reliability * edge_reliability;
-                let path_duration = duration + edge.avg_duration_ms;
+                let path_duration = duration + edge.avg_duration_ms as u32;
 
                 // Only visit if we haven't found a better path to this node
                 if let Some(&prev_reliability) = visited.get(&next) {
@@ -497,7 +499,7 @@ impl EtgStore {
                 let action_json: String = row.get(2)?;
                 let success_count: u32 = row.get(3)?;
                 let fail_count: u32 = row.get(4)?;
-                let avg_duration_ms: u32 = row.get(5)?;
+                let avg_duration_ms: f32 = row.get::<_, f64>(5)? as f32;
                 let last_used_ms: i64 = row.get(6)?;
 
                 let action: ActionType =
@@ -510,6 +512,7 @@ impl EtgStore {
                     success_count,
                     fail_count,
                     avg_duration_ms,
+                    m2_duration_ms: 0.0,
                     last_used_ms: last_used_ms as u64,
                 }))
             })
@@ -636,7 +639,7 @@ mod tests {
         let edge = store.get_edge(0x1111, 0x2222).unwrap();
         assert_eq!(edge.success_count, 1);
         assert_eq!(edge.fail_count, 0);
-        assert_eq!(edge.avg_duration_ms, 150);
+        assert_eq!(edge.avg_duration_ms, 150.0_f32);
     }
 
     #[test]
@@ -724,7 +727,8 @@ mod tests {
             action: ActionType::Back,
             success_count: 10,
             fail_count: 0,
-            avg_duration_ms: 100,
+            avg_duration_ms: 100.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 1_000_000, // just used now
         };
 
@@ -749,7 +753,8 @@ mod tests {
             action: ActionType::Back,
             success_count: 10,
             fail_count: 0,
-            avg_duration_ms: 100,
+            avg_duration_ms: 100.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 0, // used 14 days ago
         };
 
@@ -778,7 +783,8 @@ mod tests {
             action: ActionType::Back,
             success_count: 1,
             fail_count: 9,
-            avg_duration_ms: 100,
+            avg_duration_ms: 100.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 0, // 30 days ago
         };
         store.edges.insert((0xA, 0xB), edge);

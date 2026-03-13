@@ -29,12 +29,17 @@ pub struct Episode {
     pub content: String,
     pub emotional_valence: f32,
     pub importance: f32,
+    /// Bounded: max MAX_EPISODE_CONTEXT_TAGS items enforced at collection site.
     pub context_tags: Vec<String>,
     pub timestamp_ms: u64,
     pub access_count: u32,
     pub last_access_ms: u64,
+    /// Bounded at runtime to the model's fixed embedding dimension — enforced by the embedding engine.
     pub embedding: Option<Vec<f32>>,
 }
+
+/// Max context tags on a single [`Episode`].
+pub const MAX_EPISODE_CONTEXT_TAGS: usize = 16;
 
 /// A semantic memory entry — distilled knowledge or concept.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,16 +48,21 @@ pub struct SemanticEntry {
     pub concept: String,
     pub knowledge: String,
     pub confidence: f32,
+    /// Bounded: max MAX_SEMANTIC_SOURCE_EPISODES items enforced at collection site.
     pub source_episodes: Vec<u64>,
     pub created_ms: u64,
     pub last_reinforced_ms: u64,
     pub access_count: u32,
 }
 
+/// Max source episode IDs on a single [`SemanticEntry`].
+pub const MAX_SEMANTIC_SOURCE_EPISODES: usize = 32;
+
 /// Compressed archive blob for long-term cold storage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveBlob {
     pub id: u64,
+    /// Bounded at runtime to MAX_ARCHIVE_BLOB_BYTES — enforced by the archive writer.
     pub compressed_data: Vec<u8>,
     pub original_size: u32,
     pub importance: f32,
@@ -66,9 +76,13 @@ pub struct MemoryQuery {
     pub query_text: String,
     pub max_results: usize,
     pub min_relevance: f32,
+    /// Bounded: max MAX_MEMORY_QUERY_TIERS items (fixed — only 4 tiers exist).
     pub tiers: Vec<MemoryTier>,
     pub time_range: Option<(u64, u64)>,
 }
+
+/// Max tiers in a [`MemoryQuery`] (fixed — exactly 4 tiers exist in [`MemoryTier`]).
+pub const MAX_MEMORY_QUERY_TIERS: usize = 4;
 
 impl Default for MemoryQuery {
     fn default() -> Self {

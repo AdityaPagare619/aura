@@ -16,7 +16,7 @@
 //! Embedding similarity search uses an HNSW approximate nearest neighbor index
 //! instead of O(n) linear scan, providing sub-linear query time.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -57,12 +57,61 @@ const HNSW_SEARCH_LIMIT: usize = 100;
 /// ef parameter for HNSW search (controls recall vs speed tradeoff).
 const HNSW_EF_SEARCH: usize = 50;
 
+/// Maximum buffered retrieval feedback events before oldest are dropped.
+const FEEDBACK_BUFFER_CAPACITY: usize = 100;
+
+// ---------------------------------------------------------------------------
+// RetrievalFeedbackBuffer — runtime-only, not persisted in checkpoint
+// ---------------------------------------------------------------------------
+
+/// A single retrieval event recorded for consolidation weight adjustment.
+#[derive(Debug, Clone)]
+pub struct RetrievalEvent {
+    pub stored_ms: u64,
+    pub retrieved_ms: u64,
+}
+
+/// Bounded ring-buffer of retrieval events. Runtime-only — never serialized.
+///
+/// Filled on every successful query/find_by_concept call. Drained during
+/// `cron_handle_dreaming` to drive `ConsolidationWeights::adjust_from_outcome`.
+#[derive(Debug)]
+pub struct RetrievalFeedbackBuffer {
+    events: VecDeque<RetrievalEvent>,
+}
+
+impl RetrievalFeedbackBuffer {
+    pub fn new() -> Self {
+        Self {
+            events: VecDeque::with_capacity(FEEDBACK_BUFFER_CAPACITY),
+        }
+    }
+
+    /// Push a retrieval event. If at capacity, drops the oldest event.
+    pub fn push(&mut self, event: RetrievalEvent) {
+        if self.events.len() >= FEEDBACK_BUFFER_CAPACITY {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+
+    /// Drain all buffered events for processing during consolidation.
+    pub fn drain(&mut self) -> Vec<RetrievalEvent> {
+        self.events.drain(..).collect()
+    }
+
+    /// Number of pending events.
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HnswState — HNSW index + bidirectional ID maps
 // ---------------------------------------------------------------------------
 
 /// Holds the HNSW index and bidirectional maps between HNSW NodeIds and SQLite row IDs.
-struct HnswState {
+pub(crate) struct HnswState {
     index: HnswIndex,
     /// HNSW NodeId (u32) → SQLite row ID (u64)
     node_to_sqlite: HashMap<u32, u64>,
@@ -127,6 +176,9 @@ impl HnswState {
 pub struct SemanticMemory {
     conn: Arc<Mutex<Connection>>,
     hnsw: Arc<std::sync::Mutex<HnswState>>,
+    /// Bounded ring-buffer of retrieval events. Drained during consolidation
+    /// to drive `ConsolidationWeights::adjust_from_outcome`. Never persisted.
+    pub feedback: Arc<std::sync::Mutex<RetrievalFeedbackBuffer>>,
 }
 
 impl SemanticMemory {
@@ -149,6 +201,7 @@ impl SemanticMemory {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             hnsw: Arc::new(std::sync::Mutex::new(hnsw_state)),
+            feedback: Arc::new(std::sync::Mutex::new(RetrievalFeedbackBuffer::new())),
         })
     }
 
@@ -166,6 +219,7 @@ impl SemanticMemory {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             hnsw: Arc::new(std::sync::Mutex::new(hnsw_state)),
+            feedback: Arc::new(std::sync::Mutex::new(RetrievalFeedbackBuffer::new())),
         })
     }
 
@@ -199,18 +253,87 @@ impl SemanticMemory {
         query_text: &str,
         max_results: usize,
         min_relevance: f32,
-        _now_ms: u64,
+        now_ms: u64,
     ) -> Result<Vec<MemoryResult>, MemError> {
         let conn = self.conn.clone();
         let hnsw = self.hnsw.clone();
         let query_text = query_text.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        let results = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             query_semantic_rrf(&conn, &hnsw, &query_text, max_results, min_relevance)
         })
         .await
-        .map_err(|e| MemError::QueryFailed(format!("spawn_blocking failed: {}", e)))?
+        .map_err(|e| MemError::QueryFailed(format!("spawn_blocking failed: {}", e)))??;
+
+        // Record retrieval feedback for consolidation weight adjustment. Non-fatal.
+        if !results.is_empty() {
+            if let Ok(mut buf) = self.feedback.lock() {
+                for r in &results {
+                    buf.push(RetrievalEvent {
+                        stored_ms: r.timestamp_ms,
+                        retrieved_ms: now_ms,
+                    });
+                }
+            } else {
+                tracing::warn!("semantic feedback buffer lock poisoned — skipping feedback recording");
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Query semantic memory with Hebbian re-ranking.
+    ///
+    /// Performs standard RRF retrieval via [`query`], then boosts each result
+    /// whose `source_id` has a Hebbian co-occurrence with any of the
+    /// `recently_retrieved` memory IDs:
+    ///
+    ///   final_score = rrf_score + hebbian_boost * 0.2
+    ///
+    /// `pattern_engine` must be the shared `PatternEngine` instance.  The
+    /// method also calls `record_co_retrieval` on the engine so that this
+    /// retrieval is itself Hebbianly recorded.
+    ///
+    /// `max_results` controls the number of results returned (same as `query`).
+    pub async fn retrieve_with_hebbian(
+        &self,
+        query_text: &str,
+        recently_retrieved: &[u64],
+        max_results: usize,
+        min_relevance: f32,
+        now_ms: u64,
+        pattern_engine: &mut crate::memory::patterns::PatternEngine,
+    ) -> Result<Vec<aura_types::memory::MemoryResult>, MemError> {
+        // 1. Standard RRF retrieval.
+        let mut results = self
+            .query(query_text, max_results, min_relevance, now_ms)
+            .await?;
+
+        // 2. Apply Hebbian boost.
+        if !recently_retrieved.is_empty() {
+            for result in &mut results {
+                let boost = pattern_engine
+                    .get_association_boost(result.source_id, recently_retrieved);
+                if boost > 0.0 {
+                    result.relevance = (result.relevance + boost * 0.2).clamp(0.0, 1.0);
+                }
+            }
+            // Re-sort by updated relevance scores.
+            results.sort_by(|a, b| {
+                b.relevance
+                    .partial_cmp(&a.relevance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        // 3. Record co-retrieval so future retrievals benefit.
+        let returned_ids: Vec<u64> = results.iter().map(|r| r.source_id).collect();
+        if !returned_ids.is_empty() {
+            pattern_engine.record_co_retrieval(&returned_ids);
+        }
+
+        Ok(results)
     }
 
     /// Reinforce an existing semantic entry — increases confidence and updates
@@ -260,6 +383,36 @@ impl SemanticMemory {
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
     }
 
+    /// LLM-powered generalization. Sends raw episodes to the neocortex for
+    /// semantic synthesis. Falls back to the TF-IDF sync path if neocortex
+    /// is unavailable.
+    ///
+    /// # Architecture
+    /// **LLM = brain.** The neocortex synthesizes meaning; this method only
+    /// ferries data to it and stores the result.
+    pub async fn try_generalize_with_llm(
+        &self,
+        episodes: &[(String, f32)],
+        concept_hint: &str,
+        now_ms: u64,
+        neocortex: &mut crate::ipc::NeocortexClient,
+    ) -> Result<Option<u64>, MemError> {
+        if episodes.len() < GENERALIZATION_MIN_EPISODES {
+            return Ok(None);
+        }
+
+        let conn_guard = self.conn.lock().await;
+        try_generalize_via_llm(
+            &conn_guard,
+            &self.hnsw,
+            episodes,
+            concept_hint,
+            now_ms,
+            neocortex,
+        )
+        .await
+    }
+
     /// Get a specific semantic entry by ID.
     pub async fn get(&self, entry_id: u64) -> Result<Option<SemanticEntry>, MemError> {
         let conn = self.conn.clone();
@@ -306,12 +459,32 @@ impl SemanticMemory {
         let hnsw = self.hnsw.clone();
         let concept = concept.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        let results = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             find_by_concept_sync(&conn, &hnsw, &concept, min_similarity, limit)
         })
         .await
-        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))??;
+
+        // Record retrieval feedback for consolidation weight adjustment. Non-fatal.
+        if !results.is_empty() {
+            let retrieved_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if let Ok(mut buf) = self.feedback.lock() {
+                for entry in &results {
+                    buf.push(RetrievalEvent {
+                        stored_ms: entry.created_ms,
+                        retrieved_ms,
+                    });
+                }
+            } else {
+                tracing::warn!("semantic feedback buffer lock poisoned — skipping find_by_concept feedback");
+            }
+        }
+
+        Ok(results)
     }
 
     /// Record an access to a semantic entry.
@@ -694,6 +867,115 @@ fn reinforce_sync(
     Ok(())
 }
 
+/// LLM-powered generalization. Sends raw episodes to the neocortex and stores
+/// the returned insight as a semantic entry.
+///
+/// # Architecture
+/// **LLM = brain.** Rust never reasons about what episodes mean. Only the LLM
+/// may synthesize patterns from raw episodic text. This function is the
+/// correct path for the dreaming phase.
+///
+/// Falls back to [`try_generalize_sync`] if neocortex IPC is unavailable.
+pub(crate) async fn try_generalize_via_llm(
+    conn: &Connection,
+    hnsw: &std::sync::Mutex<HnswState>,
+    episodes: &[(String, f32)],
+    concept_hint: &str,
+    now_ms: u64,
+    neocortex: &mut crate::ipc::NeocortexClient,
+) -> Result<Option<u64>, MemError> {
+    use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
+
+    if episodes.len() < GENERALIZATION_MIN_EPISODES {
+        return Ok(None);
+    }
+
+    // Build the prompt — typed data formatted for the LLM.
+    // Architecture: this is serialization of facts, NOT reasoning.
+    let episodes_text = episodes
+        .iter()
+        .map(|(content, _)| content.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let prompt = format!(
+        "Given these related experiences from a user: {episodes_text}.\n\
+         What general pattern or insight do these suggest about this user's \
+         preferences, personality, or behavior? Be concise (1-2 sentences)."
+    );
+
+    // Ask the LLM to reason — Rust is only the messenger here.
+    let response = neocortex
+        .request(&DaemonToNeocortex::Summarize { prompt })
+        .await;
+
+    let knowledge = match response {
+        Ok(NeocortexToDaemon::Summary { text, .. }) => {
+            info!(
+                concept = concept_hint,
+                episodes = episodes.len(),
+                "LLM generalization succeeded"
+            );
+            text
+        }
+        Ok(other) => {
+            warn!(
+                ?other,
+                concept = concept_hint,
+                "unexpected neocortex response during generalization — falling back to sync"
+            );
+            return try_generalize_sync(conn, hnsw, episodes, concept_hint, now_ms);
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                concept = concept_hint,
+                "neocortex IPC failed during generalization — falling back to sync"
+            );
+            return try_generalize_sync(conn, hnsw, episodes, concept_hint, now_ms);
+        }
+    };
+
+    let confidence = importance::generalization_confidence(episodes.len());
+    let combined = format!("{concept_hint} {knowledge}");
+    let embedding = embed(&combined);
+    let embedding_bytes = embedding_to_bytes(&embedding);
+    let episodes_json = "[]";
+
+    conn.execute(
+        "INSERT INTO semantic_entries (concept, knowledge, confidence, source_episodes,
+                                       created_ms, last_reinforced_ms, access_count, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, ?6)",
+        params![
+            concept_hint,
+            knowledge,
+            confidence,
+            episodes_json,
+            now_ms as i64,
+            embedding_bytes,
+        ],
+    )
+    .map_err(|e| MemError::DatabaseError(format!("llm generalization insert failed: {e}")))?;
+
+    let sqlite_id = conn.last_insert_rowid() as u64;
+
+    {
+        let mut state = hnsw
+            .lock()
+            .map_err(|_| MemError::DatabaseError("HNSW lock poisoned".into()))?;
+        state.insert(sqlite_id, &embedding)?;
+    }
+
+    info!(
+        "LLM-generalized {} episodes → semantic entry {} (concept: {}, confidence: {:.2})",
+        episodes.len(),
+        sqlite_id,
+        concept_hint,
+        confidence
+    );
+    Ok(Some(sqlite_id))
+}
+
 fn try_generalize_sync(
     conn: &Connection,
     hnsw: &std::sync::Mutex<HnswState>,
@@ -1056,7 +1338,7 @@ mod tests {
         let episodes = vec![
             ("User opened dark mode settings".into(), 0.5),
             ("User enabled dark mode in Chrome".into(), 0.5),
-            ("User switched to dark theme in VS Code".into(), 0.5),
+            ("User switched to dark mode in VS Code".into(), 0.5),
         ];
 
         let result = rt

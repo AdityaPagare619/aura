@@ -51,6 +51,7 @@ const MAX_SUGGESTIONS_PER_EVAL: usize = 5;
 const MAX_TRIGGERS: usize = 64;
 
 /// Maximum feedback entries retained per category.
+#[allow(dead_code)] // Phase 8: used by feedback ring buffer cap in suggestion learning
 const MAX_FEEDBACK_PER_CATEGORY: usize = 128;
 
 /// Maximum total feedback entries across all categories.

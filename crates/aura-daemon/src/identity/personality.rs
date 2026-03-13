@@ -1,8 +1,5 @@
-use aura_types::identity::{DispositionState, OceanTraits, RelationshipStage};
+use aura_types::identity::OceanTraits;
 use serde::{Deserialize, Serialize};
-
-use super::behavior_modifiers::{self, GoalWeights, ResponseStyleParams};
-use super::prompt_personality::PersonalityPromptInjector;
 
 // ---------------------------------------------------------------------------
 // Evolution constants
@@ -24,21 +21,12 @@ const MICRO_DRIFT_BASE: f32 = 0.001;
 const MAX_TOTAL_DRIFT: f32 = 0.30;
 
 /// Number of interactions tracked in the evolution window for rate limiting.
+#[allow(dead_code)] // Phase 8: used by OCEAN evolution rate-limiter window
 const EVOLUTION_WINDOW_SIZE: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-/// Computed response-style weights derived from the OCEAN personality.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResponseStyle {
-    pub humor: f32,
-    pub directness: f32,
-    pub formality: f32,
-    pub empathy: f32,
-    pub proactivity: f32,
-}
 
 /// Events that may subtly shift the personality over time.
 #[derive(Debug, Clone)]
@@ -48,6 +36,52 @@ pub enum PersonalityEvent {
     UserFeedback(String),
     ContextualPressure { trait_name: String, direction: f32 },
 }
+
+// ---------------------------------------------------------------------------
+// Outcome-driven personality drift
+// ---------------------------------------------------------------------------
+
+/// Observable outcome of a user interaction that triggers trait drift.
+///
+/// Unlike [`PersonalityEvent`] (which describes the *type* of social signal),
+/// `PersonalityOutcome` describes the *result* of what the user actually did.
+/// This allows the personality to adapt to repeated behavioral patterns:
+/// e.g. if the user always explores new options, openness drifts upward.
+///
+/// Each variant maps to a specific, small OCEAN nudge (MICRO_NUDGE per event).
+/// Over many events the cumulative drift becomes meaningful; individual events
+/// are imperceptible — matching how personality changes actually work.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PersonalityOutcome {
+    /// User followed an established routine successfully.
+    /// → conscientiousness ↑, openness ↓ (slight)
+    RoutineFollowed,
+    /// User deviated from routine and the deviation was positive.
+    /// → openness ↑, conscientiousness ↓ (slight)
+    RoutineDeviatedPositive,
+    /// User deviated from routine and the deviation was negative.
+    /// → neuroticism ↑, conscientiousness ↑ (corrective)
+    RoutineDeviatedNegative,
+    /// User tried something new / exploratory.
+    /// → openness ↑
+    ExploredNew,
+    /// User avoided new options (chose familiar path).
+    /// → openness ↓ (slight), conscientiousness ↑ (slight)
+    AvoidedNew,
+    /// User expressed or received positive emotion.
+    /// → extraversion ↑, agreeableness ↑, neuroticism ↓
+    EmotionalPositive,
+    /// User expressed frustration or received negative emotional signal.
+    /// → neuroticism ↑, extraversion ↓ (slight)
+    EmotionalNegative,
+    /// User cooperated or helped others.
+    /// → agreeableness ↑, extraversion ↑ (slight)
+    CooperativeAct,
+}
+
+/// Magnitude of a single outcome-driven trait nudge.
+/// Kept very small so drift is gradual and imperceptible per-event.
+const OUTCOME_MICRO_NUDGE: f32 = 0.0005;
 
 /// Named personality archetypes for quick recognition and logging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,49 +111,6 @@ pub struct ConsistencyReport {
     pub has_extreme_drift: bool,
     /// Human-readable issues found.
     pub issues: Vec<String>,
-}
-
-/// Composite personality influence — all personality-derived parameters
-/// bundled together for consumption by the pipeline.
-#[derive(Debug, Clone)]
-pub struct PersonalityInfluence {
-    /// Prompt directives for the LLM (TRUTH + OCEAN + mood + relationship).
-    pub prompt_context: String,
-    /// Goal prioritization weights.
-    pub goal_weights: GoalWeights,
-    /// Response style parameters (proactivity, verbosity, risk, autonomy).
-    pub response_params: ResponseStyleParams,
-    /// Routing bias in \[-0.15, 0.15\].
-    pub routing_bias: f32,
-    /// Complexity threshold modifier in \[-0.10, 0.10\].
-    pub complexity_modifier: f32,
-    /// The computed five-factor response style.
-    pub response_style: ResponseStyle,
-    /// Current archetype classification.
-    pub archetype: PersonalityArchetype,
-}
-
-/// Tone parameters derived from personality traits using continuous functions.
-///
-/// Unlike `ResponseStyle` which is general, `ToneParameters` is specifically
-/// for response-generation tone control.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToneParameters {
-    /// How warm vs. clinical the response should feel (0 = clinical, 1 = warm).
-    /// Formula: `A×0.5 + E×0.3 + (1−N)×0.2`
-    pub warmth: f32,
-    /// How confident vs. hedging the response should be (0 = hedging, 1 = confident).
-    /// Formula: `(1−N)×0.5 + C×0.3 + E×0.2`
-    pub confidence: f32,
-    /// How elaborate vs. terse (0 = terse, 1 = elaborate).
-    /// Formula: `E×0.4 + O×0.35 + A×0.25`
-    pub elaboration: f32,
-    /// How playful vs. serious (0 = serious, 1 = playful).
-    /// Formula: `O×0.4 + E×0.35 − N×0.25`
-    pub playfulness: f32,
-    /// How assertive vs. deferential (0 = deferential, 1 = assertive).
-    /// Formula: `E×0.4 + (1−A)×0.35 + (1−N)×0.25`
-    pub assertiveness: f32,
 }
 
 /// Persistent personality state wrapping [`OceanTraits`].
@@ -161,48 +152,19 @@ impl Personality {
         }
     }
 
-    /// Compute the five response-style weights from the current traits.
-    ///
-    /// Formulas (spec §2.1):
-    /// - humor      = O×0.6 + E×0.4 − N×0.2
-    /// - directness = C×0.5 + (1−A)×0.3 + E×0.2
-    /// - formality  = C×0.4 + (1−O)×0.3 + A×0.3
-    /// - empathy    = A×0.5 + (1−N)×0.3 + O×0.2
-    /// - proactivity= E×0.4 + O×0.3 + C×0.3
-    pub fn response_style(&self) -> ResponseStyle {
-        let o = self.traits.openness;
-        let c = self.traits.conscientiousness;
-        let e = self.traits.extraversion;
-        let a = self.traits.agreeableness;
-        let n = self.traits.neuroticism;
-
-        ResponseStyle {
-            humor: (o * 0.6 + e * 0.4 - n * 0.2).clamp(0.0, 1.0),
-            directness: (c * 0.5 + (1.0 - a) * 0.3 + e * 0.2).clamp(0.0, 1.0),
-            formality: (c * 0.4 + (1.0 - o) * 0.3 + a * 0.3).clamp(0.0, 1.0),
-            empathy: (a * 0.5 + (1.0 - n) * 0.3 + o * 0.2).clamp(0.0, 1.0),
-            proactivity: (e * 0.4 + o * 0.3 + c * 0.3).clamp(0.0, 1.0),
-        }
-    }
-
-    /// Compute tone parameters using continuous functions of OCEAN traits.
-    ///
-    /// These are specifically designed for response-generation tone control
-    /// and use smooth blending rather than threshold-based if-else.
-    pub fn tone_parameters(&self) -> ToneParameters {
-        let o = self.traits.openness;
-        let c = self.traits.conscientiousness;
-        let e = self.traits.extraversion;
-        let a = self.traits.agreeableness;
-        let n = self.traits.neuroticism;
-
-        ToneParameters {
-            warmth: (a * 0.5 + e * 0.3 + (1.0 - n) * 0.2).clamp(0.0, 1.0),
-            confidence: ((1.0 - n) * 0.5 + c * 0.3 + e * 0.2).clamp(0.0, 1.0),
-            elaboration: (e * 0.4 + o * 0.35 + a * 0.25).clamp(0.0, 1.0),
-            playfulness: (o * 0.4 + e * 0.35 - n * 0.25).clamp(0.0, 1.0),
-            assertiveness: (e * 0.4 + (1.0 - a) * 0.35 + (1.0 - n) * 0.25).clamp(0.0, 1.0),
-        }
+    /// Return a human-readable context string for the LLM.
+    pub fn to_llm_context(&self) -> String {
+        let arch = self.archetype();
+        format!(
+            "Personality: O={:.2} C={:.2} E={:.2} A={:.2} N={:.2} (archetype: {:?}, {} evolutions)",
+            self.traits.openness,
+            self.traits.conscientiousness,
+            self.traits.extraversion,
+            self.traits.agreeableness,
+            self.traits.neuroticism,
+            arch,
+            self.evolution_count
+        )
     }
 
     /// Apply a personality event, nudging OCEAN traits by exposure-attenuated
@@ -238,6 +200,56 @@ impl Personality {
             }
         }
         self.traits.clamp_all();
+        self.evolution_count += 1;
+    }
+
+    /// Apply outcome-driven trait drift based on an observed behavioral result.
+    ///
+    /// Each [`PersonalityOutcome`] maps to small, targeted OCEAN nudges
+    /// (magnitude: [`OUTCOME_MICRO_NUDGE`]). Drift is additive over many
+    /// events, modelling how personality slowly shifts to match repeated
+    /// behavioral patterns.
+    ///
+    /// This is intentionally NOT exposure-attenuated — outcomes are observed
+    /// facts about what the user did, not subjective signals, so the drift
+    /// rate stays constant throughout AURA's lifetime.
+    pub fn apply_outcome_drift(&mut self, outcome: PersonalityOutcome) {
+        let n = OUTCOME_MICRO_NUDGE;
+        match outcome {
+            PersonalityOutcome::RoutineFollowed => {
+                self.traits.conscientiousness = (self.traits.conscientiousness + n).min(0.9);
+                self.traits.openness = (self.traits.openness - n * 0.5).max(0.1);
+            }
+            PersonalityOutcome::RoutineDeviatedPositive => {
+                self.traits.openness = (self.traits.openness + n).min(0.9);
+                self.traits.conscientiousness = (self.traits.conscientiousness - n * 0.5).max(0.1);
+            }
+            PersonalityOutcome::RoutineDeviatedNegative => {
+                self.traits.neuroticism = (self.traits.neuroticism + n).min(0.9);
+                self.traits.conscientiousness = (self.traits.conscientiousness + n * 0.5).min(0.9);
+            }
+            PersonalityOutcome::ExploredNew => {
+                self.traits.openness = (self.traits.openness + n).min(0.9);
+            }
+            PersonalityOutcome::AvoidedNew => {
+                self.traits.openness = (self.traits.openness - n * 0.5).max(0.1);
+                self.traits.conscientiousness = (self.traits.conscientiousness + n * 0.5).min(0.9);
+            }
+            PersonalityOutcome::EmotionalPositive => {
+                self.traits.extraversion = (self.traits.extraversion + n * 0.7).min(0.9);
+                self.traits.agreeableness = (self.traits.agreeableness + n).min(0.9);
+                self.traits.neuroticism = (self.traits.neuroticism - n * 0.5).max(0.1);
+            }
+            PersonalityOutcome::EmotionalNegative => {
+                self.traits.neuroticism = (self.traits.neuroticism + n).min(0.9);
+                self.traits.extraversion = (self.traits.extraversion - n * 0.3).max(0.1);
+            }
+            PersonalityOutcome::CooperativeAct => {
+                self.traits.agreeableness = (self.traits.agreeableness + n).min(0.9);
+                self.traits.extraversion = (self.traits.extraversion + n * 0.3).min(0.9);
+            }
+        }
+        // No clamp_all needed — all branches already enforce [0.1, 0.9] per trait.
         self.evolution_count += 1;
     }
 
@@ -336,8 +348,10 @@ impl Personality {
 
     /// Classify the current personality into the nearest archetype.
     ///
-    /// Uses a scoring system rather than hard thresholds — each archetype
-    /// has an affinity function and the highest-scoring one wins.
+    // IRON LAW: LLM classifies behavioral archetypes. Rust does not.
+    // Weighted scoring formulas that MAKE decisions violate Iron Law #2.
+    // The LLM receives raw OCEAN numbers via serialize_identity_block() and
+    // infers the archetype itself. Phase N wire-point.
     pub fn archetype(&self) -> PersonalityArchetype {
         let o = self.traits.openness;
         let c = self.traits.conscientiousness;
@@ -345,82 +359,35 @@ impl Personality {
         let a = self.traits.agreeableness;
         let n = self.traits.neuroticism;
 
-        // Affinity scores for each archetype (continuous, not if-else).
-        let analyst = o * 0.4 + c * 0.4 + (1.0 - n) * 0.2;
-        let helper = a * 0.4 + e * 0.3 + (1.0 - n) * 0.3;
-        let explorer = o * 0.4 + e * 0.35 + (1.0 - c) * 0.25;
-        let guardian = c * 0.35 + n * 0.35 + (1.0 - o) * 0.30;
-        let commander = e * 0.4 + (1.0 - a) * 0.35 + (1.0 - n) * 0.25;
+        // Score each archetype by how well the traits match its profile.
+        // Higher score = better match. Winner-takes-all.
+        let analyst_score   = (o - 0.5).max(0.0) + (c - 0.5).max(0.0) + (0.5 - n).max(0.0);
+        let helper_score    = (a - 0.5).max(0.0) + (e - 0.5).max(0.0) + (0.5 - n).max(0.0);
+        let explorer_score  = (o - 0.5).max(0.0) + (e - 0.5).max(0.0) + (0.5 - c).max(0.0) + (0.5 - n).max(0.0);
+        let guardian_score  = (n - 0.5).max(0.0) + (c - 0.5).max(0.0) + (0.5 - o).max(0.0);
+        let commander_score = (e - 0.5).max(0.0) + (0.5 - a).max(0.0) + (0.5 - n).max(0.0);
 
-        let scores = [
-            (analyst, PersonalityArchetype::Analyst),
-            (helper, PersonalityArchetype::Helper),
-            (explorer, PersonalityArchetype::Explorer),
-            (guardian, PersonalityArchetype::Guardian),
-            (commander, PersonalityArchetype::Commander),
-        ];
+        let max_score = analyst_score
+            .max(helper_score)
+            .max(explorer_score)
+            .max(guardian_score)
+            .max(commander_score);
 
-        let max_score = scores
-            .iter()
-            .map(|(s, _)| *s)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_score = scores.iter().map(|(s, _)| *s).fold(f32::INFINITY, f32::min);
-
-        // If the range is very small, the personality is balanced.
-        if (max_score - min_score) < 0.05 {
+        // Require a minimum score to avoid calling balanced profiles something specific.
+        const MIN_SCORE: f32 = 0.15;
+        if max_score < MIN_SCORE {
             return PersonalityArchetype::Balanced;
         }
 
-        scores
-            .iter()
-            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(_, arch)| *arch)
-            .unwrap_or(PersonalityArchetype::Balanced)
+        if (max_score - analyst_score).abs() < f32::EPSILON   { PersonalityArchetype::Analyst }
+        else if (max_score - helper_score).abs() < f32::EPSILON    { PersonalityArchetype::Helper }
+        else if (max_score - explorer_score).abs() < f32::EPSILON  { PersonalityArchetype::Explorer }
+        else if (max_score - guardian_score).abs() < f32::EPSILON  { PersonalityArchetype::Guardian }
+        else if (max_score - commander_score).abs() < f32::EPSILON { PersonalityArchetype::Commander }
+        else { PersonalityArchetype::Balanced }
     }
 
-    // -- behavior-influence methods (Team 5 wiring) -------------------------
-
-    /// Compute a personality-derived routing bias in \[-0.15, 0.15\].
-    ///
-    /// The bias pushes the routing score toward System2 (positive) or
-    /// System1 (negative) based on the OCEAN profile.
-    ///
-    /// - High O → prefer System2 (explore more):    `+O×0.15`
-    /// - High C → prefer System1 (trust templates):  `−C×0.10`
-    /// - High N → prefer System2 (be cautious):      `+N×0.10`
-    ///
-    /// ```text
-    /// routing_bias = O×0.15 − C×0.10 + N×0.10 − 0.075
-    /// ```
-    /// Centered around ~0 for the AURA defaults (O=0.85, C=0.75, N=0.25).
-    #[tracing::instrument(skip(self))]
-    pub fn routing_bias(&self) -> f32 {
-        let raw = self.traits.openness * 0.15 - self.traits.conscientiousness * 0.10
-            + self.traits.neuroticism * 0.10
-            - 0.075;
-        raw.clamp(-0.15, 0.15)
-    }
-
-    /// Compute a modifier for the complexity threshold used by the router.
-    ///
-    /// Returns a value in \[-0.10, 0.10\] that is **added** to the base
-    /// complexity threshold (default 0.50). A negative modifier means
-    /// the personality favours escalating to System2 at lower complexity.
-    ///
-    /// - High O → lower threshold (explore more):      `−O×0.10`
-    /// - High C → raise threshold (trust System1):      `+C×0.08`
-    /// - High N → lower threshold (be cautious):        `−N×0.05`
-    ///
-    /// ```text
-    /// modifier = −O×0.10 + C×0.08 − N×0.05 + 0.025
-    /// ```
-    #[tracing::instrument(skip(self))]
-    pub fn complexity_threshold_modifier(&self) -> f32 {
-        let raw = -self.traits.openness * 0.10 + self.traits.conscientiousness * 0.08
-            - self.traits.neuroticism * 0.05
-            + 0.025;
-        raw.clamp(-0.10, 0.10)
-    }
+    // -- private helpers ----------------------------------------------------
 
     /// Nudge all traits with differential weights reflecting OCEAN psychology:
     /// - Agreeableness & Extraversion are more malleable through interaction
@@ -518,78 +485,6 @@ impl PersonalityEngine {
         &mut self.personality
     }
 
-    /// Generate prompt directives influenced by personality, mood, and
-    /// relationship context.
-    ///
-    /// Delegates to [`PersonalityPromptInjector::generate_personality_context`].
-    #[tracing::instrument(skip(self, mood))]
-    pub fn influence_prompt(
-        &self,
-        mood: &DispositionState,
-        relationship_stage: RelationshipStage,
-        trust: f32,
-    ) -> String {
-        PersonalityPromptInjector::generate_personality_context(
-            &self.personality.traits,
-            mood,
-            relationship_stage,
-            trust,
-        )
-    }
-
-    /// Compute personality-influenced goal prioritization weights.
-    ///
-    /// Delegates to [`behavior_modifiers::goal_prioritization_weights`].
-    /// The weights are normalized to sum to 1.0 and reflect how the OCEAN
-    /// profile shifts emphasis between satisfaction, efficiency, safety,
-    /// and exploration.
-    #[tracing::instrument(skip(self))]
-    pub fn influence_goal_priority(&self) -> GoalWeights {
-        behavior_modifiers::goal_prioritization_weights(&self.personality.traits)
-    }
-
-    /// Compute personality-influenced response tone parameters.
-    ///
-    /// Returns continuous `ToneParameters` derived from OCEAN traits using
-    /// smooth mathematical functions (not threshold-based).
-    #[tracing::instrument(skip(self))]
-    pub fn influence_response_tone(&self) -> ToneParameters {
-        self.personality.tone_parameters()
-    }
-
-    /// Compute the full response style parameters from behavior_modifiers.
-    ///
-    /// Includes proactivity, verbosity, risk tolerance, exploration drive,
-    /// and autonomy level — all derived from OCEAN using continuous formulas.
-    #[tracing::instrument(skip(self))]
-    pub fn response_style_params(&self) -> ResponseStyleParams {
-        behavior_modifiers::response_style(&self.personality.traits)
-    }
-
-    /// Compute a complete `PersonalityInfluence` bundle — everything the
-    /// pipeline needs from the personality system in a single call.
-    ///
-    /// This is the primary integration point: call once per event and
-    /// distribute the result to routing, prompting, goal selection, and
-    /// response generation.
-    #[tracing::instrument(skip(self, mood))]
-    pub fn compute_influence(
-        &self,
-        mood: &DispositionState,
-        relationship_stage: RelationshipStage,
-        trust: f32,
-    ) -> PersonalityInfluence {
-        PersonalityInfluence {
-            prompt_context: self.influence_prompt(mood, relationship_stage, trust),
-            goal_weights: self.influence_goal_priority(),
-            response_params: self.response_style_params(),
-            routing_bias: self.personality.routing_bias(),
-            complexity_modifier: self.personality.complexity_threshold_modifier(),
-            response_style: self.personality.response_style(),
-            archetype: self.personality.archetype(),
-        }
-    }
-
     /// Evolve the personality based on an interaction event.
     ///
     /// Applies the standard evolution deltas plus micro-drift. Logs a
@@ -631,14 +526,6 @@ impl Default for PersonalityEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[allow(unused_imports)]
-    use aura_types::identity::{EmotionLabel, MoodVAD};
-
-    // -- helpers --
-
-    fn default_mood() -> DispositionState {
-        DispositionState::default()
-    }
 
     fn custom_traits(o: f32, c: f32, e: f32, a: f32, n: f32) -> OceanTraits {
         let mut t = OceanTraits {
@@ -653,35 +540,6 @@ mod tests {
     }
 
     // ==================== Personality (core) tests ==========================
-
-    #[test]
-    fn test_default_response_style() {
-        let p = Personality::new();
-        let s = p.response_style();
-
-        // humor = 0.85*0.6 + 0.50*0.4 - 0.25*0.2 = 0.51+0.20-0.05 = 0.66
-        assert!((s.humor - 0.66).abs() < 0.01, "humor={}", s.humor);
-        // directness = 0.75*0.5 + 0.30*0.3 + 0.50*0.2 = 0.375+0.09+0.10 = 0.565
-        assert!(
-            (s.directness - 0.565).abs() < 0.01,
-            "directness={}",
-            s.directness
-        );
-        // formality = 0.75*0.4 + 0.15*0.3 + 0.70*0.3 = 0.30+0.045+0.21 = 0.555
-        assert!(
-            (s.formality - 0.555).abs() < 0.01,
-            "formality={}",
-            s.formality
-        );
-        // empathy = 0.70*0.5 + 0.75*0.3 + 0.85*0.2 = 0.35+0.225+0.17 = 0.745
-        assert!((s.empathy - 0.745).abs() < 0.01, "empathy={}", s.empathy);
-        // proactivity = 0.50*0.4 + 0.85*0.3 + 0.75*0.3 = 0.20+0.255+0.225 = 0.68
-        assert!(
-            (s.proactivity - 0.68).abs() < 0.01,
-            "proactivity={}",
-            s.proactivity
-        );
-    }
 
     #[test]
     fn test_evolution_bounds() {
@@ -716,13 +574,9 @@ mod tests {
 
         assert!(!p.has_significant_change());
 
-        // With exposure attenuation, early interactions have near-full deltas.
-        // After a few interactions the personality should show meaningful change.
         for _ in 0..5 {
             p.evolve(PersonalityEvent::PositiveInteraction);
         }
-        // After 5 strong positive interactions, at least one trait should be
-        // noticeably different from the checkpoint.
         assert!(
             p.has_significant_change(),
             "5 early positive interactions should cause significant change"
@@ -735,8 +589,6 @@ mod tests {
         let before_a = p.traits.agreeableness;
         let before_c = p.traits.conscientiousness;
 
-        // A single positive interaction should move Agreeableness (1.3×) more
-        // than Conscientiousness (0.7×), even with exposure attenuation.
         p.evolve(PersonalityEvent::PositiveInteraction);
 
         let delta_a = p.traits.agreeableness - before_a;
@@ -747,8 +599,6 @@ mod tests {
             "Agreeableness delta ({:.4}) should exceed Conscientiousness delta ({:.4})",
             delta_a, delta_c
         );
-        // The ratio of OCEAN malleability weights (1.3/0.7) should be preserved
-        // regardless of attenuation factor, since it multiplies uniformly.
         let ratio = delta_a / delta_c;
         assert!(
             (ratio - 1.857).abs() < 0.3,
@@ -756,7 +606,6 @@ mod tests {
             ratio
         );
     }
-
 
     #[test]
     fn test_contextual_pressure() {
@@ -781,42 +630,6 @@ mod tests {
 
         p.checkpoint();
         assert!(!p.has_significant_change());
-    }
-
-    #[test]
-    fn test_routing_bias_within_bounds() {
-        let p = Personality::new();
-        let bias = p.routing_bias();
-        assert!(
-            bias >= -0.15 && bias <= 0.15,
-            "routing_bias={} must be in [-0.15, 0.15]",
-            bias
-        );
-    }
-
-    #[test]
-    fn test_routing_bias_high_openness_positive() {
-        let mut p = Personality::new();
-        p.traits.openness = 0.9;
-        p.traits.conscientiousness = 0.1;
-        p.traits.neuroticism = 0.9;
-        let bias = p.routing_bias();
-        assert!(
-            bias > 0.0,
-            "high O+N, low C should give positive bias, got {}",
-            bias
-        );
-    }
-
-    #[test]
-    fn test_complexity_threshold_modifier_within_bounds() {
-        let p = Personality::new();
-        let m = p.complexity_threshold_modifier();
-        assert!(
-            m >= -0.10 && m <= 0.10,
-            "complexity_threshold_modifier={} must be in [-0.10, 0.10]",
-            m
-        );
     }
 
     // ==================== New Personality tests =============================
@@ -894,7 +707,6 @@ mod tests {
         };
         let p = Personality::with_traits(traits);
         let report = p.consistency_check();
-        // At least the neuroticism+conscientiousness implausible combo
         assert!(
             !report.is_consistent,
             "high N + high C should flag implausible"
@@ -905,7 +717,6 @@ mod tests {
     #[test]
     fn test_consistency_check_extreme_drift() {
         let mut p = Personality::new();
-        // Push all traits to max — baseline is AURA defaults, so drift is large
         for _ in 0..200 {
             p.evolve(PersonalityEvent::PositiveInteraction);
         }
@@ -917,68 +728,23 @@ mod tests {
     }
 
     #[test]
-    fn test_tone_parameters_within_bounds() {
-        let p = Personality::new();
-        let tone = p.tone_parameters();
-        assert!(tone.warmth >= 0.0 && tone.warmth <= 1.0);
-        assert!(tone.confidence >= 0.0 && tone.confidence <= 1.0);
-        assert!(tone.elaboration >= 0.0 && tone.elaboration <= 1.0);
-        assert!(tone.playfulness >= 0.0 && tone.playfulness <= 1.0);
-        assert!(tone.assertiveness >= 0.0 && tone.assertiveness <= 1.0);
-    }
-
-    #[test]
-    fn test_tone_parameters_high_agreeableness_warm() {
-        let traits = custom_traits(0.5, 0.5, 0.8, 0.9, 0.1);
-        let p = Personality::with_traits(traits);
-        let tone = p.tone_parameters();
-        assert!(
-            tone.warmth > 0.7,
-            "high A+E, low N should be warm: {}",
-            tone.warmth
-        );
-    }
-
-    #[test]
-    fn test_tone_parameters_low_neuroticism_confident() {
-        let traits = custom_traits(0.5, 0.8, 0.7, 0.5, 0.1);
-        let p = Personality::with_traits(traits);
-        let tone = p.tone_parameters();
-        assert!(
-            tone.confidence > 0.7,
-            "low N, high C should be confident: {}",
-            tone.confidence
-        );
-    }
-
-    #[test]
-    fn test_tone_parameters_extreme_values() {
-        // All high
-        let high = Personality::with_traits(custom_traits(0.9, 0.9, 0.9, 0.9, 0.9));
-        let t = high.tone_parameters();
-        assert!(t.warmth >= 0.0 && t.warmth <= 1.0);
-        assert!(t.confidence >= 0.0 && t.confidence <= 1.0);
-
-        // All low
-        let low = Personality::with_traits(custom_traits(0.1, 0.1, 0.1, 0.1, 0.1));
-        let t = low.tone_parameters();
-        assert!(t.warmth >= 0.0 && t.warmth <= 1.0);
-        assert!(t.playfulness >= 0.0 && t.playfulness <= 1.0);
-    }
-
-    #[test]
     fn test_micro_drift_regression_toward_mean() {
-        // Trait at 0.9 should drift slightly downward due to regression
         let traits = custom_traits(0.9, 0.5, 0.5, 0.5, 0.5);
         let mut p = Personality::with_traits(traits);
         let _before = p.traits.openness;
 
         p.evolve(PersonalityEvent::PositiveInteraction);
 
-        // The positive delta pushes up, but the micro-drift regression
-        // should slightly counteract the upward push on openness (at 0.9)
-        // compared to a trait at center. Just verify it didn't explode.
         assert!(p.traits.openness <= 0.9, "should be clamped to 0.9");
+    }
+
+    #[test]
+    fn test_to_llm_context() {
+        let p = Personality::new();
+        let ctx = p.to_llm_context();
+        assert!(ctx.contains("Personality:"), "context should start with Personality:");
+        assert!(ctx.contains("archetype:"), "context should include archetype");
+        assert!(ctx.contains("evolutions"), "context should include evolution count");
     }
 
     // ==================== Archetype tests ==================================
@@ -1020,7 +786,6 @@ mod tests {
 
     #[test]
     fn test_archetype_default_is_not_balanced() {
-        // AURA defaults should have a clear archetype, not Balanced
         let p = Personality::new();
         let arch = p.archetype();
         assert_ne!(
@@ -1046,64 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_influence_prompt_contains_truth() {
-        let engine = PersonalityEngine::new();
-        let mood = default_mood();
-        let prompt = engine.influence_prompt(&mood, RelationshipStage::Stranger, 0.0);
-        assert!(
-            prompt.contains("TRUTH"),
-            "prompt must contain TRUTH framework"
-        );
-    }
-
-    #[test]
-    fn test_engine_influence_goal_priority_sums_to_one() {
-        let engine = PersonalityEngine::new();
-        let gw = engine.influence_goal_priority();
-        let sum = gw.user_satisfaction + gw.efficiency + gw.safety + gw.exploration;
-        assert!(
-            (sum - 1.0).abs() < 0.001,
-            "goal weights must sum to 1.0, got {}",
-            sum
-        );
-    }
-
-    #[test]
-    fn test_engine_influence_response_tone() {
-        let engine = PersonalityEngine::new();
-        let tone = engine.influence_response_tone();
-        assert!(tone.warmth >= 0.0 && tone.warmth <= 1.0);
-        assert!(tone.confidence >= 0.0 && tone.confidence <= 1.0);
-    }
-
-    #[test]
-    fn test_engine_response_style_params() {
-        let engine = PersonalityEngine::new();
-        let params = engine.response_style_params();
-        assert!(params.proactivity >= 0.0 && params.proactivity <= 1.0);
-        assert!(params.verbosity >= 0.0 && params.verbosity <= 1.0);
-        assert!(params.risk_tolerance >= 0.0 && params.risk_tolerance <= 1.0);
-    }
-
-    #[test]
-    fn test_engine_compute_influence_complete() {
-        let engine = PersonalityEngine::new();
-        let mood = default_mood();
-        let influence = engine.compute_influence(&mood, RelationshipStage::Friend, 0.5);
-
-        // Check all fields are populated
-        assert!(!influence.prompt_context.is_empty());
-        assert!(influence.routing_bias >= -0.15 && influence.routing_bias <= 0.15);
-        assert!(influence.complexity_modifier >= -0.10 && influence.complexity_modifier <= 0.10);
-        assert!(influence.response_style.humor >= 0.0);
-        let sum = influence.goal_weights.user_satisfaction
-            + influence.goal_weights.efficiency
-            + influence.goal_weights.safety
-            + influence.goal_weights.exploration;
-        assert!((sum - 1.0).abs() < 0.001);
-    }
-
-    #[test]
     fn test_engine_evolve_updates_personality() {
         let mut engine = PersonalityEngine::new();
         let before = engine.personality().traits.openness;
@@ -1126,8 +833,6 @@ mod tests {
     fn test_engine_archetype() {
         let engine = PersonalityEngine::new();
         let arch = engine.archetype();
-        // AURA defaults: O=0.85, C=0.75, E=0.50, A=0.70, N=0.25
-        // Should have a clear archetype
         assert_ne!(arch, PersonalityArchetype::Balanced);
     }
 

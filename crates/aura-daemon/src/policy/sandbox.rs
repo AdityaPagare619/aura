@@ -190,6 +190,14 @@ pub struct ActionPreview {
 // SandboxSession
 // ---------------------------------------------------------------------------
 
+/// Hard cap on distinct apps a single session may touch.
+/// Prevents unbounded growth of the `apps_touched` Vec.
+const MAX_APPS_TOUCHED: usize = 64;
+
+/// Hard cap on rollback stack depth.
+/// Prevents unbounded memory growth for long-running sessions.
+const MAX_ROLLBACK_DEPTH: usize = 32;
+
 /// Tracks resource usage within a sandboxed execution session.
 #[derive(Debug, Clone)]
 pub struct SandboxSession {
@@ -298,6 +306,14 @@ impl SandboxSession {
         let len = text.len() as u32;
         self.chars_typed += len;
         self.total_actions += 1;
+        if self.rollback_stack.len() >= MAX_ROLLBACK_DEPTH {
+            return Err(SecurityError::ResourceLimitExceeded {
+                resource: format!(
+                    "rollback_stack hard cap: {} >= {MAX_ROLLBACK_DEPTH}",
+                    self.rollback_stack.len()
+                ),
+            });
+        }
         self.rollback_stack
             .push(RollbackEntry::TextTyped { char_count: len });
         Ok(())
@@ -307,9 +323,25 @@ impl SandboxSession {
     pub fn record_app_open(&mut self, package: &str, previous: &str) -> Result<(), SecurityError> {
         self.check_limits()?;
         if !self.apps_touched.contains(&package.to_string()) {
+            if self.apps_touched.len() >= MAX_APPS_TOUCHED {
+                return Err(SecurityError::ResourceLimitExceeded {
+                    resource: format!(
+                        "apps_touched hard cap: {} >= {MAX_APPS_TOUCHED}",
+                        self.apps_touched.len()
+                    ),
+                });
+            }
             self.apps_touched.push(package.to_string());
         }
         self.total_actions += 1;
+        if self.rollback_stack.len() >= MAX_ROLLBACK_DEPTH {
+            return Err(SecurityError::ResourceLimitExceeded {
+                resource: format!(
+                    "rollback_stack hard cap: {} >= {MAX_ROLLBACK_DEPTH}",
+                    self.rollback_stack.len()
+                ),
+            });
+        }
         self.rollback_stack.push(RollbackEntry::AppOpened {
             previous_package: previous.to_string(),
         });
@@ -423,35 +455,14 @@ impl Sandbox {
     }
 
     /// Classify from an action string (for PolicyGate integration).
-    pub fn classify_string(&self, action: &str) -> ContainmentLevel {
-        let lower = action.to_ascii_lowercase();
-
-        if lower.contains("factory reset")
-            || lower.contains("wipe data")
-            || lower.contains("format")
-            || lower.contains("brick")
-        {
-            return ContainmentLevel::Forbidden;
-        }
-
-        if lower.contains("uninstall")
-            || lower.contains("install")
-            || lower.contains("delete")
-            || lower.contains("permission")
-            || lower.contains("settings change")
-        {
-            return ContainmentLevel::Restricted;
-        }
-
-        if lower.contains("type")
-            || lower.contains("swipe")
-            || lower.contains("long press")
-            || lower.contains("open app")
-            || lower.contains("notification")
-        {
-            return ContainmentLevel::Monitored;
-        }
-
+    ///
+    /// # LLM=brain, Rust=body
+    /// NLP keyword matching on action strings violates the Iron Law: the LLM
+    /// classifies actions, Rust enforces structured decisions.  This function
+    /// returns `Direct` (neutral) unconditionally; the caller must use the
+    /// structured `classify(&ActionType)` overload instead.
+    pub fn classify_string(&self, _action: &str) -> ContainmentLevel {
+        // LLM classifies actions — Rust returns Direct as neutral.
         ContainmentLevel::Direct
     }
 
@@ -813,46 +824,35 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_string_forbidden() {
+    fn test_classify_string_is_neutral_stub() {
+        // classify_string() is a safe stub — LLM=brain, Rust=body.
+        // NLP keyword classification belongs in the LLM layer, not in Rust.
+        // All strings must return Direct (neutral) regardless of content.
         let sandbox = Sandbox::new();
         assert_eq!(
             sandbox.classify_string("factory reset now"),
-            ContainmentLevel::Forbidden
+            ContainmentLevel::Direct,
+            "classify_string must be a neutral stub — no NLP in Rust"
         );
         assert_eq!(
             sandbox.classify_string("wipe data"),
-            ContainmentLevel::Forbidden
+            ContainmentLevel::Direct,
+            "classify_string must be a neutral stub — no NLP in Rust"
         );
-    }
-
-    #[test]
-    fn test_classify_string_restricted() {
-        let sandbox = Sandbox::new();
         assert_eq!(
             sandbox.classify_string("install app com.game"),
-            ContainmentLevel::Restricted
+            ContainmentLevel::Direct,
+            "classify_string must be a neutral stub — no NLP in Rust"
         );
-        assert_eq!(
-            sandbox.classify_string("uninstall com.spam"),
-            ContainmentLevel::Restricted
-        );
-    }
-
-    #[test]
-    fn test_classify_string_monitored() {
-        let sandbox = Sandbox::new();
         assert_eq!(
             sandbox.classify_string("type hello world"),
-            ContainmentLevel::Monitored
+            ContainmentLevel::Direct,
+            "classify_string must be a neutral stub — no NLP in Rust"
         );
-    }
-
-    #[test]
-    fn test_classify_string_direct() {
-        let sandbox = Sandbox::new();
         assert_eq!(
             sandbox.classify_string("tap at 100 200"),
-            ContainmentLevel::Direct
+            ContainmentLevel::Direct,
+            "classify_string must be a neutral stub — no NLP in Rust"
         );
     }
 

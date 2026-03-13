@@ -82,6 +82,9 @@ pub struct WakeWordEvent {
 // WakeWordDetector
 // ---------------------------------------------------------------------------
 
+// Phase 8 wire point: sensitivity is read by the KWS detection loop on Android
+// target; unreachable dead storage on non-Android builds.
+#[allow(dead_code)]
 pub struct WakeWordDetector {
     #[cfg(target_os = "android")]
     kws_state: *mut std::ffi::c_void,

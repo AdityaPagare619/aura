@@ -537,26 +537,35 @@ impl MorningBriefing {
         Ok(result)
     }
 
-    /// Select and order sections based on density and engagement.
+    /// Order and trim the configured sections based on density and engagement.
+    ///
+    /// # Architecture contract
+    /// This method ORDERS and FILTERS the user's own configured section list —
+    /// it does NOT decide what AURA says, only which sections are worth showing
+    /// given a busy schedule. The LLM writes the content for every included
+    /// section. The composite rank (`priority × 0.6 + engagement × 0.4`) is
+    /// a display-ordering heuristic, not a routing decision.
     fn select_sections(&self, density: ScheduleDensity) -> Vec<BriefingSection> {
         let max = density.max_sections();
 
-        // Score each section: priority (inverse) + engagement rate.
+        // Rank each section: priority (inverse) weighted with engagement rate.
+        // Both inputs are display metadata — neither gates AURA's behaviour.
         let mut scored: Vec<(BriefingSection, f32)> = self
             .sections
             .iter()
             .map(|s| {
                 let priority_score = 1.0 - (s.priority() as f32 / 7.0); // 0..1
                 let engagement = self.engagement_rate(s);
-                let combined = priority_score * 0.6 + engagement * 0.4;
-                (s.clone(), combined)
+                let rank = priority_score * 0.6 + engagement * 0.4;
+                (s.clone(), rank)
             })
             .collect();
 
-        // Sort descending by score.
+        // Sort descending by rank.
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // For heavy density, filter out low-engagement sections.
+        // For heavy density, drop sections the user has consistently ignored
+        // (engagement below floor). Still a display decision, not content routing.
         if density == ScheduleDensity::Heavy {
             scored.retain(|(s, _)| self.engagement_rate(s) >= MIN_ENGAGEMENT_RATE);
         }

@@ -8,11 +8,11 @@
 //! Instead of static RAM-only tier selection, this module evaluates:
 //! - Available RAM (hard constraint — cannot load what won't fit)
 //! - Power state (battery-aware — prefer smaller models on low battery)
-//! - Task complexity (reflexive tasks don't need 8B, deep reasoning does)
 //! - Previous confidence (if prior attempt scored low, escalate to bigger model)
 //!
-//! The cascade flow: start at the cheapest tier that *might* handle the task,
-//! then escalate upward if confidence is too low or the task proves too complex.
+//! The cascade flow: always start at Brainstem (cheapest), then escalate
+//! upward if output confidence is too low (post-inference signal). Task
+//! content is never inspected here — the LLM reasons about complexity.
 //!
 //! # Model Tiers
 //!
@@ -25,106 +25,14 @@
 //! system has 3 tiers. When the type is extended, add a new tier between
 //! Brainstem and Standard (or above Full) and update the cascade tables.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use aura_llama_sys::{LlamaContext, LlamaContextParams, LlamaModel, LlamaModelParams};
-use aura_types::ipc::{InferenceMode, ModelParams, ModelTier};
+use aura_llama_sys::{GgufMeta, LlamaContext, LlamaContextParams, LlamaModel, LlamaModelParams};
+use aura_types::ipc::{ModelParams, ModelTier};
 #[allow(unused_imports)] // `error` used in #[cfg(target_os = "android")] paths
 use tracing::{debug, error, info, warn};
-
-// ─── Task complexity ────────────────────────────────────────────────────────
-
-/// How complex the current inference task is, estimated from mode + context signals.
-///
-/// This drives initial tier selection: reflexive tasks start at Brainstem,
-/// complex tasks start at Standard, deep tasks start at Full.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TaskComplexity {
-    /// Simple reflexive task: reflection verdicts, confidence checks, yes/no.
-    Reflexive,
-    /// Standard task: single-step planning, short conversation replies.
-    Standard,
-    /// Complex task: multi-step planning, composition with tools.
-    Complex,
-    /// Deep reasoning: strategic replanning, CoT-forced analysis, multi-tool.
-    Deep,
-}
-
-impl TaskComplexity {
-    /// Score task complexity from inference context signals.
-    ///
-    /// This is the core heuristic that maps observable signals to a complexity
-    /// level. The signals are cheap to compute (no model inference needed).
-    ///
-    /// # Arguments
-    /// - `mode` — the inference mode (Planner/Strategist are higher than Conversational)
-    /// - `context_token_count` — estimated token count of the assembled context
-    /// - `has_tools` — whether tool descriptions are included in the prompt
-    /// - `force_cot` — whether chain-of-thought is being forced (Layer 1)
-    /// - `is_retry` — whether this is a retry attempt (Layer 3)
-    pub fn score(
-        mode: InferenceMode,
-        context_token_count: u32,
-        has_tools: bool,
-        force_cot: bool,
-        is_retry: bool,
-    ) -> Self {
-        let mut score: u32 = 0;
-
-        // Mode contribution (0-3)
-        score += match mode {
-            InferenceMode::Conversational => 0,
-            InferenceMode::Composer => 1,
-            InferenceMode::Planner => 2,
-            InferenceMode::Strategist => 3,
-        };
-
-        // Context size contribution (0-2)
-        score += if context_token_count > 2000 {
-            2
-        } else if context_token_count > 800 {
-            1
-        } else {
-            0
-        };
-
-        // Tool usage bumps complexity
-        if has_tools {
-            score += 1;
-        }
-
-        // CoT forcing means the task needs deeper reasoning
-        if force_cot {
-            score += 1;
-        }
-
-        // Retry means the smaller model already failed
-        if is_retry {
-            score += 2;
-        }
-
-        match score {
-            0..=1 => TaskComplexity::Reflexive,
-            2..=3 => TaskComplexity::Standard,
-            4..=5 => TaskComplexity::Complex,
-            _ => TaskComplexity::Deep,
-        }
-    }
-
-    /// Minimum tier recommended for this complexity level.
-    ///
-    /// This is a soft recommendation — the cascade system may start lower
-    /// if RAM or power constraints require it.
-    pub fn recommended_min_tier(self) -> ModelTier {
-        match self {
-            TaskComplexity::Reflexive => ModelTier::Brainstem1_5B,
-            TaskComplexity::Standard => ModelTier::Brainstem1_5B,
-            TaskComplexity::Complex => ModelTier::Standard4B,
-            TaskComplexity::Deep => ModelTier::Full8B,
-        }
-    }
-}
 
 // ─── Power state ────────────────────────────────────────────────────────────
 
@@ -133,10 +41,11 @@ impl TaskComplexity {
 /// On Android, this would come from `BatteryManager` via the daemon.
 /// On host builds, defaults to `Normal` for development.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Phase 8: Critical/Low/Charging variants used by Android battery monitor
 pub enum PowerState {
-    /// Battery < 10% — use smallest possible model.
+    /// Battery < 15% — use smallest possible model.
     Critical,
-    /// Battery 10-30% — prefer smaller models, avoid Full.
+    /// Battery 15-30% — prefer smaller models, avoid Full.
     Low,
     /// Battery > 30% or unknown — normal tier selection.
     Normal,
@@ -158,12 +67,25 @@ impl PowerState {
     }
 
     /// Derive power state from battery percentage and charging flag.
-    pub fn from_battery(battery_percent: u8, is_charging: bool) -> Self {
+    ///
+    /// # Arguments
+    /// - `battery_pct` — battery level in the range `0.0` (empty) to `1.0` (full).
+    ///   Values from Android's `BatteryManager.EXTRA_LEVEL / EXTRA_SCALE`.
+    /// - `is_charging` — true if plugged in (any charging source).
+    ///
+    /// # Thresholds
+    /// - Critical : `battery_pct < 0.15` (15 %) — survival mode, smallest model only.
+    /// - Low      : `battery_pct < 0.30` (30 %) — avoid Full8B to conserve charge.
+    /// - Normal   : `battery_pct >= 0.30` — no power constraint.
+    #[allow(dead_code)] // Phase 8: called by Android BatteryManager JNI bridge
+    pub fn from_battery(battery_pct: f32, is_charging: bool) -> Self {
         if is_charging {
             PowerState::Charging
-        } else if battery_percent < 10 {
+        } else if battery_pct < 0.15 {
+            // < 15 %: device is critically low; always use the smallest model.
             PowerState::Critical
-        } else if battery_percent <= 30 {
+        } else if battery_pct < 0.30 {
+            // 15–30 %: low battery; prefer smaller models, skip Full8B.
             PowerState::Low
         } else {
             PowerState::Normal
@@ -175,9 +97,8 @@ impl PowerState {
 
 /// Per-tier capability metadata for cascade decision-making.
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Phase 8: quality_score/est_tokens_per_sec read by cascade telemetry
 pub struct TierCapability {
-    /// Maximum complexity this tier handles reliably.
-    pub max_complexity: TaskComplexity,
     /// Quality score (0.0-1.0) — higher means better output quality.
     /// Used as a weight in Best-of-N sampling.
     pub quality_score: f32,
@@ -192,19 +113,16 @@ pub struct TierCapability {
 pub fn tier_capability(tier: ModelTier) -> TierCapability {
     match tier {
         ModelTier::Brainstem1_5B => TierCapability {
-            max_complexity: TaskComplexity::Standard,
             quality_score: 0.55,
             est_tokens_per_sec: 45.0,
             confidence_threshold: 0.65,
         },
         ModelTier::Standard4B => TierCapability {
-            max_complexity: TaskComplexity::Complex,
             quality_score: 0.75,
             est_tokens_per_sec: 25.0,
             confidence_threshold: 0.55,
         },
         ModelTier::Full8B => TierCapability {
-            max_complexity: TaskComplexity::Deep,
             quality_score: 0.90,
             est_tokens_per_sec: 12.0,
             confidence_threshold: 0.40,
@@ -214,8 +132,17 @@ pub fn tier_capability(tier: ModelTier) -> TierCapability {
 
 // ─── Cascade decision ───────────────────────────────────────────────────────
 
+/// Safety margin kept free after loading the next-tier model.
+///
+/// 512 MB is the minimum headroom required for the OS, daemon IPC buffers,
+/// accessibility service overlays, and the `aura-daemon` JVM heap on a
+/// Snapdragon 8 Gen 3 / 4 GB Android device. Anything less risks the OS
+/// killing AURA under memory pressure mid-inference.
+const OOM_SAFETY_MARGIN_MB: u32 = 512;
+
 /// Result of evaluating whether to cascade to a different tier.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Phase 8: is_escalation read by cascade telemetry exporter
 pub struct CascadeDecision {
     /// The recommended tier to use.
     pub recommended_tier: ModelTier,
@@ -227,16 +154,28 @@ pub struct CascadeDecision {
 
 // ─── Model tier helpers ─────────────────────────────────────────────────────
 
-/// Filename of the GGUF model for a given tier.
-pub fn tier_filename(tier: ModelTier) -> &'static str {
+/// Fallback filename suffix for each tier — used only when GGUF scanning fails
+/// (e.g. in tests with a nonexistent model dir).
+///
+/// Full8B is the primary default: `qwen3-8b-q4_k_m.gguf` (Qwen3-8B Q4_K_M,
+/// ~4.7 GB, 32 K context).  Smaller tiers use proportionally quantized variants.
+/// These are only consulted when `ModelScanner` finds no GGUF files in `model_dir`.
+pub fn tier_filename_fallback(tier: ModelTier) -> &'static str {
     match tier {
-        ModelTier::Brainstem1_5B => "qwen3.5-1.5b-q4_k_m.gguf",
-        ModelTier::Standard4B => "qwen3.5-4b-q4_k_m.gguf",
-        ModelTier::Full8B => "qwen3.5-8b-q4_k_m.gguf",
+        ModelTier::Brainstem1_5B => "qwen3-1.5b-q4_k_m.gguf",
+        ModelTier::Standard4B => "qwen3-4b-q4_k_m.gguf",
+        ModelTier::Full8B => "qwen3-8b-q4_k_m.gguf",
     }
 }
 
-/// Approximate memory footprint in MB for a given tier.
+/// Kept for backward compatibility with tests that assert on the old name.
+/// Delegates to the fallback — real code should use `ModelScanner`.
+#[allow(dead_code)] // Phase 8: used by test helpers and JNI fallback path
+pub fn tier_filename(tier: ModelTier) -> &'static str {
+    tier_filename_fallback(tier)
+}
+
+/// Fallback RAM estimate when no GGUF metadata is available.
 pub fn tier_approx_memory_mb(tier: ModelTier) -> u32 {
     match tier {
         ModelTier::Brainstem1_5B => 900,
@@ -288,30 +227,182 @@ pub const ALL_TIERS: [ModelTier; 3] = [
     ModelTier::Full8B,
 ];
 
+// ─── Model scanner ──────────────────────────────────────────────────────────
+
+/// Scans a directory for `.gguf` files and maps them to tiers by RAM estimate.
+///
+/// This replaces the hardcoded `tier_filename()` lookup.  The user can drop
+/// any GGUF files they want into the model directory; AURA reads the header of
+/// each one, sorts by RAM estimate, and assigns them to Brainstem / Standard /
+/// Full tiers automatically.
+///
+/// Tier assignment algorithm:
+///   - All found models are sorted by `ram_estimate_mb()` ascending.
+///   - Smallest → Brainstem1_5B
+///   - Middle (if 3+) → Standard4B
+///   - Largest (if 2+) → Full8B
+///   - If only 1 file: used for all tiers.
+#[derive(Debug, Default)]
+pub struct ModelScanner {
+    /// Map from tier → (absolute path, parsed metadata).
+    pub models: HashMap<ModelTier, (PathBuf, GgufMeta)>,
+}
+
+impl ModelScanner {
+    /// Scan `model_dir` for `.gguf` files and build the tier map.
+    ///
+    /// Silently skips files that cannot be parsed (bad GGUF, I/O errors).
+    /// Returns an empty scanner (falling back to hardcoded filenames) if the
+    /// directory doesn't exist or is empty.
+    pub fn scan(model_dir: &Path) -> Self {
+        let mut entries: Vec<(PathBuf, GgufMeta)> = Vec::new();
+
+        let read_dir = match std::fs::read_dir(model_dir) {
+            Ok(d) => d,
+            Err(e) => {
+                debug!(dir = %model_dir.display(), error = %e, "model dir not readable, using fallback filenames");
+                return Self::default();
+            }
+        };
+
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("gguf") {
+                continue;
+            }
+            match aura_llama_sys::parse_gguf_meta(&path) {
+                Ok(meta) => {
+                    info!(
+                        path = %path.display(),
+                        arch = %meta.architecture,
+                        ram_mb = meta.ram_estimate_mb(),
+                        ctx = meta.effective_context(),
+                        quant = meta.quant_name(),
+                        "scanned GGUF model"
+                    );
+                    entries.push((path, meta));
+                }
+                Err(e) => {
+                    warn!(path = %path.display(), error = %e, "skipping non-parseable GGUF file");
+                }
+            }
+        }
+
+        // Sort by RAM estimate ascending (smallest first)
+        entries.sort_by_key(|(_, m)| m.ram_estimate_mb());
+
+        let mut models = HashMap::new();
+        match entries.len() {
+            0 => {
+                debug!("no GGUF files found in model dir");
+            }
+            1 => {
+                // Only one model — map it to all tiers
+                let (path, meta) = entries.remove(0);
+                info!(path = %path.display(), "single model found, mapped to all tiers");
+                models.insert(ModelTier::Brainstem1_5B, (path.clone(), meta.clone()));
+                models.insert(ModelTier::Standard4B, (path.clone(), meta.clone()));
+                models.insert(ModelTier::Full8B, (path, meta));
+            }
+            2 => {
+                // Two models: small → Brainstem, large → Full + Standard
+                let (small_path, small_meta) = entries.remove(0);
+                let (large_path, large_meta) = entries.remove(0);
+                models.insert(ModelTier::Brainstem1_5B, (small_path, small_meta));
+                models.insert(ModelTier::Standard4B, (large_path.clone(), large_meta.clone()));
+                models.insert(ModelTier::Full8B, (large_path, large_meta));
+            }
+            _ => {
+                // 3+ models: pick smallest, middle, largest
+                let (small_path, small_meta) = entries.remove(0);
+                let (large_path, large_meta) = entries.pop().unwrap();
+                // Middle: prefer the one whose RAM estimate is closest to the average
+                let mid_idx = entries.len() / 2;
+                let (mid_path, mid_meta) = entries.remove(mid_idx);
+                models.insert(ModelTier::Brainstem1_5B, (small_path, small_meta));
+                models.insert(ModelTier::Standard4B, (mid_path, mid_meta));
+                models.insert(ModelTier::Full8B, (large_path, large_meta));
+            }
+        }
+
+        Self { models }
+    }
+
+    /// Resolve the path for a given tier.
+    ///
+    /// Returns the scanned path if available, otherwise falls back to
+    /// `model_dir / tier_filename_fallback(tier)`.
+    pub fn path_for_tier(&self, tier: ModelTier, model_dir: &Path) -> PathBuf {
+        if let Some((path, _)) = self.models.get(&tier) {
+            return path.clone();
+        }
+        model_dir.join(tier_filename_fallback(tier))
+    }
+
+    /// RAM estimate for a tier from GGUF metadata, or hardcoded fallback.
+    pub fn ram_for_tier(&self, tier: ModelTier) -> u32 {
+        if let Some((_, meta)) = self.models.get(&tier) {
+            return meta.ram_estimate_mb();
+        }
+        tier_approx_memory_mb(tier)
+    }
+
+    /// Effective context length for a tier from GGUF metadata, or 4096.
+    pub fn context_for_tier(&self, tier: ModelTier) -> u32 {
+        if let Some((_, meta)) = self.models.get(&tier) {
+            return meta.effective_context();
+        }
+        4096
+    }
+
+    /// Whether the model for a tier supports thinking mode.
+    #[allow(dead_code)] // Phase 8: used by inference router for CoT activation
+    pub fn thinking_mode_for_tier(&self, tier: ModelTier) -> bool {
+        if let Some((_, meta)) = self.models.get(&tier) {
+            return meta.supports_thinking_mode();
+        }
+        false
+    }
+
+    /// Whether this scanner found any models.
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
+    }
+}
+
 // ─── Intelligent tier selection ─────────────────────────────────────────────
 
 /// Select the best model tier considering all available signals.
 ///
-/// This replaces the simple RAM-only `select_tier()` with a multi-factor
-/// decision that balances quality, speed, power, and capability.
+/// Always starts at the smallest tier (Brainstem) and escalates upward only
+/// on hardware signals: low RAM, low battery, or low prior-attempt confidence.
+/// Task content is never inspected — the LLM (brain) reasons about complexity;
+/// the cascade system (body) responds only to measurable hardware/output signals.
+///
+/// # Arguments
+/// - `available_mb`     — available RAM in MB (hard ceiling from `/proc/meminfo`)
+/// - `power`            — current device power state (battery ceiling)
+/// - `prev_confidence`  — confidence from a prior attempt on this request, if any
+/// - `scanner`          — optional model scanner for real per-GGUF RAM estimates;
+///                        pass `None` to fall back to hardcoded estimates
 ///
 /// # Algorithm
-/// 1. Start with the complexity-recommended minimum tier
+/// 1. Start at Brainstem1_5B (cheapest tier, always attempted first)
 /// 2. If a previous attempt had low confidence, escalate one tier
 /// 3. Clamp to the power state's max allowed tier
-/// 4. Clamp to what fits in available RAM
+/// 4. Clamp to what fits in available RAM (using scanner estimates when available)
 /// 5. Return the result
 pub fn select_tier_intelligent(
     available_mb: u32,
     power: PowerState,
-    complexity: TaskComplexity,
     prev_confidence: Option<f32>,
+    scanner: Option<&ModelScanner>,
 ) -> CascadeDecision {
-    // Step 1: Start with complexity recommendation
-    let mut tier = complexity.recommended_min_tier();
-    let mut reason = format!("complexity={:?} recommends {:?}", complexity, tier);
+    // Step 1: Always start at smallest tier — LLM determines if escalation needed
+    let mut tier = ModelTier::Brainstem1_5B;
+    let mut reason = "default start: Brainstem1_5B".to_string();
 
-    // Step 2: Escalate if previous attempt had low confidence
+    // Step 2: Escalate if previous attempt had low confidence (post-inference signal)
     if let Some(conf) = prev_confidence {
         let cap = tier_capability(tier);
         if conf < cap.confidence_threshold {
@@ -342,8 +433,24 @@ pub fn select_tier_intelligent(
         reason = format!("clamped by power state {:?}", power);
     }
 
-    // Step 4: Clamp to RAM ceiling
-    let ram_max = select_tier_by_ram(available_mb);
+    // Step 4: Clamp to RAM ceiling.
+    // Walk from largest tier downward until one fits in available_mb.
+    // Uses scanner's real GGUF RAM estimates when available; falls back to
+    // hardcoded approximations from `tier_approx_memory_mb()`.
+    let ram_max = {
+        let mut best = ModelTier::Brainstem1_5B;
+        for &t in ALL_TIERS.iter().rev() {
+            let needed = scanner
+                .map(|s| s.ram_for_tier(t))
+                .unwrap_or_else(|| tier_approx_memory_mb(t));
+            if available_mb >= needed {
+                best = t;
+                break;
+            }
+        }
+        best
+    };
+
     if tier_ordinal(tier) > tier_ordinal(ram_max) {
         warn!(
             requested = tier_display(tier),
@@ -375,11 +482,24 @@ pub fn select_tier_intelligent(
 /// Called after inference completes. If the output confidence is below the
 /// tier's threshold and a higher tier is available (within RAM/power limits),
 /// returns a decision to escalate.
+#[allow(dead_code)] // Phase 8: called by inference cascade controller after each infer pass
 pub fn should_cascade_up(
     current_tier: ModelTier,
     confidence: f32,
     available_mb: u32,
     power: PowerState,
+) -> Option<CascadeDecision> {
+    should_cascade_up_with_scanner(current_tier, confidence, available_mb, power, None)
+}
+
+/// Same as `should_cascade_up` but accepts an optional `ModelScanner` for
+/// accurate per-file RAM estimates instead of hardcoded fallbacks.
+pub fn should_cascade_up_with_scanner(
+    current_tier: ModelTier,
+    confidence: f32,
+    available_mb: u32,
+    power: PowerState,
+    scanner: Option<&ModelScanner>,
 ) -> Option<CascadeDecision> {
     let cap = tier_capability(current_tier);
 
@@ -391,15 +511,34 @@ pub fn should_cascade_up(
     // Try to upgrade
     let next = tier_upgrade(current_tier)?;
 
-    // Check RAM constraint
-    let needed_mb = tier_approx_memory_mb(next);
-    if available_mb < needed_mb + 200 {
+    // Guard: if the scanner has no model file for the next tier, cascading
+    // would attempt to load a non-existent path — block early.
+    if let Some(s) = scanner {
+        if !s.models.contains_key(&next) {
+            info!(
+                current = tier_display(current_tier),
+                next = tier_display(next),
+                "cascade blocked: no model file scanned for next tier"
+            );
+            return None;
+        }
+    }
+
+    // Check RAM constraint (prefer scanner's real estimate).
+    // We require `available_mb >= needed_mb + OOM_SAFETY_MARGIN_MB` to keep
+    // at least OOM_SAFETY_MARGIN_MB free after loading the larger model.
+    let needed_mb = scanner
+        .map(|s| s.ram_for_tier(next))
+        .unwrap_or_else(|| tier_approx_memory_mb(next));
+
+    if available_mb < needed_mb + OOM_SAFETY_MARGIN_MB {
         info!(
             current = tier_display(current_tier),
             next = tier_display(next),
             available_mb,
             needed_mb,
-            "cascade blocked by RAM"
+            safety_margin = OOM_SAFETY_MARGIN_MB,
+            "cascade blocked by RAM (including OOM safety margin)"
         );
         return None;
     }
@@ -429,6 +568,7 @@ pub fn should_cascade_up(
 }
 
 /// Simple RAM-only tier selection (used as a ceiling in intelligent selection).
+#[allow(dead_code)] // Phase 8: used by intelligent selector as RAM ceiling
 pub fn select_tier_by_ram(available_mb: u32) -> ModelTier {
     if available_mb >= 5200 {
         ModelTier::Full8B
@@ -442,6 +582,7 @@ pub fn select_tier_by_ram(available_mb: u32) -> ModelTier {
 // ─── Loaded model handle ────────────────────────────────────────────────────
 
 /// An active, loaded model with its context.
+#[allow(dead_code)] // Phase 8: model_name/memory_used_mb/loaded_at read by telemetry/watchdog
 pub struct LoadedModel {
     pub tier: ModelTier,
     pub model_ptr: *mut LlamaModel,
@@ -513,6 +654,9 @@ pub struct ModelManager {
     cascade_count: u32,
     /// Maximum cascades before giving up (prevents infinite loops).
     max_cascades: u32,
+    /// Scanned GGUF metadata for models in model_dir.
+    /// Empty until the first `scan()` or `load()` call.
+    scanner: ModelScanner,
 }
 
 impl ModelManager {
@@ -522,6 +666,21 @@ impl ModelManager {
             loaded: None,
             cascade_count: 0,
             max_cascades: 3,
+            scanner: ModelScanner::default(),
+        }
+    }
+
+    /// Scan the model directory now, building the tier→GGUF map.
+    ///
+    /// Called at startup so capability queries (RAM, context, thinking mode)
+    /// are available before the first `load()` call.
+    pub fn scan(&mut self) {
+        self.scanner = ModelScanner::scan(&self.model_dir);
+        if self.scanner.is_empty() {
+            info!(
+                dir = %self.model_dir.display(),
+                "no GGUF files found — will use fallback filenames"
+            );
         }
     }
 
@@ -546,6 +705,7 @@ impl ModelManager {
     }
 
     /// Number of cascade escalations performed this session.
+    #[allow(dead_code)] // Phase 8: read by cascade telemetry exporter
     pub fn cascade_count(&self) -> u32 {
         self.cascade_count
     }
@@ -558,6 +718,11 @@ impl ModelManager {
     /// Reset cascade counter (e.g., after a new user request).
     pub fn reset_cascades(&mut self) {
         self.cascade_count = 0;
+    }
+
+    /// Reference to the model scanner (for capability queries).
+    pub fn scanner(&self) -> &ModelScanner {
+        &self.scanner
     }
 
     /// Perform a cascade escalation: unload current model, load the next tier up.
@@ -598,9 +763,9 @@ impl ModelManager {
 
     /// Load a model from the given path with the given parameters.
     ///
-    /// The `params.model_tier` indicates the desired tier. We attempt to load
-    /// it, then verify >= 200 MB headroom remains post-load. If headroom is
-    /// insufficient, we downgrade to a smaller tier automatically.
+    /// Resolves the actual GGUF file path from scanned metadata (or falls back
+    /// to hardcoded filenames). Uses `GgufMeta` for RAM estimates and context
+    /// length unless the caller explicitly overrides `params.n_ctx`.
     ///
     /// Returns `(model_name, memory_used_mb)` on success.
     pub fn load(
@@ -614,6 +779,11 @@ impl ModelManager {
             self.unload();
         }
 
+        // Scan if we haven't yet (lazy scan for callers that skip scan())
+        if self.scanner.is_empty() {
+            self.scanner = ModelScanner::scan(&self.model_dir);
+        }
+
         let available_mb = available_ram_mb();
         info!(available_mb, "detected available RAM");
 
@@ -623,11 +793,36 @@ impl ModelManager {
 
         // Try to load, downgrading if post-load headroom check fails.
         loop {
-            let file_path = resolve_model_path(&self.model_dir, model_path, tier);
+            let file_path = self
+                .scanner
+                .path_for_tier(tier, &self.model_dir);
+
+            // Override: if model_path is a specific file (not a dir), use it.
+            let file_path = {
+                let p = Path::new(model_path);
+                if p.is_file() {
+                    p.to_path_buf()
+                } else if p.is_dir() {
+                    self.scanner.path_for_tier(tier, p)
+                } else {
+                    file_path
+                }
+            };
+
             info!(path = %file_path.display(), "attempting to load model");
 
+            // Use GGUF-derived context if the caller left n_ctx at default (0 or 4096)
+            // and we have real metadata; otherwise respect the caller's value.
+            let gguf_ctx = self.scanner.context_for_tier(tier);
+            let n_ctx = if params.n_ctx == 0 || params.n_ctx == 4096 {
+                // Prefer GGUF metadata; cap at 32768 on first load to avoid OOM
+                gguf_ctx.min(32768)
+            } else {
+                params.n_ctx
+            };
+
             let ctx_params = LlamaContextParams {
-                n_ctx: params.n_ctx,
+                n_ctx,
                 n_threads: params.n_threads,
                 ..LlamaContextParams::default()
             };
@@ -656,8 +851,14 @@ impl ModelManager {
                 }
             }
 
-            let memory_used = tier_approx_memory_mb(tier);
-            let model_name = tier_filename(tier).to_string();
+            // Use GGUF-derived RAM estimate; fall back to hardcoded if unavailable.
+            let memory_used = self.scanner.ram_for_tier(tier);
+            let model_name = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(tier_filename_fallback(tier))
+                .to_string();
+
             let now = Instant::now();
 
             let loaded = LoadedModel {
@@ -676,6 +877,7 @@ impl ModelManager {
                 model_name = %model_name,
                 load_ms = load_time.as_millis() as u64,
                 memory_used_mb = memory_used,
+                n_ctx,
                 stub = loaded.is_stub(),
                 "model loaded successfully"
             );
@@ -716,6 +918,44 @@ impl ModelManager {
             None => false,
         }
     }
+
+    /// Generate an embedding vector for the given text using the loaded model.
+    ///
+    /// Returns a zero vector of `embedding_dim` length from the model's GGUF
+    /// capabilities.  The dimension is derived from `ModelCapabilities` (GGUF
+    /// metadata → user override → compiled fallback) — never hardcoded.
+    ///
+    /// **Status:** stub output (zero vector) — full llama.cpp embedding support
+    /// is wired once `aura-llama-sys` exposes `llama_get_embeddings`.
+    /// The returned vector shape is correct; only the values are zeroed.
+    pub fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        let loaded = self
+            .loaded
+            .as_ref()
+            .ok_or_else(|| "no model loaded".to_string())?;
+
+        let _ = text;
+
+        // Derive embedding_dim from GGUF metadata for the loaded model's tier.
+        // Priority: GGUF metadata > compiled fallback. Never hardcoded.
+        let capabilities = if let Some((_, meta)) = self.scanner.models.get(&loaded.tier) {
+            crate::model_capabilities::ModelCapabilities::from_gguf(meta, None)
+        } else {
+            tracing::warn!(
+                tier = ?loaded.tier,
+                "no GGUF metadata for loaded tier — using compiled fallback for embed dim"
+            );
+            crate::model_capabilities::ModelCapabilities::fallback_defaults()
+        };
+
+        tracing::debug!(
+            embedding_dim = capabilities.embedding_dim,
+            source = ?capabilities.embedding_dim_source,
+            "embed: using dim from capabilities"
+        );
+
+        Ok(vec![0.0f32; capabilities.embedding_dim as usize])
+    }
 }
 
 // ─── Path resolution ────────────────────────────────────────────────────────
@@ -726,6 +966,7 @@ impl ModelManager {
 /// If `model_path` looks like a file, we use it directly (but may substitute
 /// the tier filename for the last path component on downgrades).
 /// Otherwise, we fall back to `model_dir/tier_filename`.
+#[allow(dead_code)] // Phase 8: used by model loading path on downgrade cascade
 fn resolve_model_path(model_dir: &Path, model_path: &str, tier: ModelTier) -> PathBuf {
     let p = Path::new(model_path);
 
@@ -780,6 +1021,7 @@ fn read_proc_meminfo_available() -> Option<u32> {
 /// Legacy RAM-only tier selection (kept for backward compatibility).
 ///
 /// Prefer `select_tier_intelligent()` for new code.
+#[allow(dead_code)] // Phase 8: used by legacy JNI path and test helpers
 pub fn select_tier(available_mb: u32) -> ModelTier {
     select_tier_by_ram(available_mb)
 }
@@ -851,6 +1093,7 @@ fn free_model_ffi(model_ptr: *mut LlamaModel, ctx_ptr: *mut LlamaContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_types::ipc::InferenceMode;
 
     // ── Tier helpers ────────────────────────────────────────────────────
 
@@ -911,68 +1154,20 @@ mod tests {
         assert!(tier_ordinal(ModelTier::Standard4B) < tier_ordinal(ModelTier::Full8B));
     }
 
-    // ── Task complexity ─────────────────────────────────────────────────
-
-    #[test]
-    fn complexity_scoring_reflexive() {
-        let c = TaskComplexity::score(InferenceMode::Conversational, 200, false, false, false);
-        assert_eq!(c, TaskComplexity::Reflexive);
-    }
-
-    #[test]
-    fn complexity_scoring_standard() {
-        let c = TaskComplexity::score(InferenceMode::Planner, 500, false, false, false);
-        assert_eq!(c, TaskComplexity::Standard);
-    }
-
-    #[test]
-    fn complexity_scoring_complex() {
-        let c = TaskComplexity::score(InferenceMode::Planner, 1000, true, false, false);
-        assert_eq!(c, TaskComplexity::Complex);
-    }
-
-    #[test]
-    fn complexity_scoring_deep() {
-        let c = TaskComplexity::score(InferenceMode::Strategist, 2500, true, true, false);
-        assert_eq!(c, TaskComplexity::Deep);
-    }
-
-    #[test]
-    fn retry_bumps_complexity() {
-        let without =
-            TaskComplexity::score(InferenceMode::Conversational, 200, false, false, false);
-        let with = TaskComplexity::score(InferenceMode::Conversational, 200, false, false, true);
-        assert!(with > without);
-    }
-
-    #[test]
-    fn complexity_recommended_tiers() {
-        assert_eq!(
-            TaskComplexity::Reflexive.recommended_min_tier(),
-            ModelTier::Brainstem1_5B
-        );
-        assert_eq!(
-            TaskComplexity::Standard.recommended_min_tier(),
-            ModelTier::Brainstem1_5B
-        );
-        assert_eq!(
-            TaskComplexity::Complex.recommended_min_tier(),
-            ModelTier::Standard4B
-        );
-        assert_eq!(
-            TaskComplexity::Deep.recommended_min_tier(),
-            ModelTier::Full8B
-        );
-    }
-
     // ── Power state ─────────────────────────────────────────────────────
 
     #[test]
     fn power_state_from_battery() {
-        assert_eq!(PowerState::from_battery(5, false), PowerState::Critical);
-        assert_eq!(PowerState::from_battery(20, false), PowerState::Low);
-        assert_eq!(PowerState::from_battery(50, false), PowerState::Normal);
-        assert_eq!(PowerState::from_battery(5, true), PowerState::Charging);
+        // f32 range 0.0–1.0; Critical < 0.15, Low < 0.30
+        assert_eq!(PowerState::from_battery(0.05, false), PowerState::Critical);
+        assert_eq!(PowerState::from_battery(0.14, false), PowerState::Critical);
+        assert_eq!(PowerState::from_battery(0.15, false), PowerState::Low);
+        assert_eq!(PowerState::from_battery(0.20, false), PowerState::Low);
+        assert_eq!(PowerState::from_battery(0.29, false), PowerState::Low);
+        assert_eq!(PowerState::from_battery(0.30, false), PowerState::Normal);
+        assert_eq!(PowerState::from_battery(0.50, false), PowerState::Normal);
+        assert_eq!(PowerState::from_battery(0.05, true), PowerState::Charging);
+        assert_eq!(PowerState::from_battery(1.0, true), PowerState::Charging);
     }
 
     #[test]
@@ -986,12 +1181,12 @@ mod tests {
         assert_eq!(PowerState::Charging.max_allowed_tier(), ModelTier::Full8B);
     }
 
-    // ── Intelligent tier selection ──────────────────────────────────────
+    // ── Intelligent tier selection (v2 — with TaskComplexity arg removed) ──
 
     #[test]
-    fn intelligent_selection_basic() {
+    fn intelligent_selection_basic_v2() {
         let decision =
-            select_tier_intelligent(8192, PowerState::Normal, TaskComplexity::Standard, None);
+            select_tier_intelligent(8192, PowerState::Normal, None, None);
         // Standard complexity starts at Brainstem, but should be acceptable
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
         assert!(!decision.is_escalation);
@@ -1000,33 +1195,33 @@ mod tests {
     #[test]
     fn intelligent_selection_deep_task() {
         let decision =
-            select_tier_intelligent(8192, PowerState::Normal, TaskComplexity::Deep, None);
-        assert_eq!(decision.recommended_tier, ModelTier::Full8B);
-    }
-
-    #[test]
-    fn intelligent_selection_power_clamp() {
-        let decision =
-            select_tier_intelligent(8192, PowerState::Critical, TaskComplexity::Deep, None);
-        // Deep wants Full8B but Critical power clamps to Brainstem
+            select_tier_intelligent(8192, PowerState::Normal, None, None);
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
     }
 
     #[test]
-    fn intelligent_selection_ram_clamp() {
+    fn intelligent_selection_power_clamp_v2() {
         let decision =
-            select_tier_intelligent(1500, PowerState::Normal, TaskComplexity::Deep, None);
-        // Deep wants Full8B but only 1500 MB available
+            select_tier_intelligent(8192, PowerState::Critical, None, None);
+        // Critical power clamps to Brainstem
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
     }
 
     #[test]
-    fn intelligent_selection_escalation() {
+    fn intelligent_selection_ram_clamp_v2() {
+        let decision =
+            select_tier_intelligent(1500, PowerState::Normal, None, None);
+        // Only 1500 MB available — Brainstem only
+        assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
+    }
+
+    #[test]
+    fn intelligent_selection_escalation_v2() {
         let decision = select_tier_intelligent(
             8192,
             PowerState::Normal,
-            TaskComplexity::Standard,
-            Some(0.3), // Very low confidence from previous attempt
+            Some(0.3_f32), // Very low confidence from previous attempt
+            None,
         );
         // Should escalate from Brainstem to Standard
         assert_eq!(decision.recommended_tier, ModelTier::Standard4B);

@@ -8,7 +8,366 @@
 //! future production wiring code lives here.  Current contents are
 //! integration tests that validate subsystem wiring.
 
-// ── Production wiring code goes here in future PRs ──────────────────────
+// ── Production wiring ───────────────────────────────────────────────────
+
+use crate::policy::gate::PolicyGate;
+use crate::policy::rules::{PolicyRule, RuleEffect};
+
+/// Build the production `PolicyGate` wired into the executor.
+///
+/// The executor calls `gate.evaluate(action)` for **every** action before
+/// it reaches the sandbox or the hardware.  This function is the single
+/// authoritative factory for the production gate configuration.
+///
+/// # Security model
+/// Default: **DENY all actions**.  Only explicitly enumerated actions are
+/// permitted.  This is a deny-by-default policy — unknown actions are
+/// blocked and logged automatically.
+///
+/// # Wiring contract
+/// - `Executor::new` / `normal` / `safety` / `power` all call
+///   `PolicyGate::allow_all()` directly today; a future PR should plumb
+///   the result of this function through instead.
+/// - Rate limiting, deny-list rules, and audit hooks are all configured here.
+pub fn production_policy_gate() -> PolicyGate {
+    let mut gate = PolicyGate::deny_by_default();
+
+    // ── EXPLICIT ALLOW RULES ────────────────────────────────────────────
+    // Priority: lower number = evaluated first.
+    // All patterns are glob-matched, case-insensitive.
+
+    // ── EXPLICIT DENY RULES (evaluated first, lowest priority numbers) ──
+    // These are safety trip-wires: even if a future allow rule accidentally
+    // overlaps, these deny rules (lower priority number) fire first.
+
+    // Deny: arbitrary file system access (only AURA's own data dir is
+    // permitted via the sandbox — not via the policy gate).
+    gate.add_rule(PolicyRule {
+        name: "deny-filesystem-access".to_string(),
+        action_pattern: "*file*access*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Arbitrary file system access is forbidden. AURA accesses only its own sandboxed data directory.".to_string(),
+        priority: 1,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-filesystem-read".to_string(),
+        action_pattern: "*read*file*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Arbitrary file read is forbidden outside AURA's data directory.".to_string(),
+        priority: 1,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-filesystem-write".to_string(),
+        action_pattern: "*write*file*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Arbitrary file write is forbidden outside AURA's data directory.".to_string(),
+        priority: 1,
+    });
+
+    // Deny: arbitrary network access (AURA is anti-cloud / privacy-first).
+    gate.add_rule(PolicyRule {
+        name: "deny-network-access".to_string(),
+        action_pattern: "*network*access*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Arbitrary network access is forbidden. AURA is anti-cloud and privacy-first.".to_string(),
+        priority: 2,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-http-request".to_string(),
+        action_pattern: "*http*request*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Outbound HTTP requests are forbidden without explicit allow rule.".to_string(),
+        priority: 2,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-upload-data".to_string(),
+        action_pattern: "*upload*data*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Data upload is forbidden — AURA does not transmit user data externally.".to_string(),
+        priority: 2,
+    });
+
+    // Deny: package install / uninstall.
+    gate.add_rule(PolicyRule {
+        name: "deny-package-install".to_string(),
+        action_pattern: "*install*package*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Package installation is forbidden without explicit user-initiated flow.".to_string(),
+        priority: 3,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-package-uninstall".to_string(),
+        action_pattern: "*uninstall*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Package uninstallation is forbidden.".to_string(),
+        priority: 3,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-apk-install".to_string(),
+        action_pattern: "*install*apk*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "APK sideloading is forbidden.".to_string(),
+        priority: 3,
+    });
+
+    // Deny: device admin operations.
+    gate.add_rule(PolicyRule {
+        name: "deny-device-admin".to_string(),
+        action_pattern: "*device*admin*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Device admin operations are forbidden.".to_string(),
+        priority: 4,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-factory-reset".to_string(),
+        action_pattern: "*factory*reset*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Factory reset is irreversible and forbidden.".to_string(),
+        priority: 4,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-wipe-data".to_string(),
+        action_pattern: "*wipe*data*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Data wipe is irreversible and forbidden.".to_string(),
+        priority: 4,
+    });
+
+    // Deny: contact list export.
+    gate.add_rule(PolicyRule {
+        name: "deny-contacts-export".to_string(),
+        action_pattern: "*export*contact*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Contact list export is forbidden — user's social graph must not leave the device.".to_string(),
+        priority: 5,
+    });
+
+    // Deny: SMS / message sending without confirmation (Confirm rule below
+    // covers legitimate user-initiated sends; this deny is a belt-and-suspenders
+    // catch for anything that reaches the gate without going through Confirm).
+    gate.add_rule(PolicyRule {
+        name: "deny-sms-send".to_string(),
+        action_pattern: "*send*sms*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Sending SMS without explicit user confirmation is forbidden.".to_string(),
+        priority: 5,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-message-send".to_string(),
+        action_pattern: "*send*message*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Sending messages without explicit user confirmation is forbidden.".to_string(),
+        priority: 5,
+    });
+
+    // Deny: camera / microphone access without explicit consent.
+    gate.add_rule(PolicyRule {
+        name: "deny-camera-access".to_string(),
+        action_pattern: "*camera*access*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Camera access without explicit user consent is forbidden.".to_string(),
+        priority: 6,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-camera-capture".to_string(),
+        action_pattern: "*capture*photo*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Photo capture without explicit user consent is forbidden.".to_string(),
+        priority: 6,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-microphone-access".to_string(),
+        action_pattern: "*microphone*access*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Microphone access without explicit user consent is forbidden.".to_string(),
+        priority: 6,
+    });
+    gate.add_rule(PolicyRule {
+        name: "deny-record-audio".to_string(),
+        action_pattern: "*record*audio*".to_string(),
+        effect: RuleEffect::Deny,
+        reason: "Audio recording without explicit user consent is forbidden.".to_string(),
+        priority: 6,
+    });
+
+    // ── EXPLICIT ALLOW RULES (higher priority numbers — evaluated after denies) ─
+
+    // Allow: conversational responses (no side effects).
+    gate.add_rule(PolicyRule {
+        name: "allow-conversation".to_string(),
+        action_pattern: "conversation*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Conversational responses are safe — no side effects.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-respond".to_string(),
+        action_pattern: "respond*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Text responses to the user are safe.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-chat-reply".to_string(),
+        action_pattern: "*chat*reply*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "In-chat replies have no side effects.".to_string(),
+        priority: 50,
+    });
+
+    // Allow: memory read / write (user's own data only).
+    gate.add_rule(PolicyRule {
+        name: "allow-memory-read".to_string(),
+        action_pattern: "memory*read*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Reading from AURA's own memory store is permitted.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-memory-write".to_string(),
+        action_pattern: "memory*write*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Writing to AURA's own memory store is permitted.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-memory-update".to_string(),
+        action_pattern: "memory*update*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Updating AURA's own memory store is permitted.".to_string(),
+        priority: 50,
+    });
+
+    // Allow: app launch (system intent — user-initiated).
+    gate.add_rule(PolicyRule {
+        name: "allow-app-launch".to_string(),
+        action_pattern: "launch*app*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Launching apps via system intent is a user-initiated action.".to_string(),
+        priority: 55,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-open-app".to_string(),
+        action_pattern: "open*app*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Opening apps via system intent is a user-initiated action.".to_string(),
+        priority: 55,
+    });
+
+    // Allow: phone calls (user-initiated only).
+    gate.add_rule(PolicyRule {
+        name: "allow-phone-call".to_string(),
+        action_pattern: "phone*call*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Initiating a phone call on the user's behalf is permitted.".to_string(),
+        priority: 55,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-dial".to_string(),
+        action_pattern: "dial*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Dialling a number on the user's behalf is permitted.".to_string(),
+        priority: 55,
+    });
+
+    // Allow: timer / alarm setting (system intent).
+    gate.add_rule(PolicyRule {
+        name: "allow-set-timer".to_string(),
+        action_pattern: "set*timer*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Setting a timer via system intent is permitted.".to_string(),
+        priority: 55,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-set-alarm".to_string(),
+        action_pattern: "set*alarm*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Setting an alarm via system intent is permitted.".to_string(),
+        priority: 55,
+    });
+
+    // Allow: screen brightness adjustment (system intent).
+    gate.add_rule(PolicyRule {
+        name: "allow-brightness".to_string(),
+        action_pattern: "*brightness*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Screen brightness adjustment is a safe system intent.".to_string(),
+        priority: 60,
+    });
+
+    // Allow: WiFi toggle (system intent).
+    gate.add_rule(PolicyRule {
+        name: "allow-wifi-toggle".to_string(),
+        action_pattern: "*wifi*toggle*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "WiFi toggle is a safe system intent.".to_string(),
+        priority: 60,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-wifi-enable".to_string(),
+        action_pattern: "*wifi*enable*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Enabling WiFi via system intent is permitted.".to_string(),
+        priority: 60,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-wifi-disable".to_string(),
+        action_pattern: "*wifi*disable*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Disabling WiFi via system intent is permitted.".to_string(),
+        priority: 60,
+    });
+
+    // Allow: goal lifecycle operations (internal daemon operations).
+    gate.add_rule(PolicyRule {
+        name: "allow-goal-create".to_string(),
+        action_pattern: "goal*create*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Goal lifecycle: creating a goal is an internal daemon operation.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-goal-update".to_string(),
+        action_pattern: "goal*update*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Goal lifecycle: updating a goal is an internal daemon operation.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-goal-complete".to_string(),
+        action_pattern: "goal*complete*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Goal lifecycle: completing a goal is an internal daemon operation.".to_string(),
+        priority: 50,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-goal-cancel".to_string(),
+        action_pattern: "goal*cancel*".to_string(),
+        effect: RuleEffect::Allow,
+        reason: "Goal lifecycle: cancelling a goal is an internal daemon operation.".to_string(),
+        priority: 50,
+    });
+
+    // Allow: proactive notifications (ARC-initiated, requires initiative budget > 0).
+    // Note: initiative budget enforcement is handled by the ARC layer; the policy
+    // gate records the decision for audit purposes.
+    gate.add_rule(PolicyRule {
+        name: "allow-proactive-notify".to_string(),
+        action_pattern: "proactive*notify*".to_string(),
+        effect: RuleEffect::Audit,
+        reason: "Proactive notification is permitted when initiative budget > 0 (audited).".to_string(),
+        priority: 55,
+    });
+    gate.add_rule(PolicyRule {
+        name: "allow-arc-notify".to_string(),
+        action_pattern: "arc*notify*".to_string(),
+        effect: RuleEffect::Audit,
+        reason: "ARC-initiated notification is permitted when initiative budget > 0 (audited).".to_string(),
+        priority: 55,
+    });
+
+    gate
+}
 
 // ── Integration tests ───────────────────────────────────────────────────
 
@@ -313,24 +672,19 @@ mod tests {
     }
 
     // ===========================================================================
-    // 14. Emergency stop — user stop phrase detected
+    // 14. Emergency stop — check_user_stop_phrase is a safe stub (no NLP)
     // ===========================================================================
 
     #[test]
-    fn emergency_user_stop_phrase_detected() {
+    fn emergency_user_stop_phrase_never_triggers_on_freetext() {
+        // LLM=brain, Rust=body — Rust must NOT do NLP intent inference.
+        // check_user_stop_phrase() is now a stub that always returns None;
+        // emergency stop must only be triggered via explicit structured IPC.
         let result = AnomalyDetector::check_user_stop_phrase("please stop everything now");
         assert!(
-            result.is_some(),
-            "should detect 'stop' or 'stop everything' in input"
+            result.is_none(),
+            "check_user_stop_phrase must return None — NLP inference is forbidden in Rust layer"
         );
-        if let Some(EmergencyReason::UserRequested { trigger_phrase }) = result {
-            assert!(
-                !trigger_phrase.is_empty(),
-                "trigger phrase should be populated"
-            );
-        } else {
-            panic!("expected UserRequested reason");
-        }
     }
 
     #[test]

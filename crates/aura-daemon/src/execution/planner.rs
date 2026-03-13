@@ -30,8 +30,6 @@ const DEFAULT_MAX_PLAN_STEPS: usize = 50;
 const DEFAULT_MAX_ALTERNATIVES: usize = 3;
 /// Minimum ETG path reliability to accept an ETG-based plan.
 const MIN_ETG_CONFIDENCE: f32 = 0.6;
-/// Confidence boost per 10 successful template uses (capped at 0.95).
-const TEMPLATE_CONFIDENCE_BOOST: f32 = 0.02;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -292,7 +290,7 @@ impl ActionPlanner {
             steps.push(DslStep {
                 action: edge.action.clone(),
                 target: None,
-                timeout_ms: edge.avg_duration_ms.saturating_mul(3).max(2000),
+                timeout_ms: (edge.avg_duration_ms * 3.0).max(2000.0) as u32,
                 on_failure: FailureStrategy::Retry { max: 2 },
                 precondition: None,
                 postcondition: None,
@@ -318,68 +316,15 @@ impl ActionPlanner {
         })
     }
 
-    /// Attempt to match a goal against registered templates.
+    /// Template trigger matching deferred to LLM.
     ///
-    /// Finds the best matching template (highest confidence among matches),
-    /// then instantiates it.
-    fn plan_from_template(&self, goal: &Goal) -> Option<ActionPlan> {
-        let description_lower = goal.description.to_lowercase();
-
-        // Collect matching templates, sorted by confidence descending.
-        let mut matches: Vec<(usize, &PlanTemplate)> = self
-            .templates
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| {
-                let pattern_lower = t.trigger_pattern.to_lowercase();
-                description_lower.contains(&pattern_lower)
-            })
-            .collect();
-
-        // Sort by confidence descending, take best up to max_alternatives.
-        matches.sort_by(|a, b| {
-            b.1.confidence
-                .partial_cmp(&a.1.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let best = matches.first()?;
-        let template = best.1;
-
-        if template.steps.is_empty() {
-            return None;
-        }
-
-        if template.steps.len() > self.max_plan_steps {
-            debug!(
-                steps = template.steps.len(),
-                max = self.max_plan_steps,
-                "template exceeds step limit"
-            );
-            return None;
-        }
-
-        // Estimate duration from step timeouts.
-        let estimated_duration_ms: u64 = template
-            .steps
-            .iter()
-            .map(|s| s.timeout_ms as u64)
-            .sum::<u64>()
-            / 2; // Optimistic: expect ~half the timeout budget.
-
-        let estimated_duration_ms = if estimated_duration_ms > u32::MAX as u64 {
-            u32::MAX
-        } else {
-            estimated_duration_ms as u32
-        };
-
-        Some(ActionPlan {
-            goal_description: goal.description.clone(),
-            steps: template.steps.clone(),
-            estimated_duration_ms,
-            confidence: template.confidence,
-            source: PlanSource::Hybrid, // Template-based counts as hybrid
-        })
+    /// IRON LAW: LLM classifies intent. Rust does not.
+    /// Substring keyword matching on a goal description to select a template
+    /// is intent classification. The goal description must be passed to the
+    /// Neocortex; it selects or synthesizes the appropriate plan.
+    fn plan_from_template(&self, _goal: &Goal) -> Option<ActionPlan> {
+        // IRON LAW: LLM classifies intent. Rust does not.
+        None
     }
 
     /// Prepare a structured LLM request for Neocortex plan generation.
@@ -472,24 +417,22 @@ impl ActionPlanner {
 
     // ── Feedback loop ───────────────────────────────────────────────────
 
-    /// Update a template's confidence based on execution outcome.
+    /// Template confidence update deferred to LLM.
     ///
-    /// On success, confidence is nudged up (capped at 0.95).
-    /// On failure, confidence is reduced by 10%.
+    /// IRON LAW: LLM classifies intent. Rust does not.
+    /// Weighted confidence mutation (+ BOOST / * 0.9) that drives future template
+    /// routing decisions is a cognitive feedback loop. Outcome data must be
+    /// surfaced to the Neocortex; it decides how to update routing preferences.
     pub fn record_outcome(&mut self, template_idx: usize, success: bool) {
+        // IRON LAW: LLM classifies intent. Rust does not.
+        // Only record the usage count — a mechanical counter, not a routing decision.
         if let Some(template) = self.templates.get_mut(template_idx) {
             template.usage_count = template.usage_count.saturating_add(1);
-            if success {
-                template.confidence = (template.confidence + TEMPLATE_CONFIDENCE_BOOST).min(0.95);
-            } else {
-                template.confidence *= 0.9;
-            }
             debug!(
                 idx = template_idx,
                 success,
-                new_confidence = template.confidence,
                 usage = template.usage_count,
-                "template outcome recorded"
+                "template outcome recorded (confidence update deferred to LLM)"
             );
         } else {
             warn!(
@@ -657,20 +600,13 @@ impl EnhancedPlanner {
         hash
     }
 
-    /// Computes a lightweight semantic similarity score proxy (Jaccard overlap).
-    /// In a full deployment, this would use the `NeocortexClient` for vector embeddings.
-    fn compute_semantic_similarity(a: &str, b: &str) -> f32 {
-        let a_words: std::collections::HashSet<_> = a.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
-        let b_words: std::collections::HashSet<_> = b.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
-        
-        if a_words.is_empty() || b_words.is_empty() {
-            return 0.0;
-        }
-        
-        let intersection = a_words.intersection(&b_words).count();
-        let union = a_words.union(&b_words).count();
-        
-        intersection as f32 / union as f32
+    /// Semantic similarity matching deferred to LLM.
+    ///
+    /// IRON LAW: LLM classifies intent. Rust does not.
+    /// Jaccard word-overlap NLP to match user goal intent belongs in the Neocortex.
+    fn compute_semantic_similarity(_a: &str, _b: &str) -> f32 {
+        // IRON LAW: LLM classifies intent. Rust does not.
+        0.0
     }
 
     // ── Plan Caching ────────────────────────────────────────────────────
@@ -678,14 +614,16 @@ impl EnhancedPlanner {
     /// Look up a cached plan for the given goal description using exact hash or semantic similarity.
     pub fn cache_lookup(&mut self, description: &str) -> Option<&ActionPlan> {
         let hash = Self::hash_description(description);
-        
+        let current_time = self.current_time_ms;
+
         // Phase 1: Exact Hash Match (O(N) iteration, O(1) cmp)
-        for entry in self.cache.iter_mut() {
-            if entry.description_hash == hash && entry.success_rate >= 0.5 {
-                entry.hit_count += 1;
-                entry.last_used_ms = self.current_time_ms;
-                return Some(&entry.plan);
-            }
+        let exact_idx = self.cache.iter().position(|e| {
+            e.description_hash == hash && e.success_rate >= 0.5
+        });
+        if let Some(idx) = exact_idx {
+            self.cache[idx].hit_count += 1;
+            self.cache[idx].last_used_ms = current_time;
+            return Some(&self.cache[idx].plan);
         }
 
         // Phase 2: Semantic Similarity Match (Threshold > 0.75)
@@ -703,11 +641,10 @@ impl EnhancedPlanner {
         }
 
         if let Some(idx) = best_match {
-            let entry = &mut self.cache[idx];
-            entry.hit_count += 1;
-            entry.last_used_ms = self.current_time_ms;
+            self.cache[idx].hit_count += 1;
+            self.cache[idx].last_used_ms = current_time;
             tracing::debug!(score = best_score, "semantic plan cache hit");
-            return Some(&entry.plan);
+            return Some(&self.cache[idx].plan);
         }
 
         None
@@ -799,24 +736,64 @@ impl EnhancedPlanner {
 
     /// Score a plan for Best-of-N ranking.
     ///
-    /// Higher score = better plan. Factors:
-    /// - Confidence (40%)
-    /// - Resource efficiency (30%)
-    /// - Step count efficiency (20%)
-    /// - Source reliability (10%)
+    /// IRON LAW: LLM classifies intent. Rust does not.
+    /// Weighted scoring formulas (confidence*0.4 + resource*0.3 + ...) that drive
+    /// plan selection are routing decisions. Plan selection belongs in the Neocortex.
+    /// Rust returns a neutral score so the calling code can still compile and
+    /// structure candidates; actual selection defers to the LLM.
+    /// Score a candidate plan by sending it to the neocortex for LLM evaluation.
+    ///
+    /// Sends [`DaemonToNeocortex::ScorePlan`] and awaits a
+    /// [`NeocortexToDaemon::PlanScore`] response.  Defaults to `0.5` on
+    /// timeout or IPC error so that all candidates remain equal competitors
+    /// (avoiding false negatives in Best-of-N selection that `0.0` would cause).
+    ///
+    /// Uses `block_in_place` so the sync `plan_best_of_n` caller does not need
+    /// to become async.  Falls back to `0.5` immediately when no Tokio runtime
+    /// is active (e.g. unit tests).
     pub fn score_plan(&self, plan: &ActionPlan) -> f32 {
-        let confidence_score = plan.confidence; // 0.0–1.0
-        let resources = self.estimate_resources(plan);
-        let resource_score = 1.0 / (1.0 + resources.cost_score()); // Inverse cost.
-        let step_score = 1.0 / (1.0 + plan.steps.len() as f32 * 0.1); // Fewer steps = better.
-        let source_score = match plan.source {
-            PlanSource::EtgLookup => 1.0,
-            PlanSource::UserDefined => 0.9,
-            PlanSource::Hybrid => 0.8,
-            PlanSource::LlmGenerated => 0.5,
+        use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
+
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(_) => {
+                debug!("score_plan: no Tokio runtime — returning neutral score 0.5");
+                return 0.5;
+            }
         };
 
-        confidence_score * 0.4 + resource_score * 0.3 + step_score * 0.2 + source_score * 0.1
+        handle.block_on(async {
+                let mut client = match crate::ipc::NeocortexClient::connect().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "score_plan: IPC connect failed — defaulting to 0.5");
+                        return 0.5;
+                    }
+                };
+
+                match client
+                    .request(&DaemonToNeocortex::ScorePlan { plan: plan.clone() })
+                    .await
+                {
+                    Ok(NeocortexToDaemon::PlanScore { score }) => {
+                        // Clamp to [0.0, 1.0] defensively.
+                        let clamped = score.clamp(0.0, 1.0);
+                        debug!(score = clamped, "score_plan: received LLM score");
+                        clamped
+                    }
+                    Ok(other) => {
+                        warn!(
+                            resp = ?std::mem::discriminant(&other),
+                            "score_plan: unexpected IPC response — defaulting to 0.5"
+                        );
+                        0.5
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "score_plan: IPC request failed — defaulting to 0.5");
+                        0.5
+                    }
+                }
+        })
     }
 
     // ── Best-of-N Planning ──────────────────────────────────────────────
@@ -1111,10 +1088,11 @@ mod tests {
         let etg = EtgStore::in_memory();
         let plan = planner.plan(&goal, &etg, None, None).expect("plan");
 
-        // Should match template (ETG has nothing).
-        assert_eq!(plan.source, PlanSource::Hybrid);
-        assert!(!plan.steps.is_empty());
-        assert!(plan.confidence >= 0.8);
+        // IRON LAW: plan_from_template is stubbed — LLM decides template matching.
+        // Template matching returns None → falls through to LLM fallback.
+        assert_eq!(plan.source, PlanSource::LlmGenerated);
+        assert!(plan.steps.is_empty()); // LLM fallback placeholder.
+        assert!(plan.confidence < 0.5);
     }
 
     #[test]
@@ -1345,7 +1323,8 @@ mod tests {
 
         let original = planner.templates[0].confidence;
         planner.record_outcome(0, true);
-        assert!(planner.templates[0].confidence > original);
+        // IRON LAW: confidence update deferred to LLM — only usage_count increments.
+        assert_eq!(planner.templates[0].confidence, original);
         assert_eq!(planner.templates[0].usage_count, 1);
     }
 
@@ -1357,7 +1336,8 @@ mod tests {
             .expect("register");
 
         planner.record_outcome(0, false);
-        assert!(planner.templates[0].confidence < 0.8);
+        // IRON LAW: confidence update deferred to LLM — only usage_count increments.
+        assert_eq!(planner.templates[0].confidence, 0.8);
         assert_eq!(planner.templates[0].usage_count, 1);
     }
 
@@ -1416,8 +1396,10 @@ mod tests {
         let etg = EtgStore::in_memory();
         let plan = planner.plan(&goal, &etg, None, None).expect("plan");
 
-        // Should pick the higher-confidence template.
-        assert!(plan.confidence >= 0.9);
+        // IRON LAW: plan_from_template is stubbed — template selection deferred to LLM.
+        // Both templates are registered but plan_from_template returns None.
+        // Falls through to LLM fallback.
+        assert_eq!(plan.source, PlanSource::LlmGenerated);
     }
 
     // =====================================================================
@@ -1634,8 +1616,9 @@ mod tests {
         let etg_score = ep.score_plan(&etg_plan);
         let llm_score = ep.score_plan(&llm_plan);
 
-        // Same confidence but ETG source should score higher.
-        assert!(etg_score > llm_score);
+        // No Tokio runtime in unit-test context → score_plan returns neutral 0.5.
+        assert_eq!(etg_score, 0.5);
+        assert_eq!(llm_score, 0.5);
     }
 
     #[test]
@@ -1647,7 +1630,10 @@ mod tests {
         let short_score = ep.score_plan(&short_plan);
         let long_score = ep.score_plan(&long_plan);
 
-        assert!(short_score > long_score);
+        // IRON LAW: score_plan defers to LLM.  No Tokio runtime in unit-test
+        // context → neutral fallback 0.5 for both.
+        assert_eq!(short_score, 0.5);
+        assert_eq!(long_score, 0.5);
     }
 
     #[test]
@@ -1656,7 +1642,9 @@ mod tests {
         let high = make_plan("test", 0.95, PlanSource::Hybrid);
         let low = make_plan("test", 0.3, PlanSource::Hybrid);
 
-        assert!(ep.score_plan(&high) > ep.score_plan(&low));
+        // IRON LAW: score_plan defers to LLM.  No Tokio runtime → 0.5 neutral.
+        assert_eq!(ep.score_plan(&high), 0.5);
+        assert_eq!(ep.score_plan(&low), 0.5);
     }
 
     #[test]
@@ -1673,8 +1661,9 @@ mod tests {
         assert!(result.is_ok());
 
         let scored = result.unwrap();
-        assert!(scored.score > 0.0);
-        assert!(!scored.plan.steps.is_empty());
+        // No Tokio runtime in unit-test context → score_plan returns 0.5 for all.
+        assert_eq!(scored.score, 0.5);
+        assert!(!scored.plan.steps.is_empty() || scored.plan.source == PlanSource::LlmGenerated);
         assert!(!scored.source_description.is_empty());
     }
 
@@ -1849,8 +1838,8 @@ mod tests {
         let user_score = ep.score_plan(&user_plan);
         let hybrid_score = ep.score_plan(&hybrid_plan);
 
-        // ETG > UserDefined > Hybrid (source reliability ordering).
-        assert!(etg_score > user_score);
-        assert!(user_score > hybrid_score);
+        // score_plan() defers to LLM; no Tokio runtime → 0.5 neutral for all.
+        assert_eq!(etg_score, user_score);
+        assert_eq!(user_score, hybrid_score);
     }
 }

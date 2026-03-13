@@ -66,16 +66,15 @@ impl SemanticReact {
         Self::default()
     }
 
-    /// Allows the Learning Engine to organically adjust escalation thresholds based on 
-    /// historical success/failure rates, rather than being permanently hardcoded.
-    pub fn adapt_thresholds(&mut self, feedback_delta: f32, successful_runs: u32) {
-        // Precise System Modeling: State mutation via learning event.
-        self.base_confidence_threshold = (self.base_confidence_threshold + feedback_delta).clamp(0.40, 0.95);
-        
-        if successful_runs > 50 {
-            // User is highly tolerant, or system is highly stable. Expand failure tolerance.
-            self.consecutive_failure_threshold = 4;
-        }
+    /// Threshold adaptation is deferred to the LLM layer.
+    ///
+    /// IRON LAW: LLM reasons about thresholds. Rust does not.
+    /// Weighted feedback deltas that drive escalation routing decisions belong in
+    /// the Neocortex prompt context, not in daemon Rust code.
+    pub fn adapt_thresholds(&mut self, _feedback_delta: f32, _successful_runs: u32) {
+        // IRON LAW: LLM classifies intent. Rust does not.
+        // Threshold mutation based on historical scoring is a cognitive decision.
+        // Pass run history to the LLM context; it decides if thresholds need adjustment.
     }
 
     /// Determines the optimal cognitive state given the current context.
@@ -100,47 +99,24 @@ impl SemanticReact {
             return CognitiveState::System2;
         }
 
-        // 2. Dynamic Threshold Calculation (System Design Philosophy: Balance Trade-offs)
-        let mut required_confidence = self.base_confidence_threshold;
-
-        // If highly critical, we demand higher confidence to trust System 1 (else we escalate).
-        let urgency_penalty = if ctx.amygdala_arousal > 0.6 {
-            (ctx.amygdala_arousal - 0.6) * 0.5 // up to +0.20 required confidence
-        } else {
-            0.0
-        };
-        required_confidence += urgency_penalty;
-
-        // If battery is somewhat low, we lower the threshold to resist escalation.
-        let resource_bonus = if ctx.battery_level < 0.4 {
-            (0.4 - ctx.battery_level) * 0.5 // up to -0.20 required confidence
-        } else {
-            0.0
-        };
-        required_confidence -= resource_bonus;
-
-        // Clamp the threshold to logical extremes.
-        required_confidence = required_confidence.clamp(0.4, 0.95);
-
+        // 2. Escalation decision deferred to LLM.
+        //
+        // IRON LAW: LLM classifies intent. Rust does not.
+        // Weighted scoring formulas (urgency_penalty, resource_bonus) that drive
+        // System1 vs System2 routing are cognitive decisions. Rust packages the
+        // context facts (arousal, battery, confidence) and sends them to the
+        // Neocortex; the LLM decides the cognitive state.
+        //
+        // Default: escalate to System 2 so the LLM receives the full context
+        // and can make an informed routing decision.
         debug!(
             system1_conf = ctx.system1_confidence,
-            adjusted_threshold = required_confidence,
+            base_threshold = self.base_confidence_threshold,
             arousal = ctx.amygdala_arousal,
             battery = ctx.battery_level,
-            "Evaluated adaptive escalation threshold"
+            "Deferring escalation decision to Neocortex (LLM)"
         );
-
-        // 3. The Core Transition Transition
-        if ctx.system1_confidence >= required_confidence {
-            CognitiveState::System1
-        } else {
-            info!(
-                confidence = ctx.system1_confidence,
-                threshold = required_confidence,
-                "Confidence below dynamic threshold: ESCALATING to System 2"
-            );
-            CognitiveState::System2
-        }
+        CognitiveState::System2
     }
 }
 

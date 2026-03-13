@@ -26,12 +26,55 @@ use aura_types::ipc::{
 };
 
 use crate::grammar::GrammarKind;
+use crate::model_capabilities::ModelCapabilities;
 use crate::prompts::{self, ModeConfig, PromptSlots};
 use crate::tool_format;
+
+// ─── Control hardcodes ───────────────────────────────────────────────────────
+//
+// These constants are CONTROL hardcodes — legitimate, justified, and commented.
+// They are NOT laziness constants — they encode real domain constraints.
+
+/// Tokens reserved for the LLM's response within the context window.
+///
+/// Never fill the context window 100% — the model needs room to generate.
+/// 512 tokens ≈ ~400 words, sufficient for structured action plans and replies.
+/// Source: empirical testing on Qwen2-7B and Llama3-8B class models.
+const RESPONSE_RESERVE_TOKENS: usize = 512;
+
+/// Default context budget when `ModelCapabilities` is unavailable.
+///
+/// Used only before a model loads (startup race) or on GGUF parse failure.
+/// 2048 tokens is a conservative safe minimum — every modern on-device model
+/// supports at least 4096, so this never over-allocates.
+pub const DEFAULT_CONTEXT_BUDGET: usize = 2048;
+
+/// Importance threshold above which a request is considered high-stakes.
+///
+/// Above this value: Best-of-N sampling (Layer 5) is triggered. This threshold
+/// was chosen so that Strategist+failure+blockers (score ≈ 1.0) and
+/// Planner+failure+blockers (score ≈ 0.9) both gate through, while simple
+/// Planner requests (score ≈ 0.5) do not incur the extra compute.
+#[allow(dead_code)] // Phase 8: used by neocortex retrieval priority gating
+pub const HIGH_IMPORTANCE_THRESHOLD: f32 = 0.8;
 
 // ─── Assembled prompt ───────────────────────────────────────────────────────
 
 /// The fully assembled prompt ready for inference.
+///
+/// All fields are set by `ContextBuilder::build()` or by the caller immediately
+/// after build (e.g. `prompt.high_stakes = computed_importance > 0.8`).
+///
+/// **BETA (inference.rs) contract** — stable field names, do not rename:
+/// - `system_prompt`  — the full prompt string to pass to the model
+/// - `config`         — temperature / max_tokens / stop sequences
+/// - `grammar_kind`   — which GBNF grammar to apply (None = free text)
+/// - `cot_enabled`    — whether CoT was injected into the prompt
+/// - `high_stakes`    — trigger for Layer 5 Best-of-N sampling
+/// - `has_tools`      — whether tool descriptions were injected
+/// - `is_retry`       — whether this is a retry pass (affects sampling)
+/// - `token_budget`   — max tokens the prompt was allowed to consume
+/// - `estimated_complexity` — optional hint for tier selection
 #[derive(Debug, Clone)]
 pub struct AssembledPrompt {
     /// The system prompt with all slots filled and context truncated to budget.
@@ -47,6 +90,34 @@ pub struct AssembledPrompt {
     pub grammar_kind: Option<GrammarKind>,
     /// Whether chain-of-thought was forced for this prompt.
     pub cot_enabled: bool,
+    /// The original user goal / request this prompt was assembled for.
+    /// Used by the ReAct loop and reflection pass so they reason about
+    /// the *actual request*, not the assembled system-prompt boilerplate.
+    pub original_goal: String,
+    /// Whether the teacher stack judged this request as high-stakes
+    /// (importance > `HIGH_IMPORTANCE_THRESHOLD`). Set by the caller
+    /// after `build()` via `prompt.high_stakes = importance > HIGH_IMPORTANCE_THRESHOLD`.
+    /// Downstream inference (BETA) uses this to activate Layer 5 Best-of-N.
+    pub high_stakes: bool,
+    /// Whether tool descriptions were injected into this prompt.
+    /// BETA checks this to know whether to parse tool-call syntax in the output.
+    pub has_tools: bool,
+    /// Whether this is a retry pass (previous attempt was rejected).
+    /// BETA may adjust sampling parameters (higher temperature) for retries
+    /// to produce diverse candidates instead of repeating the same failure.
+    pub is_retry: bool,
+    /// Token budget this prompt was assembled within.
+    ///
+    /// Capped to `ModelCapabilities::context_length - RESPONSE_RESERVE_TOKENS`.
+    /// BETA uses this to set `max_tokens` on the inference call so the model
+    /// cannot generate beyond the reserved response budget.
+    pub token_budget: usize,
+    /// Estimated task complexity in [0.0, 1.0] — hint for TierSelect.
+    ///
+    /// Higher values suggest the request benefits from a larger model tier.
+    /// Derived from `estimate_importance()` at build time. `None` when the
+    /// context package contains insufficient signal to estimate complexity.
+    pub estimated_complexity: Option<f32>,
 }
 
 // ─── Token tracker ──────────────────────────────────────────────────────────
@@ -56,6 +127,9 @@ pub struct AssembledPrompt {
 /// The teacher stack may invoke the model multiple times (retry, reflection,
 /// best-of-N). Each pass consumes tokens from a shared budget so we don't
 /// run away with unbounded generation.
+///
+/// Phase 3: multi-pass teacher stack token accounting.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TokenTracker {
     /// Total token budget for the entire teacher stack pipeline.
@@ -88,6 +162,9 @@ impl TokenTracker {
 
     /// How many tokens the next pass is allowed to consume.
     /// This is the minimum of `per_pass_limit` and `remaining()`.
+    ///
+    /// Phase 3: multi-pass teacher stack token accounting.
+    #[allow(dead_code)]
     pub fn next_pass_budget(&self) -> u32 {
         self.per_pass_limit.min(self.remaining())
     }
@@ -105,6 +182,9 @@ impl TokenTracker {
     }
 
     /// Total budget.
+    ///
+    /// Phase 3: multi-pass teacher stack token accounting.
+    #[allow(dead_code)]
     pub fn total_budget(&self) -> u32 {
         self.total_budget
     }
@@ -142,6 +222,8 @@ pub struct ContextBuilder<'a> {
     rejection_reason: Option<&'a str>,
     /// Override the token budget (otherwise uses mode config / ctx budget).
     budget_override: Option<u32>,
+    /// Model capabilities — when present, caps the budget at `context_length`.
+    capabilities: Option<ModelCapabilities>,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -157,6 +239,7 @@ impl<'a> ContextBuilder<'a> {
             previous_attempt: None,
             rejection_reason: None,
             budget_override: None,
+            capabilities: None,
         }
     }
 
@@ -173,24 +256,36 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Set the grammar constraint for Layer 0.
+    ///
+    /// Phase 3: teacher stack context builder — grammar-constrained generation.
+    #[allow(dead_code)]
     pub fn with_grammar(mut self, kind: GrammarKind) -> Self {
         self.grammar_kind = Some(kind);
         self
     }
 
     /// Force chain-of-thought reasoning for Layer 1.
+    ///
+    /// Phase 3: teacher stack context builder — CoT injection.
+    #[allow(dead_code)]
     pub fn with_cot(mut self, enable: bool) -> Self {
         self.force_cot = enable;
         self
     }
 
     /// Inject available tool descriptions into the prompt.
+    ///
+    /// Phase 3: teacher stack context builder — tool-use layer.
+    #[allow(dead_code)]
     pub fn with_tools(mut self) -> Self {
         self.inject_tools = true;
         self
     }
 
     /// Set retry context for Layer 3 (Cascading Retry).
+    ///
+    /// Phase 3: teacher stack context builder — retry layer.
+    #[allow(dead_code)]
     pub fn with_retry(mut self, previous_output: &'a str, reason: &'a str) -> Self {
         self.previous_attempt = Some(previous_output);
         self.rejection_reason = Some(reason);
@@ -198,8 +293,19 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Override the token budget (e.g., from TokenTracker).
+    ///
+    /// Phase 3: teacher stack context builder — per-pass budget override.
+    #[allow(dead_code)]
     pub fn with_budget(mut self, budget: u32) -> Self {
         self.budget_override = Some(budget);
+        self
+    }
+
+    /// Provide model capabilities so the budget is capped by the real context
+    /// window size. This prevents building prompts that exceed what the model
+    /// can actually fit in its KV cache.
+    pub fn with_capabilities(mut self, capabilities: ModelCapabilities) -> Self {
+        self.capabilities = Some(capabilities);
         self
     }
 
@@ -209,8 +315,17 @@ impl<'a> ContextBuilder<'a> {
         let mode = self.ctx.inference_mode;
         let mode_cfg = prompts::mode_config(mode);
 
-        // Budget: override > min(mode budget, ctx budget)
+        // Budget: override > min(mode budget, ctx budget) [, capped by context_length - reserve]
         let base_budget = mode_cfg.context_budget.min(self.ctx.token_budget);
+        let base_budget = if let Some(ref caps) = self.capabilities {
+            // Cap at (context_length - RESPONSE_RESERVE_TOKENS) so the model always
+            // has room to generate. context_length is u32; cast to usize for arithmetic.
+            let window = caps.context_length as usize;
+            let available = window.saturating_sub(RESPONSE_RESERVE_TOKENS) as u32;
+            base_budget.min(available)
+        } else {
+            base_budget
+        };
         let budget = self.budget_override.unwrap_or(base_budget);
 
         // Extract mutable working copies for progressive truncation.
@@ -305,6 +420,32 @@ impl<'a> ContextBuilder<'a> {
 
         let estimated_tokens = prompts::estimate_tokens(&prompt);
 
+        if was_truncated {
+            tracing::warn!(
+                mode = ?mode,
+                budget,
+                estimated_tokens,
+                "context truncated to fit token budget"
+            );
+        }
+
+        // Derive the original goal: prefer the active goal description, fall back
+        // to the last user turn in conversation history.
+        let original_goal = self
+            .ctx
+            .active_goal
+            .as_ref()
+            .map(|g| g.description.clone())
+            .unwrap_or_else(|| {
+                self.ctx
+                    .conversation_history
+                    .iter()
+                    .rev()
+                    .find(|t| t.role == aura_types::ipc::Role::User)
+                    .map(|t| t.content.clone())
+                    .unwrap_or_default()
+            });
+
         AssembledPrompt {
             system_prompt: prompt,
             config,
@@ -312,6 +453,12 @@ impl<'a> ContextBuilder<'a> {
             was_truncated,
             grammar_kind: self.grammar_kind,
             cot_enabled: self.force_cot,
+            original_goal,
+            high_stakes: false,
+            has_tools: self.inject_tools,
+            is_retry: self.previous_attempt.is_some(),
+            token_budget: budget as usize,
+            estimated_complexity: Some(estimate_importance(self.ctx, self.failure)),
         }
     }
 }
@@ -354,6 +501,9 @@ pub fn assemble_prompt(
 ///
 /// Convenience wrapper that sets the inference mode context; the `FailureContext`
 /// is always present for replans.
+///
+/// Phase 3: teacher stack layer implementation — Strategist replan path.
+#[allow(dead_code)]
 pub fn assemble_replan_prompt(ctx: &ContextPackage, failure: &FailureContext) -> AssembledPrompt {
     assemble_prompt(ctx, None, Some(failure))
 }
@@ -367,10 +517,14 @@ pub fn assemble_replan_prompt(ctx: &ContextPackage, failure: &FailureContext) ->
 /// because the Brainstem has its own (smaller) context window.
 ///
 /// # Arguments
+///
 /// - `original_mode` — The mode that produced `original_output`.
 /// - `original_output` — The raw text the main model generated.
 /// - `goal_summary` — Short description of the user's goal for context.
 /// - `budget` — Token budget for this reflection pass.
+///
+/// Phase 3: teacher stack layer implementation — Cross-Model Reflection.
+#[allow(dead_code)]
 #[tracing::instrument(level = "debug", skip(original_output, goal_summary))]
 pub fn assemble_reflection_context(
     original_mode: InferenceMode,
@@ -418,6 +572,12 @@ pub fn assemble_reflection_context(
         was_truncated: false,
         grammar_kind: Some(GrammarKind::ReflectionVerdict),
         cot_enabled: false,
+        original_goal: goal_summary.to_string(),
+        high_stakes: false,
+        has_tools: false,
+        is_retry: false,
+        token_budget: budget as usize,
+        estimated_complexity: None,
     }
 }
 
@@ -435,6 +595,9 @@ pub fn assemble_reflection_context(
 /// - `rejection_reason` — Why it was rejected.
 /// - `attempt_number` — Which retry attempt this is (1-based).
 /// - `budget` — Token budget for this retry pass.
+///
+/// Phase 3: teacher stack layer implementation — Cascading Retry.
+#[allow(dead_code)]
 #[tracing::instrument(
     level = "debug",
     skip(ctx, previous_output, rejection_reason),
@@ -472,6 +635,9 @@ pub fn assemble_retry_context(
 /// Same as the original prompt but with a slightly different temperature
 /// seed to encourage diversity across candidates. The returned prompt
 /// is identical — the caller varies temperature in `InferenceParams`.
+///
+/// Phase 3: teacher stack layer implementation — Best-of-N sampling.
+#[allow(dead_code)]
 pub fn assemble_bon_context(
     ctx: &ContextPackage,
     template: Option<&str>,
@@ -619,6 +785,9 @@ fn format_failure(fc: &FailureContext) -> String {
 ///
 /// This is the **basic** slot builder — no teacher stack features.
 /// Used by `assemble_prompt()` for backward compatibility.
+///
+/// Phase 3: called by the assemble_prompt path when teacher stack is active.
+#[allow(dead_code)]
 fn build_slots(
     goal: &str,
     screen: &str,
@@ -670,6 +839,23 @@ fn build_slots_extended(
 
     let p = &ctx.personality;
 
+    // Render UserStateSignals into a compact context string.
+    let us = &ctx.user_state;
+    let battery_str = if us.battery_level == 255 {
+        "unknown".to_string()
+    } else {
+        format!("{}%{}", us.battery_level, if us.is_charging { " charging" } else { "" })
+    };
+    let user_state_context = format!(
+        "USER STATE: time={:?}, battery={}, thermal={:?}, location={:?}, screen_on={}, steps={}",
+        us.time_of_day,
+        battery_str,
+        us.thermal_state,
+        us.estimated_location_type,
+        us.is_screen_on,
+        us.step_count_today,
+    );
+
     PromptSlots {
         goal: goal.to_string(),
         screen: screen.to_string(),
@@ -691,6 +877,9 @@ fn build_slots_extended(
         valence: format!("{:.2}", p.current_mood_valence),
         arousal: format!("{:.2}", p.current_mood_arousal),
         trust_level: format!("{:.2}", p.trust_level),
+        identity_block: ctx.identity_block.clone(),
+        mood_description: ctx.mood_description.clone(),
+        user_state_context,
         // Teacher stack extensions
         tool_descriptions: tool_descriptions.map(|s| s.to_string()),
         grammar_kind,
@@ -716,6 +905,9 @@ fn build_slots_extended(
 /// - Goal with blockers → more important
 /// - Replan (failure present) → more important
 /// - Long conversation history → more important (complex interaction)
+///
+/// Phase 3: teacher stack routing — drives layer selection decisions.
+#[allow(dead_code)]
 pub fn estimate_importance(ctx: &ContextPackage, failure: Option<&FailureContext>) -> f32 {
     let mut score: f32 = 0.0;
 
@@ -752,6 +944,9 @@ pub fn estimate_importance(ctx: &ContextPackage, failure: Option<&FailureContext
 /// CoT is forced for System2-type tasks: planning with blockers, replan
 /// (failure recovery), and high-importance requests. It is NOT forced
 /// for simple conversational turns.
+///
+/// Phase 3: teacher stack routing — Layer 1 CoT trigger.
+#[allow(dead_code)]
 pub fn should_force_cot(ctx: &ContextPackage, failure: Option<&FailureContext>) -> bool {
     match ctx.inference_mode {
         // Always CoT for replans — failure recovery needs reasoning.
@@ -780,7 +975,7 @@ mod tests {
     use super::*;
     use aura_types::ipc::{
         ContextPackage, ConversationTurn, GoalSummary, InferenceMode, MemorySnippet, MemoryTier,
-        PersonalitySnapshot, Role, ScreenSummary, TransitionPair, UserState,
+        PersonalitySnapshot, Role, ScreenSummary, TransitionPair, UserStateSignals,
     };
 
     fn make_context(n_history: usize, n_memory: usize) -> ContextPackage {
@@ -826,9 +1021,11 @@ mod tests {
                 current_mood_arousal: 0.1,
                 trust_level: 0.60,
             },
-            user_state: UserState::Active,
+            user_state: UserStateSignals::default(),
             inference_mode: InferenceMode::Planner,
             token_budget: 2048,
+            identity_block: None,
+            mood_description: String::new(),
         }
     }
 

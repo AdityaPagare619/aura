@@ -28,9 +28,6 @@ const DEFAULT_WEIGHTS: [f32; 4] = [0.40, 0.25, 0.20, 0.15];
 /// Default wake threshold.
 const DEFAULT_THRESHOLD: f32 = 0.65;
 
-/// Emergency bypass: lexical score at or above this triggers immediate bypass.
-const EMERGENCY_LEX_THRESHOLD: f32 = 0.90;
-
 /// Suppress threshold — below this, events are suppressed.
 const SUPPRESS_THRESHOLD: f32 = 0.20;
 
@@ -62,9 +59,11 @@ const COLD_START_FACTOR: f32 = 0.85;
 const DEFAULT_DECAY_HALF_LIFE_HOURS: f32 = 24.0;
 
 /// Minimum adaptive half-life (4 hours — fast recovery).
+#[allow(dead_code)]
 const MIN_DECAY_HALF_LIFE: f32 = 4.0;
 
 /// Maximum adaptive half-life (168 hours = 7 days — very slow recovery).
+#[allow(dead_code)]
 const MAX_DECAY_HALF_LIFE: f32 = 168.0;
 
 /// Serde default function for `decay_half_life_hours`.
@@ -73,10 +72,16 @@ fn default_half_life() -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Static keyword table — sorted by weight descending for early exit
+// Static signal weight table — maps known urgency signal words to weights.
+//
+// Architecture note — Theater AGI guard:
+// This table produces a METRIC (lexical signal strength), NOT a routing
+// decision. Rust does not classify intent from these keywords. The float
+// output is passed as a channel score to the LLM context so the LLM can
+// reason about urgency. No routing branch may be driven solely by this score.
 // ---------------------------------------------------------------------------
 
-static KEYWORDS: &[(&str, f32)] = &[
+static LEXICAL_SIGNAL_WEIGHTS: &[(&str, f32)] = &[
     ("emergency", 0.98),
     ("urgent", 0.95),
     ("crash", 0.90),
@@ -294,22 +299,33 @@ impl Amygdala {
         trace!(cognitive_load = self.cognitive_load, "Human decision recorded, cognitive load increased");
     }
 
-    /// Route a pending decision to the appropriate tier based on its importance
-    /// and the user's current cognitive load (Decision Sanctuary).
-    pub fn route_decision(&mut self, decision_importance: f32) -> DecisionTier {
+    /// Produce routing metrics for a pending decision.
+    ///
+    /// # Architecture note — Theater AGI guard
+    /// Rust does NOT decide which tier to use. The LLM reasons about routing.
+    /// This method returns raw metrics (importance + cognitive_load) so the
+    /// LLM context builder can include them in the prompt. The final
+    /// `DecisionTier` is determined by the LLM, not by a formula here.
+    ///
+    /// Callers that previously branched on the returned `DecisionTier` must
+    /// instead pass both metrics to the LLM and let it choose.
+    pub fn route_decision_metrics(&mut self, decision_importance: f32) -> (f32, f32) {
         self.decay_cognitive_load(Self::current_time_ms());
-        // High cognitive load means AURA should handle more to protect the user.
-        // As load approaches 1.0, the threshold for human intervention rises.
-        let tier3_threshold = (0.6 + (self.cognitive_load * 0.3)).clamp(0.0, 1.0);
-        let tier2_threshold = (0.3 + (self.cognitive_load * 0.3)).clamp(0.0, tier3_threshold);
+        // Returns (decision_importance, current_cognitive_load) — both in [0.0, 1.0].
+        // LLM interprets these and decides the appropriate response tier.
+        (decision_importance.clamp(0.0, 1.0), self.cognitive_load)
+    }
 
-        if decision_importance >= tier3_threshold {
-            DecisionTier::RequireHuman
-        } else if decision_importance >= tier2_threshold {
-            DecisionTier::NarrowOptions
-        } else {
-            DecisionTier::AutoHandle
-        }
+    /// Deprecated stub — kept for call-site compatibility during migration.
+    ///
+    /// # Architecture note — Theater AGI guard
+    /// This always returns `DecisionTier::RequireHuman` so the LLM is always
+    /// consulted. Replace all call sites with `route_decision_metrics()`.
+    #[deprecated(note = "Theater AGI: formula drove tier routing. Use route_decision_metrics() and let the LLM decide.")]
+    pub fn route_decision(&mut self, decision_importance: f32) -> DecisionTier {
+        self.route_decision_metrics(decision_importance);
+        // Always escalate to LLM — do not auto-route in Rust.
+        DecisionTier::RequireHuman
     }
 
     /// Apply exponential decay to `cognitive_load` based on elapsed time.
@@ -354,6 +370,8 @@ impl Amygdala {
     ///   → current decay rate is good, reinforce (small regression toward 24h mean)
     /// - `good_outcome = false`: AURA acted during low load but user was overwhelmed
     ///   → decay is too fast, increase half-life (slow down decay)
+    // Phase 8 wire point: called by outcome_bus learning subscriber.
+    #[allow(dead_code)]
     pub(crate) fn adjust_decay_rate(&mut self, good_outcome: bool) {
         const LEARN_RATE: f32 = 0.05;
 
@@ -409,14 +427,13 @@ impl Amygdala {
     }
 
     /// Determine the gate decision.
-    fn decide_gate(&mut self, s_lex: f32, s_total: f32, now_ms: u64) -> GateDecision {
-        // Emergency bypass.
-        if s_lex >= EMERGENCY_LEX_THRESHOLD {
-            self.last_wake_ms = now_ms;
-            warn!(s_lex, "emergency bypass triggered — high lexical score");
-            return GateDecision::EmergencyBypass;
-        }
-
+    ///
+    /// Architecture note — Theater AGI guard:
+    /// Gating is a POLICY decision (timing, thresholds, storm protection) —
+    /// NOT a content classification. The lexical score feeds into s_total as
+    /// a weighted channel; only the composite score drives gate decisions here.
+    /// Rust does not classify intent from s_lex directly.
+    fn decide_gate(&mut self, _s_lex: f32, s_total: f32, now_ms: u64) -> GateDecision {
         let thresh = self.effective_threshold(now_ms);
 
         if s_total > thresh {
@@ -459,17 +476,23 @@ impl Amygdala {
         false
     }
 
-    /// Lexical scoring: scan content for keywords, return max weight.
+    /// Measure lexical signal strength: scan content for urgency signal words,
+    /// return maximum weight as a float metric in [0.0, 1.0].
+    ///
+    /// Architecture note — Theater AGI guard:
+    /// This is a METRIC, not a routing decision. The returned float is one
+    /// channel in the composite importance score passed to the LLM. Rust does
+    /// not route or classify intent from this value.
     fn score_lexical(content: &str) -> f32 {
         let lower = content.to_ascii_lowercase();
         let mut max_weight: f32 = 0.0;
-        for &(keyword, weight) in KEYWORDS {
+        for &(keyword, weight) in LEXICAL_SIGNAL_WEIGHTS {
             if lower.contains(keyword) {
                 if weight > max_weight {
                     max_weight = weight;
                 }
-                // Early exit on emergency-level keyword.
-                if max_weight >= EMERGENCY_LEX_THRESHOLD {
+                // Early exit: no higher weight possible above 0.95.
+                if max_weight >= 0.95 {
                     break;
                 }
             }
@@ -549,10 +572,21 @@ mod tests {
 
     #[test]
     fn test_emergency_bypass() {
+        // Architecture note: EmergencyBypass no longer triggered by keyword scan alone.
+        // High-lex events now go through composite scoring → InstantWake (or SlowAccumulate
+        // during cold-start). The lexical metric is preserved in score_lex.
         let mut amygdala = Amygdala::new();
         let scored = amygdala.score(&make_event("emergency alert!", 1_000));
-        assert_eq!(scored.gate_decision, GateDecision::EmergencyBypass);
         assert!(scored.score_lex >= 0.90);
+        // Gate decision is now driven by composite score, not keyword shortcut.
+        assert!(
+            matches!(
+                scored.gate_decision,
+                GateDecision::InstantWake | GateDecision::SlowAccumulate
+            ),
+            "gate={:?}",
+            scored.gate_decision
+        );
     }
 
     #[test]
@@ -600,11 +634,11 @@ mod tests {
 
         // First high-score event → InstantWake.
         let s1 = amygdala.score(&make_event("urgent error crash", 10_000));
-        // Might be EmergencyBypass if "crash" hits 0.90 — that's fine.
+        // High composite score → InstantWake (EmergencyBypass no longer triggered from keyword scan).
         assert!(
             matches!(
                 s1.gate_decision,
-                GateDecision::EmergencyBypass | GateDecision::InstantWake
+                GateDecision::InstantWake | GateDecision::SlowAccumulate
             ),
             "gate={:?}",
             s1.gate_decision
@@ -674,25 +708,23 @@ mod tests {
     #[test]
     fn test_decision_sanctuary_routing() {
         let mut amygdala = Amygdala::new();
-        
-        // At default load (0.3):
-        // tier3_threshold = 0.6 + 0.3*0.3 = 0.69
-        // tier2_threshold = 0.3 + 0.3*0.3 = 0.39
-        assert_eq!(amygdala.route_decision(0.2), DecisionTier::AutoHandle);
-        assert_eq!(amygdala.route_decision(0.5), DecisionTier::NarrowOptions);
-        assert_eq!(amygdala.route_decision(0.8), DecisionTier::RequireHuman);
 
-        // Record humans decisions to increase cognitive load
-        for _ in 0..10 {
-            amygdala.record_human_decision();
+        // Architecture note: route_decision() is now a deprecated stub that always
+        // returns RequireHuman so the LLM is consulted. The real metrics are
+        // returned by route_decision_metrics(). Test the metrics instead.
+        let (imp, load) = amygdala.route_decision_metrics(0.2);
+        assert!((imp - 0.2).abs() < 0.01);
+        assert!(load >= 0.0 && load <= 1.0);
+
+        let (imp2, _) = amygdala.route_decision_metrics(0.8);
+        assert!((imp2 - 0.8).abs() < 0.01);
+
+        // Deprecated stub always returns RequireHuman.
+        #[allow(deprecated)]
+        {
+            assert_eq!(amygdala.route_decision(0.2), DecisionTier::RequireHuman);
+            assert_eq!(amygdala.route_decision(0.8), DecisionTier::RequireHuman);
         }
-        
-        // At load 0.8:
-        // tier3_threshold = 0.6 + 0.8*0.3 = 0.84
-        // tier2_threshold = 0.3 + 0.8*0.3 = 0.54
-        assert_eq!(amygdala.route_decision(0.5), DecisionTier::AutoHandle); // Was NarrowOptions, now AutoHandle
-        assert_eq!(amygdala.route_decision(0.8), DecisionTier::NarrowOptions); // Was RequireHuman, now NarrowOptions
-        assert_eq!(amygdala.route_decision(0.9), DecisionTier::RequireHuman);
     }
 
     #[test]

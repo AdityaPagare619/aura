@@ -34,7 +34,18 @@ use crate::identity::user_profile::UserProfile;
 const DEFAULT_CALIBRATION_QUESTIONS: usize = 7;
 
 /// Minimum OCEAN adjustment delta per question.
-const OCEAN_DELTA_PER_QUESTION: f32 = 0.03;
+const OCEAN_DELTA_PER_QUESTION: f32 = 0.09;
+
+/// Maximum number of calibration answers the daemon retains.
+///
+/// There are only DEFAULT_CALIBRATION_QUESTIONS questions; this cap prevents
+/// unbounded growth if the caller submits duplicate/extra answers.
+const MAX_CALIBRATION_ANSWERS: usize = DEFAULT_CALIBRATION_QUESTIONS * 2;
+
+/// Maximum number of granted permissions the daemon tracks.
+///
+/// Android defines a bounded permission set; 64 is a generous hard ceiling.
+const MAX_GRANTED_PERMISSIONS: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Onboarding phase
@@ -307,8 +318,11 @@ impl OnboardingEngine {
     ) -> Result<PhaseResult, OnboardingError> {
         self.expect_phase(OnboardingPhase::PermissionSetup)?;
 
-        self.state.granted_permissions = granted.clone();
-        let count = granted.len();
+        self.state.granted_permissions = granted
+            .into_iter()
+            .take(MAX_GRANTED_PERMISSIONS)
+            .collect();
+        let count = self.state.granted_permissions.len();
 
         let message = if count == 0 {
             "No worries — I can work with limited access for now. \
@@ -438,20 +452,25 @@ impl OnboardingEngine {
             }
         }
 
-        self.state.calibration_answers = answers.clone();
+        self.state.calibration_answers = answers
+            .iter()
+            .cloned()
+            .take(MAX_CALIBRATION_ANSWERS)
+            .collect();
 
-        // Compute OCEAN adjustments.
+        // Compute OCEAN adjustments — mechanical linear mapping of slider
+        // values to f32 deltas; no intelligence or routing decision here.
         let ocean = self.compute_ocean_adjustments(&answers);
         self.state
             .user_profile
             .apply_ocean_calibration(ocean, now_ms);
 
-        let effective = self.state.user_profile.effective_ocean();
-        let message = format!(
-            "Got it! Based on your answers, I'll be a bit more {}. \
-            I'll keep fine-tuning as I get to know you better.",
-            self.describe_personality(&effective)
-        );
+        // THEATER AGI NOTE: We do NOT describe the personality in Rust.
+        // The neocortex receives the raw OceanTraits via identity state and
+        // decides how to phrase its own behaviour adjustments in natural language.
+        let message = "Got it! I've noted your preferences. \
+            I'll keep fine-tuning as I get to know you better."
+            .to_string();
 
         self.advance_phase(now_ms);
         info!("onboarding: personality calibration complete");
@@ -591,39 +610,6 @@ impl OnboardingEngine {
         adj
     }
 
-    /// Describe the personality in a brief, friendly phrase.
-    fn describe_personality(&self, ocean: &OceanTraits) -> String {
-        let mut traits = Vec::new();
-
-        if ocean.openness > 0.7 {
-            traits.push("creative and curious");
-        } else if ocean.openness < 0.4 {
-            traits.push("practical and focused");
-        }
-
-        if ocean.extraversion > 0.6 {
-            traits.push("chatty");
-        } else if ocean.extraversion < 0.4 {
-            traits.push("concise");
-        }
-
-        if ocean.conscientiousness > 0.7 {
-            traits.push("thorough");
-        } else if ocean.conscientiousness < 0.4 {
-            traits.push("flexible");
-        }
-
-        if ocean.agreeableness > 0.7 {
-            traits.push("supportive");
-        }
-
-        if traits.is_empty() {
-            "balanced and adaptable".to_string()
-        } else {
-            traits.join(", ")
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Phase management helpers
     // -----------------------------------------------------------------------
@@ -760,8 +746,8 @@ impl OnboardingEngine {
             },
             CalibrationQuestion {
                 text: "How cautious should I be about taking actions on your behalf?".into(),
-                pole_low: "Very cautious — always ask first".into(),
-                pole_high: "I trust you — go ahead if you're confident".into(),
+                pole_low: "I trust you — go ahead if you're confident".into(),
+                pole_high: "Very cautious — always ask first".into(),
                 target_trait: OceanTrait::Neuroticism,
             },
             CalibrationQuestion {
@@ -1135,21 +1121,6 @@ mod tests {
         // With all high answers, traits should shift upward.
         assert!(adj.openness >= OceanTraits::DEFAULT.openness);
         assert!(adj.extraversion >= OceanTraits::DEFAULT.extraversion);
-    }
-
-    #[test]
-    fn test_describe_personality() {
-        let engine = default_engine(1000);
-        let creative = OceanTraits {
-            openness: 0.9,
-            conscientiousness: 0.5,
-            extraversion: 0.8,
-            agreeableness: 0.5,
-            neuroticism: 0.3,
-        };
-        let desc = engine.describe_personality(&creative);
-        assert!(desc.contains("creative"));
-        assert!(desc.contains("chatty"));
     }
 
     #[test]

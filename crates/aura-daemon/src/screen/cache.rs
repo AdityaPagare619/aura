@@ -899,7 +899,8 @@ mod tests {
             action: aura_types::actions::ActionType::Tap { x: 100, y: 200 },
             success_count: 9,
             fail_count: 1,
-            avg_duration_ms: 200,
+            avg_duration_ms: 200.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 1_000_000,
         };
 
@@ -932,7 +933,8 @@ mod tests {
             action: aura_types::actions::ActionType::Back,
             success_count: 0,
             fail_count: 10,
-            avg_duration_ms: 0,
+            avg_duration_ms: 0.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 0,
         };
 
@@ -961,7 +963,8 @@ mod tests {
             action: aura_types::actions::ActionType::Back,
             success_count: 3,
             fail_count: 7,
-            avg_duration_ms: 100,
+            avg_duration_ms: 100.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 1000,
         };
         let edge_high = EtgEdge {
@@ -970,7 +973,8 @@ mod tests {
             action: aura_types::actions::ActionType::Back,
             success_count: 9,
             fail_count: 1,
-            avg_duration_ms: 100,
+            avg_duration_ms: 100.0,
+            m2_duration_ms: 0.0,
             last_used_ms: 1000,
         };
 

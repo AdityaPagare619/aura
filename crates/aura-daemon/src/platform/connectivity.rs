@@ -96,11 +96,12 @@ impl std::fmt::Display for NetworkQuality {
 }
 
 /// A single connectivity snapshot record for history tracking.
+// Phase 8 wire point: fields read by connectivity trend analysis in JNI path.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct ConnectivityRecord {
     network_type: NetworkType,
     quality: NetworkQuality,
-    #[allow(dead_code)]
     timestamp: Instant,
 }
 

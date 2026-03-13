@@ -13,6 +13,8 @@ use aura_types::identity::{DispositionState, OceanTraits, RelationshipStage};
 use aura_types::power::PowerBudget;
 use serde::{Deserialize, Serialize};
 
+use crate::memory::ConsolidationWeights;
+
 /// Maximum checkpoint file size — architecture hard limit.
 const MAX_CHECKPOINT_BYTES: usize = 64 * 1024;
 
@@ -82,10 +84,24 @@ pub struct DaemonCheckpoint {
     // --- Monotonic event counter ---
     /// Total `select!` loop iterations since first boot.
     pub select_count: u64,
+
+    // --- Proactive trigger deduplication timestamps ---
+    /// Timestamp (ms) of the last dispatched MemoryInsight trigger.
+    /// Zero means never dispatched. Used to enforce 24-hour cooldown.
+    #[serde(default)]
+    pub last_memory_insight_ms: u64,
+
+    // --- Adaptive consolidation weights ---
+    /// Learned weights for the consolidation priority formula.
+    /// Starts at (recency=0.3, frequency=0.3, importance=0.4) and drifts
+    /// as AURA observes which memories the user actually retrieves.
+    /// Persisted so learned behavior survives restarts.
+    #[serde(default)]
+    pub consolidation_weights: ConsolidationWeights,
 }
 
 /// Current checkpoint schema version.
-pub const CHECKPOINT_VERSION: u32 = 1;
+pub const CHECKPOINT_VERSION: u32 = 3;
 
 impl Default for DaemonCheckpoint {
     fn default() -> Self {
@@ -100,6 +116,8 @@ impl Default for DaemonCheckpoint {
             power_budget: PowerBudget::default(),
             token_counters: TokenCounters::default(),
             select_count: 0,
+            last_memory_insight_ms: 0,
+            consolidation_weights: ConsolidationWeights::default(),
         }
     }
 }
@@ -190,13 +208,18 @@ pub fn decode_checkpoint(bytes: &[u8]) -> Result<DaemonCheckpoint, CheckpointErr
 fn migrate_checkpoint(mut cp: DaemonCheckpoint) -> Result<DaemonCheckpoint, CheckpointError> {
     while cp.version < CHECKPOINT_VERSION {
         match cp.version {
-            // Example future migration:
-            // 1 => {
-            //     // v1→v2: add new_field with default
-            //     cp.new_field = Default::default();
-            //     cp.version = 2;
-            //     tracing::info!("migrated checkpoint v1→v2");
-            // }
+            // v1→v2: last_memory_insight_ms added (serde default handles it).
+            1 => {
+                cp.last_memory_insight_ms = 0;
+                cp.version = 2;
+                tracing::info!("migrated checkpoint v1→v2");
+            }
+            // v2→v3: consolidation_weights added (serde default handles it).
+            2 => {
+                cp.consolidation_weights = ConsolidationWeights::default();
+                cp.version = 3;
+                tracing::info!("migrated checkpoint v2→v3: consolidation_weights initialized");
+            }
             unsupported => {
                 tracing::warn!(
                     version = unsupported,

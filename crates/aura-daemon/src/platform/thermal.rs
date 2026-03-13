@@ -413,6 +413,8 @@ impl ThermalPidController {
     }
 
     /// Reset the PID state (e.g., after a long idle period).
+    // Phase 8 wire point: called by thermal manager on wake-from-sleep events.
+    #[allow(dead_code)]
     fn reset(&mut self) {
         self.integral = 0.0;
         self.prev_error = 0.0;

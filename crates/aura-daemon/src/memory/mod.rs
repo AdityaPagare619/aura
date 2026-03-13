@@ -36,11 +36,11 @@ pub mod workflows;
 // Re-export key types for ergonomic use by the rest of the daemon.
 pub use archive::{ArchiveMemory, ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD};
 pub use compaction::ContextCompactor;
-pub use consolidation::{consolidate, ConsolidationLevel, ConsolidationReport};
-pub use embeddings::{cosine_similarity, embed, jaccard_trigram_similarity, EMBED_DIM};
+pub use consolidation::{consolidate, ConsolidationLevel, ConsolidationReport, ConsolidationWeights};
+pub use embeddings::{cosine_similarity, embed, embed_with_quality, EmbeddingQuality, jaccard_trigram_similarity, EMBED_DIM};
 pub use episodic::EpisodicMemory;
 pub use feedback::FeedbackLoop;
-pub use importance::calculate_importance;
+pub use importance::{calculate_importance, HebbianTrace};
 pub use patterns::PatternEngine;
 pub use semantic::SemanticMemory;
 pub use working::{WorkingMemory, WorkingResult, MAX_SLOTS};
@@ -471,6 +471,7 @@ impl AuraMemory {
             &self.archive,
             &mut self.pattern_engine,
             now_ms,
+            None, // neocortex not available at this call site; use sync fallback
         )
         .await;
 
@@ -516,8 +517,12 @@ impl AuraMemory {
         let mut sections: Vec<String> = Vec::new();
 
         // ----- Working memory (synchronous, fast) -----
-        let working_ctx = self.working.context_for_llm(query_text, max_items, now_ms);
-        if !working_ctx.is_empty() {
+        let working_items = self.working.context_for_llm(query_text, max_items, now_ms);
+        if !working_items.is_empty() {
+            // Pass raw slot content as data — section label belongs on the neocortex layer.
+            // For now, join items with newlines for the existing String-based API; this
+            // function itself is a candidate for further refactoring to return structured data.
+            let working_ctx = working_items.join("\n");
             sections.push(working_ctx);
         }
 
@@ -1159,7 +1164,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(ctx.contains("[Working Memory]"));
+        assert!(ctx.contains("[Episodic Memory]") || ctx.contains("dark mode"),
+            "context should contain retrieved memory content; got: {:?}", ctx);
         assert!(ctx.contains("dark mode"));
     }
 

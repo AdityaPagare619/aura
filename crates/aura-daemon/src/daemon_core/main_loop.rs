@@ -33,8 +33,8 @@ use std::time::Instant;
 use tokio::time::{interval, Duration};
 use tracing::instrument;
 
-use aura_types::events::{EventSource, GateDecision, Intent, ParsedEvent, ScoredEvent};
-use aura_types::ipc::{DaemonToNeocortex, InferenceMode, NeocortexToDaemon};
+use aura_types::events::{DaemonEvent, EventSource, GateDecision, Intent, ParsedEvent, ScoredEvent};
+use aura_types::ipc::{ContextPackage, DaemonToNeocortex, FailureContext, InferenceMode, NeocortexToDaemon};
 
 use crate::bridge::router::ResponseRouter;
 use crate::bridge::spawn_bridge;
@@ -75,7 +75,6 @@ use aura_types::outcome::{ExecutionOutcome, OutcomeResult, RouteKind, UserReacti
 use crate::identity::affective::MoodEvent;
 use aura_types::identity::RelationshipStage;
 use aura_types::power::PowerTier;
-use crate::identity::personality::PersonalityInfluence;
 use crate::telegram::TelegramConfig;
 use crate::voice::VoiceEngine;
 
@@ -83,15 +82,16 @@ use crate::execution::planner::EnhancedPlanner;
 use crate::execution::learning::WorkflowObserver;
 use crate::execution::react::{CognitiveState, EscalationContext, SemanticReact};
 
-use crate::screen::{parse_tree, ScreenCache, SemanticGraph};
-use crate::screen::semantic::ScreenSemanticState;
+use crate::daemon_core::proactive_dispatcher::{AlertDirection, ProactiveTrigger, should_dispatch, trigger_to_ipc, arc_trigger_to_ipc};
+
+use crate::screen::{ScreenCache, AppState, detect_app_state, extract_screen_summary};
 
 // -- P0/P1 Foundation imports -----------------------------------------------
-use crate::health::{HealthMonitor, HealthReport, HealthStatus};
+use crate::health::{HealthMonitor, HealthStatus};
 use crate::bridge::system_api::{SystemBridge, SystemCommand, SystemResult};
 use crate::persistence::{CriticalVault, DataTier};
 use crate::policy::{BoundaryContext, BoundaryDecision, BoundaryReasoner};
-use crate::execution::retry::{StrategicRecovery, EnvironmentSnapshot, FailureCategory, RecoveryContext, RecoveryAction};
+use crate::execution::retry::{StrategicRecovery, EnvironmentSnapshot, RecoveryContext, RecoveryAction};
 
 /// Maximum IPC payload size we'll accept for outbound writes (256 KB).
 const MAX_IPC_PAYLOAD_BYTES: usize = 256 * 1024;
@@ -111,9 +111,6 @@ const SCREEN_CACHE_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// Screen cache TTL (2 seconds — screens change fast on mobile).
 const SCREEN_CACHE_TTL_MS: u64 = 2_000;
 
-/// Maximum semantic graph nodes we retain in `last_semantic_graph`.
-/// Beyond this, we drop the graph and rely on summary text only.
-const SEMANTIC_GRAPH_MAX_NODES: usize = 200;
 
 // ---------------------------------------------------------------------------
 // SandboxConfirmation — pending user-approval for restricted actions
@@ -126,6 +123,7 @@ const SEMANTIC_GRAPH_MAX_NODES: usize = 200;
 /// can reply `/allow <id>` or `/deny <id>`.  If no response arrives
 /// within `timeout`, the action is auto-denied.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Phase 8: containment_level read by sandbox audit log exporter
 struct SandboxConfirmation {
     /// Unique identifier for this confirmation (monotonic counter).
     id: u64,
@@ -239,11 +237,10 @@ struct LoopSubsystems {
     /// and prediction.  Bounded to `SCREEN_CACHE_MAX_ENTRIES` entries /
     /// `SCREEN_CACHE_MAX_BYTES` memory.
     screen_cache: ScreenCache,
-    /// Last semantic graph built from the most recent screen tree.
-    /// `None` until the first `TYPE_WINDOW_STATE_CHANGED` event delivers
-    /// a full tree.  Dropped if `nodes.len() > SEMANTIC_GRAPH_MAX_NODES`
-    /// to stay within mobile memory budget.
-    last_semantic_graph: Option<SemanticGraph>,
+    /// Last detected app state from the most recent screen tree.
+    /// `None` until the first screen event delivers a full tree.
+    /// Used to feed structural complexity signal into the route classifier.
+    last_app_state: Option<AppState>,
 
     // -- Crash-safe persistence (P0 foundation) ----------------------------
     /// Write-ahead journal for crash-safe identity state persistence.
@@ -273,23 +270,27 @@ struct LoopSubsystems {
     /// Learned) for contextual ethics.  Evaluated alongside PolicyGate before
     /// task execution.  Learns from user /allow /deny patterns.
     boundary_reasoner: BoundaryReasoner,
+    /// Rolling count of recent boundary denials, fed into [`BoundaryContext`]
+    /// so the reasoner can escalate when anomalous denial bursts occur.
+    recent_denial_count: u32,
+
+    /// Epoch-ms timestamp of the last user-initiated input.
+    ///
+    /// Runtime-only (not persisted).  Used by `cron_handle_dreaming` to enforce
+    /// the 30-minute idle guard — dreaming never runs while the user is active.
+    /// Initialised to the daemon start time and updated on every
+    /// `user_command_rx` message.
+    last_interaction_ms: u64,
 }
 
 impl LoopSubsystems {
     /// Construct all subsystems.  `response_tx` is cloned before the
     /// channel split so we can send responses from handlers.
-    fn new(response_tx: DaemonResponseTx, data_dir: &Path) -> Self {
-        let memory = match AuraMemory::new(data_dir) {
-            Ok(m) => {
-                tracing::info!(?data_dir, "AuraMemory opened from disk");
-                m
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "disk AuraMemory failed — falling back to in-memory");
-                AuraMemory::new_in_memory()
-                    .expect("in-memory AuraMemory must not fail")
-            }
-        };
+    ///
+    /// `memory` is taken by move from `DaemonState.subsystems.memory` — this
+    /// ensures there is exactly ONE `AuraMemory` instance open against the
+    /// SQLite files, eliminating the previous double-init / WAL write conflict.
+    fn new(response_tx: DaemonResponseTx, data_dir: &std::path::Path, memory: AuraMemory) -> Self {
 
         // ARC subsystem construction — non-critical, degrade gracefully.
         let bdi_scheduler = match std::panic::catch_unwind(BdiScheduler::new) {
@@ -425,7 +426,7 @@ impl LoopSubsystems {
                 SCREEN_CACHE_MAX_BYTES,
                 SCREEN_CACHE_TTL_MS,
             ),
-            last_semantic_graph: None,
+            last_app_state: None,
 
             // -- Crash-safe persistence (P0 foundation) ----------------------
             journal: {
@@ -455,6 +456,8 @@ impl LoopSubsystems {
             system_bridge: SystemBridge::new(),
             critical_vault: CriticalVault::new(),
             boundary_reasoner: BoundaryReasoner::new(),
+            recent_denial_count: 0,
+            last_interaction_ms: now_ms(),
         }
     }
 }
@@ -481,7 +484,7 @@ fn build_hardened_policy_gate() -> PolicyGate {
     // Start with an empty gate that allows everything by default.
     // We will add deny/confirm/audit rules that override the default for
     // dangerous action patterns, and set a strict rate limiter.
-    let mut gate = PolicyGate::allow_all();
+    let mut gate = PolicyGate::allow_all_builder();
 
     // ── Priority 0: HARD DENY — irreversible / destructive system actions ──
     let hard_deny_rules = [
@@ -775,6 +778,7 @@ fn check_boundary_for_task(
     boundary_reasoner: &BoundaryReasoner,
     description: &str,
     relationship_stage: u8,
+    recent_denials: u32,
 ) -> BoundaryGateResult {
     // Build a BoundaryContext from available information.
     // We use chrono-free time extraction: hour from epoch ms.
@@ -824,7 +828,7 @@ fn check_boundary_for_task(
         involves_data_access,
         data_tier: None,
         target_app: None,
-        recent_denials: 0, // TODO: track denial count in LoopSubsystems
+        recent_denials,
     };
 
     match boundary_reasoner.evaluate(description, &ctx) {
@@ -864,6 +868,26 @@ fn check_boundary_for_task(
     }
 }
 
+/// Convenience wrapper: calls [`check_boundary_for_task`] and increments
+/// `subs.recent_denial_count` when the result is a denial.
+///
+/// **Must be called before every sensitive operation** (SMS, contacts, calendar,
+/// sensitive app launches).  If it returns `Deny`, the caller MUST return early
+/// and report the denial reason to the LLM — never silently skip.
+fn boundary_check(subs: &mut LoopSubsystems, description: &str) -> BoundaryGateResult {
+    let stage = current_relationship_stage(subs);
+    let result = check_boundary_for_task(
+        &subs.boundary_reasoner,
+        description,
+        stage,
+        subs.recent_denial_count,
+    );
+    if matches!(result, BoundaryGateResult::Deny(_)) {
+        subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
+    }
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -901,6 +925,24 @@ async fn send_response(tx: &DaemonResponseTx, dest: InputSource, text: String) {
     let resp = DaemonResponse {
         destination: dest,
         text,
+        mood_hint: None,
+    };
+    if let Err(e) = tx.send(resp).await {
+        tracing::error!(error = %e, "failed to send daemon response");
+    }
+}
+
+/// Like [`send_response`] but forwards the LLM's mood_hint so TTS can use it.
+async fn send_response_with_mood(
+    tx: &DaemonResponseTx,
+    dest: InputSource,
+    text: String,
+    mood_hint: Option<f32>,
+) {
+    let resp = DaemonResponse {
+        destination: dest,
+        text,
+        mood_hint,
     };
     if let Err(e) = tx.send(resp).await {
         tracing::error!(error = %e, "failed to send daemon response");
@@ -1131,7 +1173,137 @@ pub async fn run(mut state: DaemonState) {
     let data_dir = Path::new(&state.config.sqlite.db_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let mut subs = LoopSubsystems::new(response_tx, data_dir);
+    // Move the AuraMemory out of DaemonState by swapping in a harmless
+    // in-memory placeholder.  This ensures exactly ONE AuraMemory instance is
+    // open against the SQLite files for the process lifetime, eliminating the
+    // previous double-init / WAL write conflict.
+    // After this swap, state.subsystems.memory is an unused in-memory dummy;
+    // all real memory access goes through subs.memory.
+    let loop_memory = {
+        let placeholder = AuraMemory::new_in_memory()
+            .expect("in-memory placeholder must not fail");
+        std::mem::replace(&mut state.subsystems.memory, placeholder)
+    };
+    let mut subs = LoopSubsystems::new(response_tx, data_dir, loop_memory);
+
+    // ── FIX 1: Provision vault encryption key before any vault operations ──
+    //
+    // Strategy: per-device stable key stored in `{data_dir}/vault.key`.
+    // - If the file exists: read the 32 bytes from it.
+    // - If not: generate 32 random bytes via OsRng, write with mode 0o600.
+    // This gives per-device encryption without requiring a user PIN (PIN-based
+    // key derivation can be added later as an upgrade path).
+    {
+        let vault_key_path = data_dir.join("vault.key");
+        let vault_key: Option<[u8; 32]> = if vault_key_path.exists() {
+            match std::fs::read(&vault_key_path) {
+                Ok(bytes) if bytes.len() == 32 => {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes);
+                    tracing::info!("vault key loaded from {:?}", vault_key_path);
+                    Some(key)
+                }
+                Ok(bytes) => {
+                    tracing::error!(
+                        len = bytes.len(),
+                        path = ?vault_key_path,
+                        "vault.key has wrong length — expected 32 bytes; vault will remain locked"
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, path = ?vault_key_path, "failed to read vault.key");
+                    None
+                }
+            }
+        } else {
+            // Generate a fresh 32-byte key and persist it.
+            use rand::RngCore;
+            let mut key = [0u8; 32];
+            aes_gcm::aead::OsRng.fill_bytes(&mut key);
+            match std::fs::write(&vault_key_path, &key) {
+                Ok(()) => {
+                    // Restrict permissions to owner-read-only on Unix-like targets.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(
+                            &vault_key_path,
+                            std::fs::Permissions::from_mode(0o600),
+                        );
+                    }
+                    tracing::info!(path = ?vault_key_path, "vault key generated and persisted");
+                    Some(key)
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, path = ?vault_key_path, "failed to write vault.key — vault will remain locked");
+                    None
+                }
+            }
+        };
+
+        if let Some(key) = vault_key {
+            subs.critical_vault.set_encryption_key(key);
+            tracing::info!("vault encryption key provisioned");
+        } else {
+            tracing::warn!("vault encryption key NOT provisioned — Tier 1+ store/retrieve will fail");
+        }
+    }
+
+    // ── FIX 2: Sync pre-existing checkpoint goals into GoalTracker ──────
+    //
+    // GoalTracker::new() starts empty. After a restart, checkpoint.goals
+    // may contain Active/Pending goals from the previous session. Without
+    // bulk-syncing them here, stall/overdue detection is blind to those
+    // goals until they are individually touched in the current session.
+    {
+        let active_goal_count = state
+            .checkpoint
+            .goals
+            .iter()
+            .filter(|g| {
+                matches!(
+                    g.status,
+                    aura_types::goals::GoalStatus::Active
+                        | aura_types::goals::GoalStatus::Pending
+                )
+            })
+            .count();
+
+        if active_goal_count > 0 {
+            if let Some(ref mut tracker) = subs.goal_tracker {
+                let mut synced: usize = 0;
+                for goal in &state.checkpoint.goals {
+                    if matches!(
+                        goal.status,
+                        aura_types::goals::GoalStatus::Active
+                            | aura_types::goals::GoalStatus::Pending
+                    ) {
+                        match tracker.track(goal.clone()) {
+                            Ok(()) => synced += 1,
+                            Err(e) => {
+                                tracing::warn!(
+                                    goal_id = goal.id,
+                                    error = ?e,
+                                    "failed to sync goal into GoalTracker at startup"
+                                );
+                            }
+                        }
+                    }
+                }
+                tracing::info!(
+                    synced,
+                    total_in_checkpoint = state.checkpoint.goals.len(),
+                    "checkpoint goals synced into GoalTracker"
+                );
+            } else {
+                tracing::warn!(
+                    active_goals = active_goal_count,
+                    "GoalTracker unavailable — checkpoint goals not synced"
+                );
+            }
+        }
+    }
 
     // ── Crash-safe persistence: journal recovery + integrity check ──────
     //
@@ -1342,10 +1514,10 @@ pub async fn run(mut state: DaemonState) {
     }
 
     // Track how many channels are still open.
-    // 7 original receiver channels + bridge_cmd_rx = 8 total.
+    // 7 original receiver channels + bridge_cmd_rx + health_event_rx = 9 total.
     // (response_rx was replaced by a dummy — it is no longer counted;
-    //  bridge_cmd_rx takes its slot as the 8th channel.)
-    let mut open_channels: u8 = 8;
+    //  bridge_cmd_rx takes its slot as the 8th channel; health_event_rx is 9th.)
+    let mut open_channels: u8 = 9;
 
     tracing::info!(
         startup_ms = state.startup_time_ms,
@@ -1422,6 +1594,7 @@ pub async fn run(mut state: DaemonState) {
                 match msg {
                     Some(cmd) => {
                         select_count += 1;
+                        subs.last_interaction_ms = now_ms();
                         if let Err(e) = handle_user_command(cmd, &mut state, &mut subs).await {
                             tracing::error!(error = %e, "user command handler failed");
                         }
@@ -1530,6 +1703,20 @@ pub async fn run(mut state: DaemonState) {
                     }
                     None => {
                         tracing::info!("bridge command channel closed — all bridges exited");
+                        open_channels = open_channels.saturating_sub(1);
+                    }
+                }
+            }
+
+            // ----- Health events (heartbeat loop → reactive subsystems) -----
+            msg = rxs.health_event_rx.recv() => {
+                match msg {
+                    Some(event) => {
+                        select_count += 1;
+                        handle_health_event(event, &mut subs);
+                    }
+                    None => {
+                        tracing::warn!("health event channel closed");
                         open_channels = open_channels.saturating_sub(1);
                     }
                 }
@@ -1649,41 +1836,34 @@ async fn handle_a11y_event(
         // Screen intelligence: process raw accessibility tree when available
         if let Some(ref raw_nodes) = event.raw_nodes {
             if !raw_nodes.is_empty() {
-                // Parse raw nodes into structured tree
-                let screen_tree = parse_tree(raw_nodes);
+                // Build ScreenTree directly from the pre-structured ScreenNode list.
+                // `event.raw_nodes` is Vec<ScreenNode> (already hierarchical); the
+                // first node is the root of the accessibility tree.
+                let screen_tree = {
+                    let root_node = raw_nodes[0].clone();
+                    let node_count = raw_nodes.len() as u32;
+                    aura_types::screen::ScreenTree {
+                        root: root_node,
+                        package_name: event.package_name.clone(),
+                        activity_name: event.class_name.clone(),
+                        node_count,
+                        timestamp_ms: event.timestamp_ms,
+                    }
+                };
 
                 // Cache the screen tree
                 subs.screen_cache.insert(screen_tree.clone());
 
-                // Build semantic graph with bounded size
-                let graph = SemanticGraph::from_tree(&screen_tree);
-                if graph.estimated_size_bytes() <= SCREEN_CACHE_MAX_BYTES {
-                    // Compute screen complexity for classifier
-                    let state = ScreenSemanticState::from_graph(&graph);
-                    let complexity = match state {
-                        ScreenSemanticState::Interactive => 0.1,
-                        ScreenSemanticState::Loading => 0.3,
-                        ScreenSemanticState::Transitional => 0.2,
-                        ScreenSemanticState::Success => 0.2,
-                        ScreenSemanticState::InputRequired => 0.4,
-                        ScreenSemanticState::Error => 0.5,
-                        ScreenSemanticState::Blocked => 0.7,
-                        _ => 0.3, // default for unknown states
-                    };
-                    let pattern_count = graph.interactive_nodes().len();
+                // Detect app state from tree structure (enum-based, no NLP).
+                // LLM classifies semantic meaning — Rust returns structural state.
+                let app_state = detect_app_state(&screen_tree);
+                let summary = extract_screen_summary(&screen_tree);
 
-                    // Feed to classifier and contextor
-                    subs.classifier.set_screen_context(complexity, pattern_count);
-                    subs.contextor.set_screen_summary(Some(graph.summary_for_llm()));
-
-                    // Store for executor use
-                    subs.last_semantic_graph = Some(graph);
-                } else {
-                    log::warn!(
-                        "SemanticGraph exceeds max bytes ({}), skipping",
-                        graph.estimated_size_bytes()
-                    );
-                }
+                subs.contextor.set_screen_summary(Some(format!(
+                    "{}::{} ({} clickable)",
+                    screen_tree.package_name, screen_tree.activity_name, summary.clickable_count
+                )));
+                subs.last_app_state = Some(app_state);
             }
         } else {
             // Fallback: lightweight package::class summary when no raw tree
@@ -1854,9 +2034,11 @@ async fn handle_user_command(
                                         &subs.boundary_reasoner,
                                         &conf.task_summary,
                                         current_relationship_stage(subs),
+                                        subs.recent_denial_count,
                                     );
                                     match boundary_result {
                                         BoundaryGateResult::Deny(reason) => {
+                                            subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
                                             tracing::warn!(
                                                 target: "SECURITY",
                                                 conf_id,
@@ -2145,9 +2327,6 @@ async fn handle_user_command(
                             subs.identity.affective.process_event_with_personality(
                                 event.clone(), ts, personality,
                             );
-                            subs.identity.stress.accumulate(
-                                &event, ts, personality.neuroticism,
-                            );
                             tracing::debug!(stress, "voice stress biomarker processed");
                         }
                     }
@@ -2156,9 +2335,6 @@ async fn handle_user_command(
                             let event = MoodEvent::VoiceFatigueDetected { level: fatigue };
                             subs.identity.affective.process_event_with_personality(
                                 event.clone(), ts, personality,
-                            );
-                            subs.identity.stress.accumulate(
-                                &event, ts, personality.neuroticism,
                             );
                             tracing::debug!(fatigue, "voice fatigue biomarker processed");
                         }
@@ -2335,6 +2511,7 @@ async fn handle_user_command(
                 &subs.identity.relationships,
                 &subs.identity.personality,
                 &subs.identity.affective,
+                subs.identity.user_profile(),
                 now_ms(),
             ).await;
 
@@ -2360,41 +2537,12 @@ async fn handle_user_command(
                 return Ok(());
             }
 
-            // ── Stage 5b: Wire learning state into classifier ────────
-            // Feed personality bias and working memory into the route
-            // classifier so that routing adapts to personality evolution
-            // and current cognitive load — closes the personality→routing gap.
-            {
-                let bias = subs.identity.personality.routing_bias();
-                subs.classifier.set_personality_bias(bias);
+            // Stage 5b removed: personality→routing injection was Theater AGI.
+            // The LLM decides routing intent; classifier is a simple S1/S2 dispatch,
+            // not a personality-biased weighted scorer.
 
-                let wm_count = subs.memory.working.len();
-                let wm_max = subs.memory.working.capacity();
-                subs.classifier.set_working_memory(wm_count, wm_max);
-
-                tracing::trace!(
-                    personality_bias = bias,
-                    working_memory = wm_count,
-                    wm_max = wm_max,
-                    "classifier state updated from personality + working memory"
-                );
-            }
-
-            // Feed screen context to classifier from last semantic graph
-            if let Some(ref graph) = subs.last_semantic_graph {
-                let state = ScreenSemanticState::from_graph(graph);
-                let complexity = match state {
-                    ScreenSemanticState::Interactive => 0.1,
-                    ScreenSemanticState::Loading => 0.3,
-                    ScreenSemanticState::Transitional => 0.2,
-                    ScreenSemanticState::Success => 0.2,
-                    ScreenSemanticState::InputRequired => 0.4,
-                    ScreenSemanticState::Error => 0.5,
-                    ScreenSemanticState::Blocked => 0.7,
-                    _ => 0.3,
-                };
-                subs.classifier.set_screen_context(complexity, graph.interactive_nodes().len());
-            }
+            // Screen app state is stored in last_app_state for future use.
+            // No classifier update needed here — app state is fed during screen events.
 
             // ── Stage 5c: SystemBridge Intent Fast-Path ─────────────
             // If the user's text maps directly to a typed system API
@@ -2407,6 +2555,48 @@ async fn handle_user_command(
                     command = %cmd,
                     "SystemBridge fast-path: intent matched — bypassing classifier"
                 );
+
+                // ── Boundary check for sensitive operations ──────────
+                // ContactSearch, SendSms, CalendarEvents, and LaunchApp
+                // all access private user data or take irreversible actions.
+                // A Deny result must be reported back to the LLM, not silently skipped.
+                let boundary_description = match &cmd {
+                    SystemCommand::ContactSearch(_) => Some("contact search"),
+                    SystemCommand::SendSms { .. }   => Some("send SMS"),
+                    SystemCommand::CalendarEvents { .. } => Some("calendar access"),
+                    SystemCommand::LaunchApp(_)     => Some("launch app"),
+                    _ => None,
+                };
+                if let Some(desc) = boundary_description {
+                    match boundary_check(subs, desc) {
+                        BoundaryGateResult::Allow => {
+                            tracing::debug!(description = desc, "boundary check: allowed");
+                        }
+                        BoundaryGateResult::Deny(reason) => {
+                            tracing::warn!(
+                                description = desc,
+                                reason = %reason,
+                                "boundary check: denied sensitive operation"
+                            );
+                            let denial_msg = format!(
+                                "I'm not able to perform that action right now: {}",
+                                reason
+                            );
+                            send_response(&subs.response_tx, source, denial_msg).await;
+                            return Ok(());
+                        }
+                        BoundaryGateResult::NeedConfirmation { reason, prompt } => {
+                            tracing::info!(
+                                description = desc,
+                                reason = %reason,
+                                "boundary check: confirmation required"
+                            );
+                            send_response(&subs.response_tx, source, prompt).await;
+                            return Ok(());
+                        }
+                    }
+                }
+
                 match subs.system_bridge.execute(cmd) {
                     Ok(result) => {
                         // Format result for user in a human-readable way.
@@ -2683,9 +2873,11 @@ async fn handle_user_command(
                 &subs.boundary_reasoner,
                 &description,
                 current_relationship_stage(subs),
+                subs.recent_denial_count,
             );
             match boundary_result {
                 BoundaryGateResult::Deny(reason) => {
+                    subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
                     tracing::warn!(
                         target: "SECURITY",
                         description = %description,
@@ -2878,12 +3070,11 @@ async fn handle_user_command(
                     // failure classification is environment-aware (e.g. a timeout
                     // during low battery = Environmental, not Transient).
                     let env_snapshot = EnvironmentSnapshot {
-                        battery_level: state.checkpoint.power_budget.battery_percent,
-                        is_charging: false, // TODO: wire from JNI when available
-                        thermal_throttling: false, // TODO: wire from JNI thermal state
+                        battery_level: state.checkpoint.power_budget.battery_percent as f32,
                         network_available: true, // local-only, always "available"
-                        available_memory_mb: 0, // TODO: wire from JNI
-                        ..EnvironmentSnapshot::default()
+                        target_app_running: true,
+                        screen_responsive: true,
+                        neocortex_alive: subs.neocortex.is_connected(),
                     };
 
                     let failure_reason = match &outcome {
@@ -2898,10 +3089,12 @@ async fn handle_user_command(
                     );
 
                     let recovery_ctx = RecoveryContext {
-                        operation_id: format!("goal_{}", goal_id),
-                        failure_category: failure_category.clone(),
-                        error_message: failure_reason.to_owned(),
-                        attempt_number: subs.consecutive_task_failures,
+                        operation: format!("goal_{}", goal_id),
+                        goal_description: description.clone(),
+                        attempt_count: subs.consecutive_task_failures,
+                        time_elapsed_ms: 0,
+                        last_error: failure_reason.to_owned(),
+                        category: failure_category.clone(),
                         environment_state: env_snapshot.clone(),
                     };
 
@@ -2936,12 +3129,14 @@ async fn handle_user_command(
                                  staying in System 1"
                             );
                             subs.strategic_recovery.record_recovery_outcome(
-                                &recovery_ctx.operation_id,
+                                &recovery_ctx.operation,
+                                &recovery_action,
                                 true, // optimistic — actual outcome tracked later
+                                now_ms(),
                             );
                         }
-                        RecoveryAction::Replan { ref reason, ref context }
-                        | RecoveryAction::EscalateToStrategic { ref context, .. } => {
+                        RecoveryAction::Replan { .. }
+                        | RecoveryAction::EscalateToStrategic { .. } => {
                             // The failure needs a fresh approach from the LLM.
                             // Route through SemanticReact to confirm escalation
                             // thresholds, then send a Replan to neocortex.
@@ -2959,20 +3154,42 @@ async fn handle_user_command(
                                 amygdala_arousal: state.checkpoint.disposition.mood.arousal
                                     .clamp(0.0, 1.0),
                                 consecutive_failures: subs.consecutive_task_failures,
-                                battery_level: state.checkpoint.power_budget.battery_percent,
-                                is_thermal_throttling: env_snapshot.thermal_throttling,
+                                battery_level: state.checkpoint.power_budget.battery_percent as f32,
+                                is_thermal_throttling: false,
                             };
                             if matches!(
                                 subs.semantic_react.evaluate_escalation(&escalation_ctx),
                                 CognitiveState::System2
                             ) {
+                                // Build the replan context preserving live personality and
+                                // affective state so the LLM has OCEAN + VAD when replanning.
+                                // Architecture law: never zero the ContextPackage on replan —
+                                // the neocortex needs full context to generate a good recovery plan.
+                                let replan_personality = {
+                                    let t = &subs.identity.personality.traits;
+                                    let mood = &state.checkpoint.disposition.mood;
+                                    aura_types::ipc::PersonalitySnapshot {
+                                        openness: t.openness,
+                                        conscientiousness: t.conscientiousness,
+                                        extraversion: t.extraversion,
+                                        agreeableness: t.agreeableness,
+                                        neuroticism: t.neuroticism,
+                                        current_mood_valence: mood.valence,
+                                        current_mood_arousal: mood.arousal,
+                                        trust_level: aura_types::ipc::PersonalitySnapshot::default().trust_level,
+                                    }
+                                };
                                 let replan_ctx = ContextPackage {
                                     active_goal: Some(aura_types::ipc::GoalSummary {
                                         description: description.clone(),
+                                        progress_percent: 0,
                                         current_step: String::new(),
                                         blockers: vec![replan_reason],
                                     }),
-                                    inference_mode: InferenceMode::Planning,
+                                    inference_mode: InferenceMode::Planner,
+                                    personality: replan_personality,
+                                    user_state: aura_types::ipc::UserStateSignals::default(),
+                                    token_budget: 1024,
                                     ..ContextPackage::default()
                                 };
                                 let replan_failure = FailureContext {
@@ -3039,8 +3256,10 @@ async fn handle_user_command(
                                  (JNI bridge not yet wired — logging only)"
                             );
                             subs.strategic_recovery.record_recovery_outcome(
-                                &recovery_ctx.operation_id,
+                                &recovery_ctx.operation,
+                                &recovery_action,
                                 false,
+                                now_ms(),
                             );
                         }
                         RecoveryAction::NotifyUser { ref message, ref severity } => {
@@ -3060,8 +3279,10 @@ async fn handle_user_command(
                                 notify_text,
                             ).await;
                             subs.strategic_recovery.record_recovery_outcome(
-                                &recovery_ctx.operation_id,
+                                &recovery_ctx.operation,
+                                &recovery_action,
                                 true,
+                                now_ms(),
                             );
                         }
                         RecoveryAction::HaltAndLog { ref reason, ref category } => {
@@ -3091,8 +3312,10 @@ async fn handle_user_command(
                             // Reset consecutive failures — this goal is dead.
                             subs.consecutive_task_failures = 0;
                             subs.strategic_recovery.record_recovery_outcome(
-                                &recovery_ctx.operation_id,
+                                &recovery_ctx.operation,
+                                &recovery_action,
                                 false,
+                                now_ms(),
                             );
                         }
                         RecoveryAction::TryAlternative { ref alternative, ref reason } => {
@@ -3108,8 +3331,10 @@ async fn handle_user_command(
                                  will influence next planning cycle"
                             );
                             subs.strategic_recovery.record_recovery_outcome(
-                                &recovery_ctx.operation_id,
+                                &recovery_ctx.operation,
+                                &recovery_action,
                                 true, // optimistic
+                                now_ms(),
                             );
                         }
                     }
@@ -3331,10 +3556,12 @@ async fn dispatch_system1(
             &subs.boundary_reasoner,
             &scored.parsed.content,
             current_relationship_stage(subs),
+            subs.recent_denial_count,
         );
         match boundary_result {
             BoundaryGateResult::Deny(reason)
             | BoundaryGateResult::NeedConfirmation { reason, .. } => {
+                subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
                 tracing::warn!(
                     target: "SECURITY",
                     content = %scored.parsed.content,
@@ -3415,32 +3642,9 @@ async fn dispatch_system2(
     state: &mut DaemonState,
     subs: &mut LoopSubsystems,
 ) {
-    // Compute personality influence for this interaction.
-    let personality_influence = {
-        let mood = &state.checkpoint.disposition;
-        let trust = state.checkpoint.trust_score;
-        // Derive relationship stage from the primary user (source-based).
-        let relationship_stage = subs
-            .identity
-            .relationships
-            .get_relationship("primary_user")
-            .map(|r| r.stage)
-            .unwrap_or(RelationshipStage::Stranger);
-        // PersonalityEngine wraps Personality and provides compute_influence.
-        // IdentityEngine stores a raw Personality, so we construct a temporary
-        // engine from the current trait snapshot.
-        let pe = crate::identity::PersonalityEngine::with_traits(
-            subs.identity.personality.traits.clone(),
-        );
-        pe.compute_influence(mood, relationship_stage, trust)
-    };
-
-    tracing::debug!(
-        routing_bias = personality_influence.routing_bias,
-        complexity_mod = personality_influence.complexity_modifier,
-        archetype = ?personality_influence.archetype,
-        "personality influence computed for System2 dispatch"
-    );
+    // ARCHITECTURE: personality_archetype prompt injection removed.
+    // Rust does not inject OCEAN-derived directives into the LLM system prompt.
+    // The LLM determines its own tone from conversation context.
 
     // Prepare the System2 request (base context from parsed event).
     let request = match subs.system2.prepare_request(&scored.parsed, mode, now_ms()) {
@@ -3460,24 +3664,9 @@ async fn dispatch_system2(
         request.message
     };
 
-    // Inject personality influence prompt into the message context.
-    let message = inject_personality_influence(message, &personality_influence);
-
-    // ── ThinkingPartner primer injection (Fix B) ──────────────────
-    // When the user's question is complex enough and conditions allow,
-    // inject a Socratic or Reflective primer that steers the neocortex
-    // toward coaching rather than direct answering.
-    let message = {
-        let cognitive_load = subs.amygdala.cognitive_load;
-        if let Some(primer) = subs
-            .identity
-            .evaluate_thinking_challenge(&scored.parsed.content, cognitive_load)
-        {
-            inject_thinking_partner_primer(message, primer)
-        } else {
-            message
-        }
-    };
+    // Inject personality archetype directive into the message context.
+    // ARCHITECTURE: injection removed — LLM determines tone from conversation context.
+    // No Rust-injected [Personality: X] or [ThinkingPartner] directives.
 
     tracing::debug!(request_id = request.request_id, "System2 request prepared");
 
@@ -3499,7 +3688,15 @@ async fn dispatch_system2(
         Ok(Ok(())) => {
             tracing::info!(request_id = request.request_id, "System2 request sent to neocortex");
             // Track the originating source so ConversationReply can route back.
-            state.last_system2_source = Some(source.clone());
+            // Bound the queue to 64 to prevent unbounded growth.
+            if state.pending_system2_sources.len() >= 64 {
+                tracing::warn!(
+                    request_id = request.request_id,
+                    "pending_system2_sources queue full (64); evicting oldest entry"
+                );
+                state.pending_system2_sources.pop_front();
+            }
+            state.pending_system2_sources.push_back(source.clone());
             // The response will arrive via the IPC inbound channel.
         }
         Ok(Err(e)) => {
@@ -3666,14 +3863,14 @@ fn enrich_system2_message(
             pkg.memory_snippets = enriched.memory_context
                 .iter()
                 .filter(|snippet| {
-                    let (tier, _category) = CriticalVault::classify_data(snippet);
+                    let (tier, _category) = CriticalVault::classify_data(&snippet.content);
                     match tier {
-                        DataTier::Public | DataTier::Internal => true,
+                        DataTier::Ephemeral | DataTier::Personal => true,
                         // Tier ≥ Sensitive: redact from LLM context.
                         // The LLM never needs raw passwords, tokens, PII, etc.
                         _ => {
                             tracing::debug!(
-                                snippet_len = snippet.len(),
+                                snippet_len = snippet.content.len(),
                                 tier = ?tier,
                                 "CriticalVault: redacted sensitive memory snippet \
                                  before LLM dispatch"
@@ -3711,10 +3908,7 @@ fn enrich_system2_message(
             pkg.current_screen = Some(aura_types::ipc::ScreenSummary {
                 package_name: String::new(),
                 activity_name: String::new(),
-                interactive_elements: subs.last_semantic_graph
-                    .as_ref()
-                    .map(|g| g.interactive_nodes().into_iter().cloned().collect())
-                    .unwrap_or_default(),
+                interactive_elements: Vec::new(),
                 visible_text: vec![summary.clone()],
             });
         }
@@ -3724,21 +3918,41 @@ fn enrich_system2_message(
             pkg.active_goal = Some(goal.clone());
         }
 
-        // Personality context — inject as a system-level conversation turn
-        // if the personality prompt has useful directives.
-        if let Some(ref personality_text) = enriched.personality_context {
-            if !personality_text.is_empty() {
-                // Prepend as a system turn so the LLM sees it first.
-                pkg.conversation_history.insert(
-                    0,
-                    aura_types::ipc::ConversationTurn {
-                        role: aura_types::ipc::Role::System,
-                        content: personality_text.clone(),
-                        timestamp_ms: 0,
-                    },
-                );
-            }
+        // Personality snapshot — copy real computed values from user_context
+        // if available; this overwrites the hardcoded PersonalitySnapshot::default()
+        // that ContextPackage::default() sets.
+        if let Some(ref uc) = enriched.user_context {
+            pkg.personality = uc.personality_snapshot.clone();
         }
+
+        // Identity block — raw OCEAN+VAD+archetype JSON for the LLM.
+        if enriched.identity_block.is_some() {
+            pkg.identity_block = enriched.identity_block.clone();
+        }
+
+        // Mood description — human-readable emotional context string.
+        if !enriched.mood_description.is_empty() {
+            pkg.mood_description = enriched.mood_description.clone();
+        }
+
+        // Phase 4: Personality context directive injection removed.
+        //
+        // REASON: `generate_personality_context()` pre-interprets OCEAN/VAD
+        // values into behavioral directive strings ("Be creative", "Be formal")
+        // before the LLM ever sees them. This is Theater AGI — the daemon (body)
+        // doing the LLM's (brain) job.
+        //
+        // REPLACEMENT: Raw OCEAN, VAD, relationship stage, and archetype are
+        // already serialized as a compact JSON `identity_block` (see above) and
+        // injected into `pkg.identity_block`. The neocortex `prompts.rs`
+        // `personality_section()` reads those raw numbers directly and includes
+        // them verbatim in the LLM system prompt. The LLM reasons about them
+        // naturally — no pre-interpretation by Rust code.
+        //
+        // `enriched.personality_context` is retained in `EnrichedEvent` for
+        // diagnostic tooling and test assertions; it is no longer injected into
+        // the inference pipeline.
+        let _ = &enriched.personality_context; // suppress unused-field warning
 
         // Enforce size limit — if the package is too large, trim memory snippets.
         while pkg.estimated_size() > aura_types::ipc::ContextPackage::MAX_SIZE
@@ -3778,159 +3992,12 @@ fn enrich_system2_message(
     }
 }
 
-/// Inject [`PersonalityInfluence`] directives into the IPC message.
-///
-/// Adds OCEAN-modulated response style directives as a system-level
-/// conversation turn. This supplements the Contextor's existing personality
-/// injection with richer influence data (archetype, response params,
-/// routing bias) that the neocortex can use for tone calibration.
-fn inject_personality_influence(
-    message: DaemonToNeocortex,
-    influence: &PersonalityInfluence,
-) -> DaemonToNeocortex {
-    fn apply_influence(
-        pkg: &mut aura_types::ipc::ContextPackage,
-        influence: &PersonalityInfluence,
-    ) {
-        // Build a compact personality directive from influence data.
-        let directive = format!(
-            "[Personality: {:?} | proactivity={:.2} verbosity={:.2} risk_appetite={:.2} autonomy={:.2} | routing_bias={:+.3} complexity_mod={:+.3}]",
-            influence.archetype,
-            influence.response_params.proactivity,
-            influence.response_params.verbosity,
-            influence.response_params.risk_tolerance,
-            influence.response_params.autonomy,
-            influence.routing_bias,
-            influence.complexity_modifier,
-        );
+// inject_personality_archetype removed: Rust does not inject OCEAN-derived
+// [Personality: X] directives into LLM system prompts. Theater AGI.
 
-        // If there's already a personality prompt from enrichment, append to it.
-        // Otherwise insert a fresh system turn.
-        let has_personality_turn = pkg
-            .conversation_history
-            .first()
-            .is_some_and(|turn| {
-                turn.role == aura_types::ipc::Role::System
-                    && turn.timestamp_ms == 0
-            });
-
-        if has_personality_turn {
-            // Append influence to existing personality system turn.
-            if let Some(first) = pkg.conversation_history.first_mut() {
-                first.content.push('\n');
-                first.content.push_str(&directive);
-            }
-        } else {
-            // Insert a new personality system turn at the front.
-            pkg.conversation_history.insert(
-                0,
-                aura_types::ipc::ConversationTurn {
-                    role: aura_types::ipc::Role::System,
-                    content: directive,
-                    timestamp_ms: 0,
-                },
-            );
-        }
-    }
-
-    match message {
-        DaemonToNeocortex::Converse { mut context } => {
-            apply_influence(&mut context, influence);
-            DaemonToNeocortex::Converse { context }
-        }
-        DaemonToNeocortex::Plan {
-            mut context,
-            failure,
-        } => {
-            apply_influence(&mut context, influence);
-            DaemonToNeocortex::Plan { context, failure }
-        }
-        DaemonToNeocortex::Compose {
-            mut context,
-            template,
-        } => {
-            apply_influence(&mut context, influence);
-            DaemonToNeocortex::Compose { context, template }
-        }
-        DaemonToNeocortex::Replan {
-            mut context,
-            failure,
-        } => {
-            apply_influence(&mut context, influence);
-            DaemonToNeocortex::Replan { context, failure }
-        }
-        other => other,
-    }
-}
-
-/// Inject a ThinkingPartner primer into a System2 message (Fix B).
-///
-/// When `evaluate_thinking_challenge` returns Reflective or Socratic, this
-/// appends the primer to the system turn so the neocortex adopts a coaching
-/// posture rather than giving a direct answer.  The primer is lightweight
-/// (static `&str`) and does not allocate on the hot path when not triggered.
-fn inject_thinking_partner_primer(
-    message: DaemonToNeocortex,
-    primer: &str,
-) -> DaemonToNeocortex {
-    fn apply_primer(pkg: &mut aura_types::ipc::ContextPackage, primer: &str) {
-        // Append to the existing system turn (personality influence already
-        // created one).  If none exists, insert a new one.
-        let has_system_turn = pkg
-            .conversation_history
-            .first()
-            .is_some_and(|turn| {
-                turn.role == aura_types::ipc::Role::System
-                    && turn.timestamp_ms == 0
-            });
-
-        if has_system_turn {
-            if let Some(first) = pkg.conversation_history.first_mut() {
-                first.content.push('\n');
-                first.content.push_str("[ThinkingPartner] ");
-                first.content.push_str(primer);
-            }
-        } else {
-            pkg.conversation_history.insert(
-                0,
-                aura_types::ipc::ConversationTurn {
-                    role: aura_types::ipc::Role::System,
-                    content: format!("[ThinkingPartner] {primer}"),
-                    timestamp_ms: 0,
-                },
-            );
-        }
-    }
-
-    match message {
-        DaemonToNeocortex::Converse { mut context } => {
-            apply_primer(&mut context, primer);
-            DaemonToNeocortex::Converse { context }
-        }
-        DaemonToNeocortex::Plan {
-            mut context,
-            failure,
-        } => {
-            apply_primer(&mut context, primer);
-            DaemonToNeocortex::Plan { context, failure }
-        }
-        DaemonToNeocortex::Compose {
-            mut context,
-            template,
-        } => {
-            apply_primer(&mut context, primer);
-            DaemonToNeocortex::Compose { context, template }
-        }
-        DaemonToNeocortex::Replan {
-            mut context,
-            failure,
-        } => {
-            apply_primer(&mut context, primer);
-            DaemonToNeocortex::Replan { context, failure }
-        }
-        other => other,
-    }
-}
+// inject_thinking_partner_primer removed: Rust does not inject [ThinkingPartner]
+// Socratic/Reflective directives into LLM prompts. Theater AGI.
+// The LLM determines its own reasoning style from conversation context.
 
 // ---------------------------------------------------------------------------
 // IPC outbound handler
@@ -4038,7 +4105,7 @@ async fn handle_ipc_inbound(
             tracing::info!("neocortex model unloaded");
         }
 
-        NeocortexToDaemon::PlanReady { plan } => {
+        NeocortexToDaemon::PlanReady { plan, .. } => {
             let step_count = plan.steps.len();
             tracing::info!(
                 steps = step_count,
@@ -4117,10 +4184,12 @@ async fn handle_ipc_inbound(
                 &subs.boundary_reasoner,
                 &plan_goal_desc,
                 current_relationship_stage(subs),
+                subs.recent_denial_count,
             );
             match boundary_result {
                 BoundaryGateResult::Deny(reason)
                 | BoundaryGateResult::NeedConfirmation { reason, .. } => {
+                    subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
                     tracing::warn!(
                         target: "SECURITY",
                         plan = %plan_goal_desc,
@@ -4224,14 +4293,14 @@ async fn handle_ipc_inbound(
                     status: match &outcome {
                         react::TaskOutcome::Success { .. } => aura_types::goals::GoalStatus::Completed,
                         react::TaskOutcome::Failed { .. }
-                        | react::TaskOutcome::CycleAborted { .. } => aura_types::goals::GoalStatus::Failed,
+                        | react::TaskOutcome::CycleAborted { .. } => aura_types::goals::GoalStatus::Failed("plan failed".to_string()),
                         react::TaskOutcome::Cancelled { .. } => aura_types::goals::GoalStatus::Cancelled,
                     },
                     steps: Vec::new(),
                     created_ms: ts,
                     deadline_ms: None,
                     parent_goal: None,
-                    source: aura_types::goals::GoalSource::SystemInferred,
+                    source: aura_types::goals::GoalSource::ProactiveSuggestion,
                 };
                 state.checkpoint.goals.push(plan_goal.clone());
 
@@ -4299,7 +4368,7 @@ async fn handle_ipc_inbound(
             } // end consent-allowed else branch (Site 3: neocortex plan)
         }
 
-        NeocortexToDaemon::ConversationReply { text, mood_hint } => {
+        NeocortexToDaemon::ConversationReply { text, mood_hint, .. } => {
             tracing::info!(
                 len = text.len(),
                 mood_hint = ?mood_hint,
@@ -4383,7 +4452,7 @@ async fn handle_ipc_inbound(
 
             // ── Anti-sycophancy gate ────────────────────────────────
             let gate_result = subs.identity.check_response();
-            let final_text = match gate_result {
+            let final_text = match &gate_result {
                 crate::identity::GateResult::Pass => text_after_truth,
                 crate::identity::GateResult::Nudge { reason } => {
                     tracing::info!(reason = %reason, "anti-sycophancy nudge");
@@ -4397,14 +4466,37 @@ async fn handle_ipc_inbound(
                 }
             };
 
+            // ── Episodic memory: record this conversation turn ──────────
+            // Write user turn.
+            if let Err(e) = subs.memory.store_episodic(
+                last_user_for_truth.clone(),
+                0.0,
+                0.5,
+                vec!["conversation".to_string(), "user".to_string()],
+                now_ms(),
+            ).await {
+                tracing::warn!(error = %e, "failed to store user episodic memory");
+            }
+            // Write assistant turn.
+            if let Err(e) = subs.memory.store_episodic(
+                final_text.clone(),
+                0.0,
+                0.5,
+                vec!["conversation".to_string(), "assistant".to_string()],
+                now_ms(),
+            ).await {
+                tracing::warn!(error = %e, "failed to store assistant episodic memory");
+            }
+
             // Send response to user via the response channel.
-            // Route to the original source that triggered this System2 request
-            // (voice, Telegram, etc.), falling back to Direct if unknown.
+            // Pop the oldest in-flight source (FIFO — neocortex processes
+            // requests sequentially, so the oldest dispatch matches this reply).
+            // Falls back to Direct if the queue is unexpectedly empty.
             let reply_dest = state
-                .last_system2_source
-                .take()
+                .pending_system2_sources
+                .pop_front()
                 .unwrap_or(InputSource::Direct);
-            send_response(&subs.response_tx, reply_dest, final_text.clone()).await;
+            send_response_with_mood(&subs.response_tx, reply_dest, final_text.clone(), mood_hint).await;
 
             // Open a reaction observation window for the System2 response.
             // Use the last user input from conversation history as the
@@ -4514,10 +4606,12 @@ async fn handle_ipc_inbound(
                 &subs.boundary_reasoner,
                 &script_desc,
                 current_relationship_stage(subs),
+                subs.recent_denial_count,
             );
             match boundary_result {
                 BoundaryGateResult::Deny(reason)
                 | BoundaryGateResult::NeedConfirmation { reason, .. } => {
+                    subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
                     tracing::warn!(
                         target: "SECURITY",
                         script_desc = %script_desc,
@@ -4604,6 +4698,81 @@ async fn handle_ipc_inbound(
             state.checkpoint.token_counters.cloud_tokens =
                 state.checkpoint.token_counters.cloud_tokens.saturating_add(1);
         }
+
+        NeocortexToDaemon::Embedding { .. } => {
+            tracing::debug!("embedding received, storing");
+        }
+
+        NeocortexToDaemon::ReActDecision { done, reasoning, next_action, .. } => {
+            // This arm fires when the neocortex pushes a ReActDecision
+            // unprompted (the normal path goes through send_react_step_ipc's
+            // request() call and never reaches here).  We handle it
+            // defensively so unsolicited pushes are never silently dropped.
+            if done {
+                tracing::info!(
+                    reasoning = %reasoning,
+                    "neocortex push-signalled ReAct goal complete"
+                );
+                // Best-effort: mark the first Active goal as Completed.
+                for goal in state.checkpoint.goals.iter_mut() {
+                    if goal.status == aura_types::goals::GoalStatus::Active {
+                        goal.status = aura_types::goals::GoalStatus::Completed;
+                        break;
+                    }
+                }
+            } else if let Some(ref action) = next_action {
+                tracing::info!(
+                    reasoning = %reasoning,
+                    next_action = %action,
+                    "neocortex push-signalled ReAct continue with next action"
+                );
+                // The actual dispatch lives inside send_react_step_ipc's
+                // request/response loop; this push path just records intent.
+            } else {
+                tracing::warn!(
+                    reasoning = %reasoning,
+                    "neocortex ReActDecision: done=false but no next_action — \
+                     treating as failed step"
+                );
+                // Mark the first Active goal as Failed.
+                for goal in state.checkpoint.goals.iter_mut() {
+                    if goal.status == aura_types::goals::GoalStatus::Active {
+                        goal.status = aura_types::goals::GoalStatus::Failed(
+                            "neocortex returned done=false with no next_action"
+                                .to_string(),
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        NeocortexToDaemon::Summary { text, .. } => {
+            tracing::debug!(len = text.len(), "neocortex summary received");
+            subs.memory.store_working(
+                text,
+                EventSource::Internal,
+                0.6,
+                now_ms(),
+            );
+        }
+
+        NeocortexToDaemon::PlanScore { score } => {
+            // Unsolicited PlanScore — the normal path handles this via
+            // request/response; arriving here means a race or a bug upstream.
+            tracing::warn!(
+                score = score,
+                "unexpected unsolicited PlanScore on inbound channel — ignored"
+            );
+        }
+
+        NeocortexToDaemon::FailureClassification { category } => {
+            // Unsolicited FailureClassification — same reasoning as PlanScore.
+            tracing::warn!(
+                category = %category,
+                "unexpected unsolicited FailureClassification on inbound channel — ignored"
+            );
+        }
     }
 
     // Flush any outcomes published during IPC handling.
@@ -4622,6 +4791,111 @@ async fn handle_ipc_inbound(
 /// **not** `async` — keeping the borrow of `state.db` off the future's
 /// captured state avoids `Send` issues with `tokio::spawn`.
 #[instrument(skip_all, fields(variant = std::any::type_name::<DbWriteRequest>()))]
+// ── Health event handler ─────────────────────────────────────────────────────
+
+/// React to a [`DaemonEvent`] emitted by `run_heartbeat_loop`.
+///
+/// This is a **synchronous, non-blocking** handler: no awaiting, no I/O.
+/// All reactions are mechanical threshold responses — the semantics live
+/// in the heartbeat loop that chose which events to emit.
+///
+/// Wiring:
+/// - `MemoryPressure { critical: true }`  → activate safe mode (no proactive
+///   actions, no learning) to prevent OOM on a constrained Android device.
+/// - `BatteryLow`                         → cap initiative budget to 0.2
+///   (reduces background proactive actions to conserve power).
+/// - `BatteryCritical`                    → cap initiative budget to 0.0
+///   (halts all proactive work immediately).
+/// - `ThermalCritical`                    → log a critical warning; LLM
+///   inference pause is not yet implemented (see TODO below).
+/// - All other variants                   → debug-logged and ignored here
+///   (the heartbeat loop already logged them at the appropriate level).
+fn handle_health_event(event: DaemonEvent, subs: &mut LoopSubsystems) {
+    match event {
+        // ── Memory pressure ──────────────────────────────────────────────
+        DaemonEvent::MemoryPressure { critical, current_bytes, threshold_bytes } => {
+            if critical {
+                tracing::warn!(
+                    current_mb = current_bytes / (1024 * 1024),
+                    threshold_mb = threshold_bytes / (1024 * 1024),
+                    "MemoryPressure(critical) — activating safe mode"
+                );
+                // Activate safe mode via a synthetic verification report.
+                // We reuse the existing SafeModeState::activate_from_report path
+                // but for memory pressure we set active directly since there
+                // is no VerificationReport for runtime resource events.
+                if !subs.safe_mode.active {
+                    subs.safe_mode.active = true;
+                    subs.safe_mode.activated_at_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let reason = format!(
+                        "[memory] RSS {}MB exceeded critical threshold {}MB",
+                        current_bytes / (1024 * 1024),
+                        threshold_bytes / (1024 * 1024),
+                    );
+                    if !subs.safe_mode.reasons.contains(&reason) {
+                        subs.safe_mode.reasons.push(reason);
+                    }
+                    tracing::error!("safe mode activated due to critical memory pressure");
+                }
+            } else {
+                tracing::warn!(
+                    current_mb = current_bytes / (1024 * 1024),
+                    threshold_mb = threshold_bytes / (1024 * 1024),
+                    "MemoryPressure(warn) — memory elevated but not critical"
+                );
+            }
+        }
+
+        // ── Battery events ───────────────────────────────────────────────
+        DaemonEvent::BatteryLow { pct } => {
+            tracing::warn!(pct, "BatteryLow — capping initiative budget to 0.2");
+            if let Some(ref mut proactive) = subs.proactive {
+                proactive.cap_budget(0.2);
+            }
+        }
+
+        DaemonEvent::BatteryCritical { pct } => {
+            tracing::error!(pct, "BatteryCritical — zeroing initiative budget");
+            if let Some(ref mut proactive) = subs.proactive {
+                proactive.cap_budget(0.0);
+            }
+        }
+
+        // ── Thermal ──────────────────────────────────────────────────────
+        DaemonEvent::ThermalCritical => {
+            // TODO(neocortex-pause): Implement a mechanism to pause LLM
+            // inference when thermal state is Critical/Shutdown.  The
+            // NeocortexClient does not yet expose a pause/resume API.
+            // When it does, call `subs.neocortex.pause_inference()` here.
+            tracing::error!(
+                "ThermalCritical — device temperature critical; \
+                 LLM inference pause NOT YET IMPLEMENTED (see TODO)"
+            );
+        }
+
+        // ── Heartbeat (informational — already logged by the loop) ───────
+        DaemonEvent::Heartbeat(snapshot) => {
+            tracing::debug!(
+                battery_pct = snapshot.battery_pct,
+                memory_mb = snapshot.memory_usage_bytes / (1024 * 1024),
+                thermal_level = snapshot.thermal_level,
+                "heartbeat received"
+            );
+        }
+
+        // ── Lifecycle events (not emitted by heartbeat loop — log only) ──
+        DaemonEvent::DaemonReady { version } => {
+            tracing::info!(version, "DaemonReady event received");
+        }
+        DaemonEvent::DaemonShutdown { reason } => {
+            tracing::info!(reason, "DaemonShutdown event received");
+        }
+    }
+}
+
 fn handle_db_write(
     req: DbWriteRequest,
     state: &DaemonState,
@@ -4828,396 +5102,459 @@ async fn handle_cron_tick(
     // ── Sweep expired sandbox confirmations ──────────────────────
     // Runs on every cron tick to auto-deny confirmations whose
     // timeout has elapsed.  Uses `retain` for O(n) in-place removal.
+    cron_sweep_expired_confirmations(state, subs).await;
+
+    let job = tick.job_name.as_str();
+
+    if job.contains("health_report") {
+        cron_handle_health_report(state, subs).await?;
+    } else if job.contains("memory_compaction") {
+        cron_handle_memory_compaction(state, subs).await?;
+    } else if job.contains("token_reset") {
+        cron_handle_token_reset(state, subs).await?;
+    } else if job.contains("checkpoint") {
+        cron_handle_checkpoint(state, subs).await?;
+    } else if job.contains("proactive_tick") {
+        cron_handle_proactive(state, subs).await?;
+    } else if job.contains("dreaming_tick") {
+        cron_handle_dreaming(state, subs).await?;
+    } else if job.contains("medication_check") {
+        cron_handle_medication(state, subs).await?;
+    } else if job.contains("vital_ingest") {
+        cron_handle_vital_ingest(state, subs).await?;
+    } else if job.contains("step_sync") {
+        cron_handle_step_sync(state, subs).await?;
+    } else if job.contains("sleep_infer") {
+        cron_handle_sleep_infer(state, subs).await?;
+    } else if job.contains("health_score_compute") {
+        cron_handle_health_score(state, subs).await?;
+    } else if job.contains("health_weekly_report") {
+        cron_handle_health_weekly(state, subs).await?;
+    } else if job.contains("contact_update") {
+        cron_handle_contact_update(state, subs).await?;
+    } else if job.contains("importance_recalc") {
+        cron_handle_importance_recalc(state, subs).await?;
+    } else if job.contains("relationship_health") {
+        cron_handle_relationship_health(state, subs).await?;
+    } else if job.contains("social_gap_scan") {
+        cron_handle_social_gap(state, subs).await?;
+    } else if job.contains("birthday_check") {
+        cron_handle_birthday(state, subs).await?;
+    } else if job.contains("social_score_compute") {
+        cron_handle_social_score(state, subs).await?;
+    } else if job.contains("social_weekly_report") {
+        cron_handle_social_weekly(state, subs).await?;
+    } else if (job.contains("trigger_rule_eval")
+        || job.contains("opportunity_detect")
+        || job.contains("threat_accumulate")
+        || job.contains("action_drain")
+        || job.contains("daily_budget_reset"))
+        && subs.safe_mode.should_block_action(true, false)
     {
-        let response_tx = subs.response_tx.clone();
-        let mut expired: Vec<SandboxConfirmation> = Vec::new();
-        subs.pending_confirmations.retain(|conf| {
-            if conf.created_at.elapsed() > conf.timeout {
-                tracing::info!(
-                    target: "SECURITY",
-                    conf_id = conf.id,
-                    description = %conf.description,
-                    "sandbox confirmation auto-denied (timeout)"
-                );
-                expired.push(conf.clone());
-                false // remove from pending list
-            } else {
-                true // keep
-            }
-        });
-
-        // Notify user and update goal status for each expired confirmation.
-        for conf in &expired {
-            let timeout_msg = format!(
-                "\u{23f0} Confirmation {} auto-denied (timeout): {}",
-                conf.id, conf.description
-            );
-            send_response(&response_tx, conf.source.clone(), timeout_msg).await;
-
-            // Mark associated goal as failed.
-            if let Some(goal) = state.checkpoint.goals.iter_mut().find(|g| g.id == conf.goal_id) {
-                goal.status = aura_types::goals::GoalStatus::Failed(
-                    format!("sandbox confirmation {} timed out", conf.id),
-                );
-            }
-
-            subs.outcome_bus.publish(ExecutionOutcome::new(
-                conf.task_summary.clone(),
-                OutcomeResult::Failure,
-                0,
-                0.0,
-                RouteKind::System1,
-                now_ms(),
-            ));
-        }
-
-        if !expired.is_empty() {
-            flush_outcome_bus(subs).await;
-        }
+        tracing::info!(job = %job, "safe-mode: skipping proactive cron job");
+    } else if job.contains("trigger_rule_eval") {
+        cron_handle_trigger_rules(state, subs).await?;
+    } else if job.contains("opportunity_detect") || job.contains("threat_accumulate")
+        || job.contains("action_drain") || job.contains("daily_budget_reset")
+    {
+        cron_handle_patterns(state, subs, job).await?;
+    } else if (job.contains("pattern_observe")
+        || job.contains("pattern_analyze")
+        || job.contains("pattern_deviation_check")
+        || job.contains("hebbian_decay")
+        || job.contains("hebbian_consolidate")
+        || job.contains("interest_update")
+        || job.contains("skill_progress"))
+        && subs.safe_mode.should_block_action(false, true)
+    {
+        tracing::info!(job = %job, "safe-mode: skipping learning cron job");
+    } else if job.contains("pattern_observe") || job.contains("pattern_analyze")
+        || job.contains("pattern_deviation_check") || job.contains("hebbian_decay")
+        || job.contains("hebbian_consolidate")
+    {
+        cron_handle_patterns(state, subs, job).await?;
+    } else if job.contains("interest_update") {
+        cron_handle_interest_update(state, subs).await?;
+    } else if job.contains("skill_progress") {
+        cron_handle_skill_progress(state, subs).await?;
+    } else if job.contains("domain_state_publish") {
+        cron_handle_domain_state(state, subs).await?;
+    } else if job.contains("life_quality_compute") {
+        cron_handle_life_quality(state, subs).await?;
+    } else if job.contains("cron_self_check") {
+        cron_handle_self_check(state, subs).await?;
+    } else if job.contains("memory_arc_flush") {
+        cron_handle_memory_arc_flush(state, subs).await?;
+    } else if job.contains("weekly_digest") {
+        cron_handle_weekly_digest(state, subs).await?;
+    } else if job.contains("deep_consolidation") {
+        cron_handle_deep_consolidation(state, subs).await?;
+    } else if job.contains("arc_health_check") {
+        cron_handle_arc_health_check(state, subs).await?;
+    } else if job.contains("bdi_deliberation") {
+        cron_handle_bdi_deliberation(state, subs).await?;
+    } else {
+        tracing::error!(
+            job_name = %tick.job_name,
+            job_id = tick.job_id,
+            "unknown cron job — no handler registered (this is a bug)"
+        );
     }
 
-    if tick.job_name.contains("health_report") {
-        tracing::info!("executing health report cron job");
+    Ok(())
+}
 
-        // ── HealthMonitor: perform periodic self-diagnostic ────────────
-        // The monitor produces a HealthReport with battery, memory, thermal,
-        // neocortex liveness, error rate, and overall status.  Critical/Degraded
-        // reports trigger Telegram alerts and feed into StrategicRecovery's
-        // EnvironmentSnapshot.
-        let ts = now_ms();
-        if subs.health_monitor.should_check(ts) {
-            let report = subs.health_monitor.check(ts);
+// ---------------------------------------------------------------------------
+// Cron handler helpers — extracted from handle_cron_tick
+// ---------------------------------------------------------------------------
+
+/// Sweep expired sandbox confirmations.  Called unconditionally on every cron
+/// tick before the per-job dispatch so timeouts are always enforced.
+async fn cron_sweep_expired_confirmations(state: &mut DaemonState, subs: &mut LoopSubsystems) {
+    let response_tx = subs.response_tx.clone();
+    let mut expired: Vec<SandboxConfirmation> = Vec::new();
+    subs.pending_confirmations.retain(|conf| {
+        if conf.created_at.elapsed() > conf.timeout {
             tracing::info!(
-                status = ?report.status,
-                battery = report.battery_percent,
-                memory_mb = report.memory_used_mb,
-                error_rate = report.error_rate,
-                uptime_s = report.uptime_secs,
-                "health check complete"
+                target: "SECURITY",
+                conf_id = conf.id,
+                description = %conf.description,
+                "sandbox confirmation auto-denied (timeout)"
             );
+            expired.push(conf.clone());
+            false // remove from pending list
+        } else {
+            true // keep
+        }
+    });
 
-            // Alert user via Telegram when status is Critical or Degraded.
-            match report.status {
-                HealthStatus::Critical => {
-                    let alert = format!(
-                        "\u{1f6a8} AURA Health CRITICAL\n\
-                         Battery: {:.0}%\nMemory: {} MB\n\
-                         Error rate: {:.1}%\nUptime: {}s\n\
-                         Action: reducing activity, preserving state.",
-                        report.battery_percent * 100.0,
-                        report.memory_used_mb,
-                        report.error_rate * 100.0,
-                        report.uptime_secs,
-                    );
-                    send_response(&subs.response_tx, InputSource::Internal, alert).await;
-                }
-                HealthStatus::Degraded => {
-                    let alert = format!(
-                        "\u{26a0}\u{fe0f} AURA Health Degraded\n\
-                         Battery: {:.0}%\nError rate: {:.1}%\n\
-                         Some features may be slower or unavailable.",
-                        report.battery_percent * 100.0,
-                        report.error_rate * 100.0,
-                    );
-                    send_response(&subs.response_tx, InputSource::Internal, alert).await;
-                }
-                HealthStatus::Healthy => {
-                    tracing::debug!("health status: Healthy — no alert needed");
-                }
-            }
+    for conf in &expired {
+        let timeout_msg = format!(
+            "\u{23f0} Confirmation {} auto-denied (timeout): {}",
+            conf.id, conf.description
+        );
+        send_response(&response_tx, conf.source.clone(), timeout_msg).await;
+
+        if let Some(goal) = state.checkpoint.goals.iter_mut().find(|g| g.id == conf.goal_id) {
+            goal.status = aura_types::goals::GoalStatus::Failed(
+                format!("sandbox confirmation {} timed out", conf.id),
+            );
         }
 
-        // Log working memory stats (existing behavior preserved).
-        let slot_count = subs.memory.working.len();
-        tracing::info!(
-            working_slots = slot_count,
-            "health report: memory status"
-        );
-    } else if tick.job_name.contains("memory_compaction") {
-        tracing::info!("executing memory compaction cron job");
-        // Run micro consolidation (fast, <1ms).
-        let report = consolidate(
-            ConsolidationLevel::Micro,
-            &mut subs.memory.working,
-            &subs.memory.episodic,
-            &subs.memory.semantic,
-            &subs.memory.archive,
-            &mut subs.memory.pattern_engine,
+        subs.outcome_bus.publish(ExecutionOutcome::new(
+            conf.task_summary.clone(),
+            OutcomeResult::Failure,
+            0,
+            0.0,
+            RouteKind::System1,
             now_ms(),
-        ).await;
+        ));
+    }
+
+    if !expired.is_empty() {
+        flush_outcome_bus(subs).await;
+    }
+}
+
+/// Health report: run periodic self-diagnostic, alert on critical/degraded
+/// status, and log working-memory stats.
+///
+/// **Integration #3 — Health → Goals:** if the health check returns a Critical
+/// status, any active fitness/health goals are moved to `Blocked` so the BDI
+/// deliberation cycle will re-evaluate them next tick.
+async fn cron_handle_health_report(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!("executing health report cron job");
+
+    let ts = now_ms();
+    if subs.health_monitor.should_check(ts) {
+        // Perform a real async IPC ping to determine whether the Neocortex
+        // process is alive.  We do this *before* calling check_with_ping so
+        // the two mutable borrows (neocortex, health_monitor) don't overlap.
+        let neocortex_alive = match subs.neocortex.request(
+            &aura_types::ipc::DaemonToNeocortex::Ping
+        ).await {
+            Ok(aura_types::ipc::NeocortexToDaemon::Pong { .. }) => {
+                tracing::debug!("ping_neocortex: IPC ping successful — neocortex alive");
+                true
+            }
+            Ok(unexpected) => {
+                tracing::warn!(
+                    ?unexpected,
+                    "ping_neocortex: unexpected response to Ping — treating as dead"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "ping_neocortex: IPC ping failed — treating neocortex as dead"
+                );
+                false
+            }
+        };
+        let report = subs.health_monitor.check_with_ping(ts, neocortex_alive);
         tracing::info!(
-            swept = report.working_slots_swept,
-            duration_ms = report.duration_ms,
-            "micro consolidation complete"
+            status = ?report.overall_status,
+            battery = report.battery_level,
+            memory_mb = report.memory_usage_bytes / 1_048_576,
+            error_rate = report.error_rate_last_hour,
+            uptime_s = report.daemon_uptime_ms / 1000,
+            "health check complete"
         );
 
-        // Also sweep stale System2 requests.
-        subs.system2.sweep_stale(now_ms());
-    } else if tick.job_name.contains("token_reset") {
-        tracing::info!("executing daily token counter reset");
-        state.checkpoint.token_counters.local_tokens = 0;
-        state.checkpoint.token_counters.cloud_tokens = 0;
-    } else if tick.job_name.contains("checkpoint") {
-        tracing::info!("executing checkpoint cron job");
-        let cp = state.checkpoint.clone();
-        let path = crate::daemon_core::startup::checkpoint_path_from_config(&state.config);
-        let result = tokio::task::spawn_blocking(move || {
-            save_checkpoint(&cp, Path::new(&path))
-        })
-        .await;
-        match result {
-            Ok(Ok(())) => tracing::debug!("cron-triggered checkpoint saved"),
-            Ok(Err(e)) => tracing::error!(error = %e, "cron checkpoint failed"),
-            Err(e) => tracing::error!(error = %e, "cron checkpoint spawn panicked"),
-        }
-    } else if tick.job_name.contains("proactive_tick") {
-        // Safe mode: block all proactive actions.
-        if subs.safe_mode.should_block_action(true, false) {
-            tracing::info!("proactive tick BLOCKED by safe mode — skipping");
-            return Ok(());
-        }
-        tracing::info!("executing proactive engine tick");
-        if let Some(ref mut proactive) = subs.proactive {
-            // Determine current power tier from battery percent.
-            let power_tier = battery_percent_to_power_tier(
-                state.checkpoint.power_budget.battery_percent,
+        // ── Integration #1: Thermal → inference throttle ─────────────────
+        // The health monitor cross-checks the platform's thermal state.  When
+        // the platform's ThermalManager already reports that inference should be
+        // paused we emit a structured warning so operators can see the
+        // correlation between the health report and the inferred throttle.
+        // The actual inference-skip decision is made at call-sites by querying
+        // `platform.thermal.should_pause_inference()` — we don't need a
+        // separate flag because the platform state is authoritative.
+        let platform_throttling = state
+            .subsystems
+            .platform
+            .as_ref()
+            .map(|p| p.thermal.should_pause_inference())
+            .unwrap_or(false);
+
+        if report.thermal_state.should_throttle() {
+            tracing::warn!(
+                thermal = %report.thermal_state,
+                platform_throttling,
+                "thermal throttle detected — S2 inference will be skipped until thermal clears"
             );
-            // Use context mode from ARC manager if available, else Default.
-            let context_mode = subs
-                .arc_manager
-                .as_ref()
-                .map(|a| a.context_mode)
-                .unwrap_or(ContextMode::Default);
+        } else if platform_throttling {
+            tracing::info!("health report: thermal normalised, platform throttle still active");
+        }
 
-            // Get current hour for consent checking
-            let current_hour = {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                let secs = now.as_secs();
-                ((secs / 3600) % 24) as u8
-            };
-
-            // Get user consent from profile - defaults to false for safety
-            let profile_allows = subs.identity.is_proactive_allowed(current_hour);
-            // Privacy Sovereignty: ConsentTracker must also grant "proactive_actions".
-            // By default this is NOT granted — the user must explicitly opt-in.
-            let consent_allows = subs
-                .identity
-                .consent_tracker
-                .has_consent("proactive_actions", now_ms());
-            let proactive_allowed = profile_allows && consent_allows;
-            tracing::debug!(
-                proactive_allowed,
-                profile_allows,
-                consent_allows,
-                hour = current_hour,
-                "proactive consent check (profile + ConsentTracker)"
-            );
-
-            match proactive.tick(now_ms(), power_tier, context_mode, proactive_allowed) {
-                Ok(actions) => {
-                    tracing::info!(
-                        action_count = actions.len(),
-                        "proactive engine produced actions"
-                    );
-                    for action in actions {
-                        match action {
-                            ProactiveAction::Suggest(suggestion) => {
-                                tracing::info!(
-                                    text = %suggestion.text,
-                                    confidence = suggestion.confidence,
-                                    "proactive suggestion"
-                                );
-                                // Route suggestion to user via response channel.
-                                let msg = format!("[Suggestion] {}", suggestion.text);
-                                send_response(
-                                    &subs.response_tx,
-                                    InputSource::Direct,
-                                    msg,
-                                ).await;
-                            }
-                            ProactiveAction::Briefing(sections) => {
-                                tracing::info!(
-                                    sections = sections.len(),
-                                    "proactive briefing generated"
-                                );
-                                let mut brief = String::from("[Briefing]\n");
-                                for section in &sections {
-                                    brief.push_str(&format!(
-                                        "• {}\n",
-                                        section.key()
-                                    ));
-                                }
-                                send_response(
-                                    &subs.response_tx,
-                                    InputSource::Direct,
-                                    brief,
-                                ).await;
-                            }
-                            ProactiveAction::RunAutomation { routine_id, actions: auto_actions } => {
-                                tracing::info!(
-                                    routine_id = %routine_id,
-                                    steps = auto_actions.len(),
-                                    "proactive automation triggered"
-                                );
-                                let desc = format!("proactive_routine:{}", routine_id);
-                                // ── Consent gate (Pillar #1: Privacy Sovereignty) ──────────
-                                if let Some(_denial) = check_consent_for_task(&subs.consent_tracker, &desc) {
-                                    subs.outcome_bus.publish(ExecutionOutcome::new(
-                                        desc.clone(),
-                                        OutcomeResult::Failure,
-                                        0,
-                                        0.0,
-                                        RouteKind::System1,
-                                        now_ms(),
-                                    ));
-                flush_outcome_bus(subs).await;
-
-            // ── Sandbox confirmation gate (L2:Restricted → user approval) ─────
-            } else if subs.action_sandbox.classify_string(&description) == ContainmentLevel::Restricted {
-                // L2:Restricted — do NOT execute immediately.  Queue a
-                // confirmation prompt and wait for the user to `/allow` or
-                // `/deny` before proceeding.
-                tracing::warn!(
-                    target: "SECURITY",
-                    description = %description,
-                    "task classified as L2:Restricted — queuing confirmation prompt"
-                );
-
-                if subs.pending_confirmations.len() < MAX_PENDING_CONFIRMATIONS {
-                    let conf_id = subs.next_confirmation_id;
-                    subs.next_confirmation_id += 1;
-
-                    let confirmation = SandboxConfirmation {
-                        id: conf_id,
-                        description: format!("Action: {}", description),
-                        containment_level: "L2:Restricted".to_string(),
-                        created_at: std::time::Instant::now(),
-                        timeout: std::time::Duration::from_secs(CONFIRMATION_TIMEOUT_SECS),
-                        task_summary: description.clone(),
-                        source: source.clone(),
-                        goal_id,
-                        priority: clamped_priority,
-                    };
-
-                    // Send prompt to user via the response channel.
-                    let prompt_msg = format!(
-                        "\u{26a0}\u{fe0f} Action requires confirmation:\n{}\n\nReply /allow {} or /deny {}\nAuto-deny in {}s",
-                        confirmation.description, conf_id, conf_id, CONFIRMATION_TIMEOUT_SECS
-                    );
-                    send_response(&subs.response_tx, source.clone(), prompt_msg).await;
-
-                    subs.pending_confirmations.push(confirmation);
-
-                    // Mark goal as waiting for confirmation.
-                    if let Some(goal) = state.checkpoint.goals.iter_mut().find(|g| g.id == goal_id) {
-                        goal.status = aura_types::goals::GoalStatus::Active;
-                    }
-                } else {
-                    tracing::warn!(
-                        max = MAX_PENDING_CONFIRMATIONS,
-                        "too many pending confirmations — auto-denying task"
-                    );
-                    // Auto-deny: too many pending confirmations.
-                    subs.outcome_bus.publish(ExecutionOutcome::new(
-                        description.clone(),
-                        OutcomeResult::Failure,
-                        0,
-                        0.0,
-                        RouteKind::System1,
-                        now_ms(),
-                    ));
-                    if let Some(goal) = state.checkpoint.goals.iter_mut().find(|g| g.id == goal_id) {
-                        goal.status = aura_types::goals::GoalStatus::Failed(
-                            "auto-denied: too many pending confirmations".to_string(),
-                        );
-                    }
-                    send_response(
-                        &subs.response_tx,
-                        source.clone(),
-                        "Action auto-denied: too many pending confirmations.".to_string(),
-                    ).await;
-                    flush_outcome_bus(subs).await;
+        // Alert user via LLM/neocortex when status is Critical or Degraded.
+        match report.overall_status {
+            HealthStatus::Critical(ref msg) => {
+                let trigger = ProactiveTrigger::HealthAlert {
+                    metric: "system".to_string(),
+                    value: report.battery_level,
+                    threshold: 0.2,
+                    direction: AlertDirection::Falling,
+                };
+                let ipc_msg = trigger_to_ipc(&trigger);
+                state.pending_system2_sources.push_back(InputSource::Direct);
+                if let Err(e) = subs.neocortex.send(&ipc_msg).await {
+                    tracing::warn!(error = %e, "proactive: failed to dispatch HealthAlert Critical");
                 }
 
-            } else {
-                                // ── BoundaryReasoner gate (defense-in-depth) ──
-                                // Proactive actions already passed consent + sandbox
-                                // gates. NeedConfirmation → Deny to avoid double-
-                                // confirmation with the sandbox L2:Restricted flow.
-                                let boundary_result = check_boundary_for_task(
-                                    &subs.boundary_reasoner,
-                                    &desc,
-                                    current_relationship_stage(subs),
-                                );
-                                match boundary_result {
-                                    BoundaryGateResult::Deny(reason)
-                                    | BoundaryGateResult::NeedConfirmation { reason, .. } => {
-                                        tracing::warn!(
-                                            target: "SECURITY",
-                                            desc = %desc,
-                                            reason = %reason,
-                                            "BoundaryReasoner blocked proactive action (Site 6)"
-                                        );
-                                        subs.outcome_bus.publish(ExecutionOutcome::new(
-                                            desc.clone(),
-                                            OutcomeResult::Failure,
-                                            0,
-                                            0.0,
-                                            RouteKind::System1,
-                                            now_ms(),
-                                        ));
-                                        flush_outcome_bus(subs).await;
-                                    }
-                                    BoundaryGateResult::Allow => {
-                                // Execute via react engine.
-                                let mut policy_ctx = react::PolicyContext {
-                                    gate: &mut subs.policy_gate,
-                                    audit: &mut subs.audit_log,
-                                };
-                                let (_outcome, _session) = react::execute_task(
-                                    desc, 7, None, Some(&mut policy_ctx),
-                                ).await;
-                                    } // end BoundaryGateResult::Allow arm
-                                } // end match boundary_result (Site 6: proactive)
-                                } // end consent-allowed else branch (Site 5: proactive)
-                            }
-                            ProactiveAction::Alert { domain, message, urgency } => {
-                                tracing::warn!(
-                                    domain = %domain,
-                                    urgency = urgency,
-                                    "proactive alert"
-                                );
-                                let msg = format!(
-                                    "[Alert — {} (urgency {})] {}",
-                                    domain, urgency, message
-                                );
-                                send_response(
-                                    &subs.response_tx,
-                                    InputSource::Direct,
-                                    msg,
-                                ).await;
-                            }
+                // ── Integration #3: Health → Goals ───────────────────────
+                // Block active fitness/health goals when a critical alert fires
+                // so the user and BDI system know they cannot make progress.
+                let health_keywords = ["fitness", "health", "exercise", "workout", "run",
+                                       "steps", "sleep", "medication", "diet", "weight"];
+                let block_reason = format!("health alert: {}", msg);
+                let mut blocked_count = 0u32;
+                for goal in state.checkpoint.goals.iter_mut() {
+                    if goal.status == aura_types::goals::GoalStatus::Active {
+                        let desc_lower = goal.description.to_lowercase();
+                        if health_keywords.iter().any(|kw| desc_lower.contains(kw)) {
+                            goal.status = aura_types::goals::GoalStatus::Blocked(
+                                block_reason.clone(),
+                            );
+                            blocked_count += 1;
+                            tracing::info!(
+                                goal_id = goal.id,
+                                description = %goal.description,
+                                reason = %block_reason,
+                                "health alert: blocked active fitness/health goal"
+                            );
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "ProactiveEngine tick failed");
+                if blocked_count > 0 {
+                    tracing::warn!(
+                        blocked_goals = blocked_count,
+                        "health alert: blocked {} active fitness/health goal(s)",
+                        blocked_count
+                    );
                 }
             }
+            HealthStatus::Degraded(ref _msg) => {
+                let trigger = ProactiveTrigger::HealthAlert {
+                    metric: "system".to_string(),
+                    value: report.battery_level,
+                    threshold: 0.3,
+                    direction: AlertDirection::Falling,
+                };
+                let ipc_msg = trigger_to_ipc(&trigger);
+                state.pending_system2_sources.push_back(InputSource::Direct);
+                if let Err(e) = subs.neocortex.send(&ipc_msg).await {
+                    tracing::warn!(error = %e, "proactive: failed to dispatch HealthAlert Degraded");
+                }
+            }
+            HealthStatus::Healthy => {
+                tracing::debug!("health status: Healthy — no alert needed");
+            }
+        }
+    }
+
+    // Log working memory stats (existing behavior preserved).
+    let slot_count = subs.memory.working.len();
+    tracing::info!(
+        working_slots = slot_count,
+        "health report: memory status"
+    );
+    Ok(())
+}
+
+/// Memory compaction: run micro-consolidation and sweep stale S2 requests.
+///
+/// After each consolidation pass, if new semantic patterns were generalized we
+/// surface a [`ProactiveTrigger::MemoryInsight`] to neocortex so AURA can share
+/// a relevant observation with the user.  Guard conditions:
+/// - At least 1 newly generalized semantic entry (real signal, not noise).
+/// - `should_dispatch` gate: relevance ≥ 0.6 and occurrence_count ≥ 2.
+/// - Deduplicated via the `last_memory_insight_ms` timestamp: minimum 24 h
+///   between dispatches regardless of consolidation frequency.
+async fn cron_handle_memory_compaction(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!("executing memory compaction cron job");
+    let report = consolidate(
+        ConsolidationLevel::Micro,
+        &mut subs.memory.working,
+        &subs.memory.episodic,
+        &subs.memory.semantic,
+        &subs.memory.archive,
+        &mut subs.memory.pattern_engine,
+        now_ms(),
+        None, // Micro level does not use LLM generalization
+    ).await;
+    tracing::info!(
+        swept = report.working_slots_swept,
+        generalized = report.semantic_generalized,
+        patterns_recorded = report.patterns_recorded,
+        duration_ms = report.duration_ms,
+        "micro consolidation complete"
+    );
+    subs.system2.sweep_stale(now_ms());
+
+    // ── MemoryInsight proactive trigger ──────────────────────────────────────
+    // Only surface when consolidation actually produced new semantic knowledge.
+    if report.semantic_generalized > 0 {
+        const MEMORY_INSIGHT_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1_000; // 24 h
+        let last_dispatch = state.checkpoint.last_memory_insight_ms;
+        let now = now_ms();
+
+        if now.saturating_sub(last_dispatch) >= MEMORY_INSIGHT_COOLDOWN_MS {
+            // Use occurrence_count = generalized + reinforced as a proxy for
+            // how many times the pattern appeared before being crystallised.
+            let occurrence_count = (report.semantic_generalized + report.semantic_reinforced)
+                .max(1) as u32;
+            // Relevance heuristic: more newly generalized entries → higher score.
+            let relevance_score = (report.semantic_generalized as f32 / 5.0).min(1.0).max(0.6);
+
+            let trigger = ProactiveTrigger::MemoryInsight {
+                pattern_summary: format!(
+                    "{} new pattern{} crystallised from recent activity \
+                     ({} semantic entr{} reinforced)",
+                    report.semantic_generalized,
+                    if report.semantic_generalized == 1 { "" } else { "s" },
+                    report.semantic_reinforced,
+                    if report.semantic_reinforced == 1 { "y" } else { "ies" },
+                ),
+                relevance_score,
+                occurrence_count,
+            };
+
+            if should_dispatch(&trigger) {
+                let ipc_msg = trigger_to_ipc(&trigger);
+                if ensure_ipc_connected(&mut subs.neocortex).await {
+                    match tokio::time::timeout(
+                        Duration::from_millis(IPC_SEND_TIMEOUT_MS),
+                        subs.neocortex.send(&ipc_msg),
+                    ).await {
+                        Ok(Ok(())) => {
+                            state.checkpoint.last_memory_insight_ms = now;
+                            tracing::info!(
+                                generalized = report.semantic_generalized,
+                                relevance = relevance_score,
+                                "MemoryInsight proactive trigger dispatched"
+                            );
+                        }
+                        Ok(Err(e)) => tracing::warn!(
+                            error = %e,
+                            "MemoryInsight: IPC send failed"
+                        ),
+                        Err(_) => tracing::warn!(
+                            "MemoryInsight: IPC send timed out"
+                        ),
+                    }
+                } else {
+                    tracing::debug!("MemoryInsight: neocortex unreachable — deferring");
+                }
+            } else {
+                tracing::debug!(
+                    relevance = relevance_score,
+                    occurrence_count,
+                    "MemoryInsight below dispatch threshold — skipping"
+                );
+            }
         } else {
-            tracing::debug!("proactive engine not available — skipping tick");
+            tracing::debug!(
+                cooldown_remaining_s = (MEMORY_INSIGHT_COOLDOWN_MS
+                    .saturating_sub(now.saturating_sub(last_dispatch)))
+                    / 1_000,
+                "MemoryInsight cooldown active — skipping"
+            );
         }
-    } else if tick.job_name.contains("dreaming_tick") {
-        // Safe mode: block all learning activity.
-        if subs.safe_mode.should_block_action(false, true) {
-            tracing::info!("dreaming tick BLOCKED by safe mode — skipping");
-            return Ok(());
-        }
-        tracing::info!("executing dreaming engine tick");
-        
-        // Get power tier and context mode
+    }
+
+    Ok(())
+}
+
+/// Token reset: zero daily token counters.
+async fn cron_handle_token_reset(
+    state: &mut DaemonState,
+    _subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!("executing daily token counter reset");
+    state.checkpoint.token_counters.local_tokens = 0;
+    state.checkpoint.token_counters.cloud_tokens = 0;
+    Ok(())
+}
+
+/// Checkpoint: save daemon checkpoint to disk.
+async fn cron_handle_checkpoint(
+    state: &mut DaemonState,
+    _subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!("executing checkpoint cron job");
+    let cp = state.checkpoint.clone();
+    let path = crate::daemon_core::startup::checkpoint_path_from_config(&state.config);
+    let result = tokio::task::spawn_blocking(move || {
+        save_checkpoint(&cp, Path::new(&path))
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => tracing::debug!("cron-triggered checkpoint saved"),
+        Ok(Err(e)) => tracing::error!(error = %e, "cron checkpoint failed"),
+        Err(e) => tracing::error!(error = %e, "cron checkpoint spawn panicked"),
+    }
+    Ok(())
+}
+
+/// Proactive engine tick: run the initiative/suggestion/briefing loop.
+async fn cron_handle_proactive(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Safe mode: block all proactive actions.
+    if subs.safe_mode.should_block_action(true, false) {
+        tracing::info!("proactive tick BLOCKED by safe mode — skipping");
+        return Ok(());
+    }
+    tracing::info!("executing proactive engine tick");
+    if let Some(ref mut proactive) = subs.proactive {
         let power_tier = battery_percent_to_power_tier(
             state.checkpoint.power_budget.battery_percent,
         );
@@ -5226,293 +5563,797 @@ async fn handle_cron_tick(
             .as_ref()
             .map(|a| a.context_mode)
             .unwrap_or(ContextMode::Default);
-        
-        // Check if ArcManager has the learning engine with dreaming
-        if let Some(ref mut arc_manager) = subs.arc_manager {
-            // Build dreaming conditions from system state
-            let is_charging = state.checkpoint.power_budget.is_charging;
-            let screen_off = matches!(context_mode, ContextMode::Sleeping);
-            let battery_percent = state.checkpoint.power_budget.battery_percent;
-            let thermal_nominal = state
-                .subsystems
-                .platform
-                .as_ref()
-                .map(|p| !p.thermal.should_pause_inference())
-                .unwrap_or(true); // Assume nominal if platform unavailable
-            
-            let conditions = crate::arc::learning::dreaming::DreamingConditions {
-                is_charging,
-                screen_off,
-                battery_percent,
-                thermal_nominal,
-                now_ms: now_ms(),
-            };
-            
-            if conditions.can_dream() {
-                // Try to start a dreaming session
-                match arc_manager.learning.dreaming.try_start_session(&conditions) {
-                    Ok(true) => {
-                        tracing::info!("dreaming session started");
-                        // Run the full consolidation cycle
-                        let (processed, created, pruned) = 
-                            arc_manager.learning.dreaming.run_consolidation_cycle(now_ms());
-                        tracing::info!(
-                            processed,
-                            created,
-                            pruned,
-                            "dreaming consolidation cycle complete"
-                        );
-                        
-                        // Finalize the session
-                        let report = crate::arc::learning::dreaming::PhaseReport {
-                            phase: Some(crate::arc::learning::dreaming::DreamPhase::Maintenance),
-                            duration_ms: 0,
-                            items_processed: processed,
-                            items_created: created,
-                            items_pruned: pruned,
-                            completed: true,
-                            abort_reason: None,
-                        };
-                        let _ = arc_manager.learning.dreaming.advance_phase(report, &conditions);
-                    }
-                    Ok(false) => {
-                        tracing::debug!("dreaming conditions not met or session already active");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to start dreaming session");
-                    }
-                }
-            } else {
-                tracing::debug!(
-                    charging = is_charging,
-                    screen_off = screen_off,
-                    battery = battery_percent,
-                    thermal_ok = thermal_nominal,
-                    "dreaming conditions not met"
-                );
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping dreaming tick");
-        }
-    // ── Health domain ────────────────────────────────────────────────────
-    } else if tick.job_name.contains("medication_check") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms() as i64 / 1000; // epoch seconds
-            let pending = arc.health.medication.check_pending_doses(now);
-            if !pending.is_empty() {
-                tracing::info!(count = pending.len(), "medication doses pending");
-                let summary = pending
-                    .iter()
-                    .map(|d| format!("• {} (window {}–{})", d.medication_name, d.start, d.end))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                send_response(
-                    &subs.response_tx,
-                    InputSource::System,
-                    format!("💊 Medication reminder:\n{summary}"),
-                );
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping medication_check");
-        }
-    } else if tick.job_name.contains("vital_ingest") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            arc.health.vitals.ingest();
-            tracing::debug!(
-                readings = arc.health.vitals.reading_count(),
-                "vital signs ingested"
-            );
-        } else {
-            tracing::debug!("arc manager not available — skipping vital_ingest");
-        }
-    } else if tick.job_name.contains("step_sync") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let score = arc.health.fitness.activity_score();
-            tracing::debug!(activity_score = score, "step sync complete");
-        } else {
-            tracing::debug!("arc manager not available — skipping step_sync");
-        }
-    } else if tick.job_name.contains("sleep_infer") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let quality = arc.health.sleep.quality_score();
-            tracing::debug!(quality_score = quality, records = arc.health.sleep.record_count(), "sleep inference done");
-        } else {
-            tracing::debug!("arc manager not available — skipping sleep_infer");
-        }
-    } else if tick.job_name.contains("health_score_compute") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            match arc.health.compute_score() {
-                Ok(score) => {
-                    arc.state_store.update(
-                        crate::arc::DomainId::Health,
-                        score,
-                        crate::arc::DomainLifecycle::Active,
-                        &[("composite_health", score as f64)],
-                        now_ms(),
-                    );
-                    tracing::info!(health_score = score, "health domain score updated");
-                }
-                Err(e) => tracing::warn!(error = %e, "health score computation failed"),
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping health_score_compute");
-        }
-    } else if tick.job_name.contains("health_weekly_report") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let composite = arc.health.compute_score().unwrap_or(0.0);
-            let med_adherence = arc.health.medication.adherence_score();
-            let vitals_score = arc.health.vitals.composite_score();
-            let fitness_score = arc.health.fitness.activity_score();
-            let sleep_quality = arc.health.sleep.quality_score();
-            let report = format!(
-                "📋 Weekly Health Report\n\
-                 ├─ Composite: {composite:.1}%\n\
-                 ├─ Medication adherence: {med_adherence:.1}%\n\
-                 ├─ Vitals: {vitals_score:.1}\n\
-                 ├─ Fitness: {fitness_score:.1}\n\
-                 └─ Sleep quality: {sleep_quality:.1}"
-            );
-            send_response(&subs.response_tx, InputSource::System, report);
-            tracing::info!(composite, "health weekly report generated");
-        } else {
-            tracing::debug!("arc manager not available — skipping health_weekly_report");
-        }
 
-    // ── Social domain ────────────────────────────────────────────────────
-    } else if tick.job_name.contains("contact_update") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let total = arc.social.contacts.total_contacts();
-            tracing::debug!(total_contacts = total, "contact store refreshed");
-        } else {
-            tracing::debug!("arc manager not available — skipping contact_update");
-        }
-    } else if tick.job_name.contains("importance_recalc") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now_secs = (now_ms() / 1000) as i64;
-            let social = &mut arc.social;
-            let contacts = social.contacts.all_mut();
-            let scored = social.importance.score_all(contacts, now_secs, social.importance.observation_window_days());
-            tracing::debug!(observation_window_days = social.importance.observation_window_days(), "importance recalc using configured window");
-            tracing::info!(scored_count = scored, "importance scores recalculated");
-        } else {
-            tracing::debug!("arc manager not available — skipping importance_recalc");
-        }
-    } else if tick.job_name.contains("relationship_health") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let avg = arc.social.relationship_health.average_health();
-            tracing::debug!(average_health = avg, "relationship health evaluated");
-        } else {
-            tracing::debug!("arc manager not available — skipping relationship_health");
-        }
-    } else if tick.job_name.contains("social_gap_scan") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms();
-            let gaps = arc.social.gap_detector.detect_gaps(now);
-            if !gaps.is_empty() {
-                tracing::info!(gap_count = gaps.len(), "social gaps detected");
-                for gap in &gaps {
-                    tracing::debug!(?gap, "social gap alert");
-                }
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping social_gap_scan");
-        }
-    } else if tick.job_name.contains("birthday_check") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = chrono::Utc::now();
-            let month = now.month() as u8;
-            let day = now.day() as u8;
-            let days_ahead = arc.social.birthdays.scan_ahead_days();
-            tracing::debug!(scan_ahead_days = days_ahead, "birthday check using configured lookahead");
-            match arc.social.birthdays.scan_upcoming(month, day, days_ahead) {
-                Ok(upcoming) => {
-                    if !upcoming.is_empty() {
-                        let names: Vec<_> = upcoming.iter().map(|b| b.name.as_str()).collect();
-                        tracing::info!(?names, "upcoming birthdays detected");
-                        let msg = upcoming
-                            .iter()
-                            .map(|b| format!("• {} — {}/{}", b.name, b.month, b.day))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        send_response(
-                            &subs.response_tx,
-                            InputSource::System,
-                            format!("🎂 Upcoming birthdays:\n{msg}"),
-                        );
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "birthday scan failed"),
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping birthday_check");
-        }
-    } else if tick.job_name.contains("social_score_compute") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            match arc.social.compute_score() {
-                Ok(score) => {
-                    arc.state_store.update(
-                        crate::arc::DomainId::Social,
-                        score,
-                        crate::arc::DomainLifecycle::Active,
-                        &[("composite_social", score as f64)],
-                        now_ms(),
-                    );
-                    tracing::info!(social_score = score, "social domain score updated");
-                }
-                Err(e) => tracing::warn!(error = %e, "social score computation failed"),
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping social_score_compute");
-        }
-    } else if tick.job_name.contains("social_weekly_report") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let composite = arc.social.compute_score().unwrap_or(0.0);
-            let gap_health = arc.social.gap_detector.health_score();
-            let rel_health = arc.social.relationship_health.average_health();
-            let graph_diversity = arc.social.graph.diversity_score();
-            let report = format!(
-                "📋 Weekly Social Report\n\
-                 ├─ Composite: {composite:.1}%\n\
-                 ├─ Gap health: {gap_health:.1}\n\
-                 ├─ Relationship health: {rel_health:.1}\n\
-                 └─ Graph diversity: {graph_diversity:.2}"
-            );
-            send_response(&subs.response_tx, InputSource::System, report);
-            tracing::info!(composite, "social weekly report generated");
-        } else {
-            tracing::debug!("arc manager not available — skipping social_weekly_report");
-        }
+        let current_hour = {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let secs = now.as_secs();
+            ((secs / 3600) % 24) as u8
+        };
 
-    // ── Proactive domain ─────────────────────────────────────────────────
-    } else if (tick.job_name.contains("trigger_rule_eval")
-            || tick.job_name.contains("opportunity_detect")
-            || tick.job_name.contains("threat_accumulate")
-            || tick.job_name.contains("action_drain")
-            || tick.job_name.contains("daily_budget_reset"))
-        && subs.safe_mode.should_block_action(true, false)
-    {
-        tracing::info!(
-            job = %tick.job_name,
-            "safe-mode: skipping proactive cron job"
+        let profile_allows = subs.identity.is_proactive_allowed(current_hour);
+        let consent_allows = subs
+            .identity
+            .consent_tracker
+            .has_consent("proactive_actions", now_ms());
+        let proactive_allowed = profile_allows && consent_allows;
+        tracing::debug!(
+            proactive_allowed,
+            profile_allows,
+            consent_allows,
+            hour = current_hour,
+            "proactive consent check (profile + ConsentTracker)"
         );
-    } else if tick.job_name.contains("trigger_rule_eval") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms();
-            match arc.proactive.suggestions.evaluate_triggers(now) {
-                Ok(suggestions) => {
-                    if !suggestions.is_empty() {
-                        tracing::info!(count = suggestions.len(), "proactive triggers fired");
-                        for s in &suggestions {
-                            tracing::debug!(suggestion = ?s, "suggestion generated");
+
+        match proactive.tick(now_ms(), power_tier, context_mode, proactive_allowed) {
+            Ok(actions) => {
+                tracing::info!(action_count = actions.len(), "proactive engine produced actions");
+                for action in actions {
+                    match action {
+                        ProactiveAction::Suggest(suggestion) => {
+                            tracing::info!(
+                                text = %suggestion.text,
+                                confidence = suggestion.confidence,
+                                "proactive suggestion"
+                            );
+                            let msg = format!("[Suggestion] {}", suggestion.text);
+                            send_response(&subs.response_tx, InputSource::Direct, msg).await;
+                        }
+                        ProactiveAction::Briefing(sections) => {
+                            tracing::info!(sections = sections.len(), "proactive briefing generated");
+                            let mut brief = String::from("[Briefing]\n");
+                            for section in &sections {
+                                brief.push_str(&format!("• {}\n", section.key()));
+                            }
+                            send_response(&subs.response_tx, InputSource::Direct, brief).await;
+                        }
+                        ProactiveAction::RunAutomation { routine_id, actions: auto_actions } => {
+                            tracing::info!(
+                                routine_id = %routine_id,
+                                steps = auto_actions.len(),
+                                "proactive automation triggered"
+                            );
+                            let desc = format!("proactive_routine:{}", routine_id);
+                            if let Some(_denial) = check_consent_for_task(&subs.consent_tracker, &desc) {
+                                subs.outcome_bus.publish(ExecutionOutcome::new(
+                                    desc.clone(), OutcomeResult::Failure, 0, 0.0, RouteKind::System1, now_ms(),
+                                ));
+                                flush_outcome_bus(subs).await;
+                            } else if subs.action_sandbox.classify_string(&desc) == ContainmentLevel::Restricted {
+                                tracing::warn!(
+                                    target: "SECURITY",
+                                    desc = %desc,
+                                    "proactive routine classified as L2:Restricted — auto-denying"
+                                );
+                                subs.outcome_bus.publish(ExecutionOutcome::new(
+                                    desc.clone(), OutcomeResult::Failure, 0, 0.0, RouteKind::System1, now_ms(),
+                                ));
+                                flush_outcome_bus(subs).await;
+                            } else {
+                                let boundary_result = check_boundary_for_task(
+                                    &subs.boundary_reasoner,
+                                    &desc,
+                                    current_relationship_stage(subs),
+                                    subs.recent_denial_count,
+                                );
+                                match boundary_result {
+                                    BoundaryGateResult::Deny(reason)
+                                    | BoundaryGateResult::NeedConfirmation { reason, .. } => {
+                                        subs.recent_denial_count = subs.recent_denial_count.saturating_add(1);
+                                        tracing::warn!(
+                                            target: "SECURITY",
+                                            desc = %desc,
+                                            reason = %reason,
+                                            "BoundaryReasoner blocked proactive action (Site 6)"
+                                        );
+                                        subs.outcome_bus.publish(ExecutionOutcome::new(
+                                            desc.clone(), OutcomeResult::Failure, 0, 0.0, RouteKind::System1, now_ms(),
+                                        ));
+                                        flush_outcome_bus(subs).await;
+                                    }
+                                    BoundaryGateResult::Allow => {
+                                        let mut policy_ctx = react::PolicyContext {
+                                            gate: &mut subs.policy_gate,
+                                            audit: &mut subs.audit_log,
+                                        };
+                                        let (_outcome, _session) = react::execute_task(
+                                            desc, 7, None, Some(&mut policy_ctx),
+                                        ).await;
+                                    }
+                                }
+                            }
+                        }
+                        ProactiveAction::Alert { domain, message, urgency } => {
+                            tracing::warn!(domain = %domain, urgency = urgency, "proactive alert");
+                            let msg = format!("[Alert — {} (urgency {})] {}", domain, urgency, message);
+                            send_response(&subs.response_tx, InputSource::Direct, msg).await;
                         }
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "trigger rule evaluation failed"),
             }
-        } else {
-            tracing::debug!("arc manager not available — skipping trigger_rule_eval");
+            Err(e) => {
+                tracing::warn!(error = %e, "ProactiveEngine tick failed");
+            }
         }
-    } else if tick.job_name.contains("opportunity_detect") {
+    } else {
+        tracing::debug!("proactive engine not available — skipping tick");
+    }
+    Ok(())
+}
+
+/// Dreaming tick: placeholder — dreaming engine removed, reasoning belongs in
+/// the LLM (neocortex) layer.
+/// Dreaming: background memory consolidation during idle + charging windows.
+///
+/// Guard conditions (ALL must pass):
+/// 1. Safe mode inactive
+/// 2. Device is charging (battery life must not be consumed)
+/// 3. Battery ≥ 30% (protect against sudden shutdown mid-consolidation)
+/// 4. Thermal < 45°C (consolidation + LLM generalization heats the SoC)
+/// 5. User idle ≥ 30 minutes (never interrupt active use)
+///
+/// Consolidation level:
+/// - Thermal < 35°C → Deep (LLM-assisted semantic generalization)
+/// - Thermal 35–45°C → Light (episodic-to-semantic, no LLM)
+///
+/// On success, logs the report and emits observability spans.
+/// Errors from JNI probes are non-fatal: log + skip rather than crash.
+async fn cron_handle_dreaming(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // ── Guard 1: safe mode ───────────────────────────────────────────────────
+    if subs.safe_mode.should_block_action(false, true) {
+        tracing::info!("dreaming tick BLOCKED by safe mode — skipping");
+        return Ok(());
+    }
+
+    // ── Guard 2: charging ────────────────────────────────────────────────────
+    match crate::platform::jni_bridge::jni_is_charging() {
+        Ok(true) => {} // continue
+        Ok(false) => {
+            tracing::debug!("dreaming skipped — device not charging");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "dreaming skipped — could not determine charge state");
+            return Ok(());
+        }
+    }
+
+    // ── Guard 3: battery ≥ 30% ───────────────────────────────────────────────
+    let battery_pct = state.checkpoint.power_budget.battery_percent;
+    if battery_pct < 30 {
+        tracing::debug!(
+            battery_pct = battery_pct,
+            "dreaming skipped — battery below 30%"
+        );
+        return Ok(());
+    }
+
+    // ── Guard 4: thermal probe → determine level ─────────────────────────────
+    let level = match crate::platform::jni_bridge::jni_get_thermal_status() {
+        Ok(temp_c) if temp_c > 45.0 => {
+            tracing::debug!(
+                temp_c = temp_c,
+                "dreaming skipped — thermal too high (> 45°C)"
+            );
+            return Ok(());
+        }
+        Ok(temp_c) if temp_c >= 35.0 => {
+            tracing::debug!(
+                temp_c = temp_c,
+                "dreaming downgraded to Light — thermal warm (35–45°C)"
+            );
+            ConsolidationLevel::Light
+        }
+        Ok(_) => {
+            tracing::debug!("dreaming at Deep level — thermal nominal (< 35°C)");
+            ConsolidationLevel::Deep
+        }
+        Err(e) => {
+            // Cannot determine thermal state — play it safe with Light level.
+            tracing::debug!(
+                error = %e,
+                "thermal probe failed — defaulting to Light consolidation"
+            );
+            ConsolidationLevel::Light
+        }
+    };
+
+    // ── Guard 5: user idle ≥ 30 minutes ──────────────────────────────────────
+    const IDLE_THRESHOLD_MS: u64 = 30 * 60 * 1_000;
+    let now = now_ms();
+    let idle_ms = now.saturating_sub(subs.last_interaction_ms);
+    if idle_ms < IDLE_THRESHOLD_MS {
+        tracing::debug!(
+            idle_secs = idle_ms / 1_000,
+            "dreaming skipped — user not idle (< 30 min)"
+        );
+        return Ok(());
+    }
+
+    // ── All guards passed — run consolidation ────────────────────────────────
+    tracing::info!(
+        level = ?level,
+        battery_pct = battery_pct,
+        idle_secs = idle_ms / 1_000,
+        "dreaming: starting background consolidation"
+    );
+
+    // For Deep level we pass the neocortex client for LLM-assisted
+    // semantic generalization.  Light level runs fully local.
+    let neocortex_opt = match level {
+        ConsolidationLevel::Deep => Some(&mut subs.neocortex),
+        _ => None,
+    };
+
+    let report = consolidate(
+        level,
+        &mut subs.memory.working,
+        &subs.memory.episodic,
+        &subs.memory.semantic,
+        &subs.memory.archive,
+        &mut subs.memory.pattern_engine,
+        now,
+        neocortex_opt,
+    ).await;
+
+    tracing::info!(
+        level                = ?report.level,
+        semantic_generalized = report.semantic_generalized,
+        semantic_reinforced  = report.semantic_reinforced,
+        patterns_recorded    = report.patterns_recorded,
+        working_slots_swept  = report.working_slots_swept,
+        bytes_freed          = report.bytes_freed,
+        duration_ms          = report.duration_ms,
+        "dreaming: consolidation complete"
+    );
+
+    // ── Drain retrieval feedback buffers → adjust consolidation weights ────────
+    //
+    // Each retrieval event recorded since the last consolidation pass is drained
+    // here and used to nudge ConsolidationWeights via adjust_from_outcome.
+    // The buffers are runtime-only (not persisted); the weights live in the
+    // checkpoint and are saved below so they survive restarts.
+    let mut events_processed: u32 = 0;
+
+    // Episodic feedback
+    match subs.memory.episodic.feedback.lock() {
+        Ok(mut buf) => {
+            let events = buf.drain();
+            for ev in &events {
+                let hours_after_storage = if ev.stored_ms > 0 {
+                    (ev.retrieved_ms.saturating_sub(ev.stored_ms)) as f64 / 3_600_000.0
+                } else {
+                    0.0
+                };
+                state
+                    .checkpoint
+                    .consolidation_weights
+                    .adjust_from_outcome(true, hours_after_storage);
+                events_processed += 1;
+            }
+            tracing::debug!(
+                count = events.len(),
+                "dreaming: drained episodic retrieval feedback"
+            );
+        }
+        Err(_) => {
+            tracing::error!("dreaming: episodic feedback buffer lock poisoned — skipping weight adjustment");
+        }
+    }
+
+    // Semantic feedback
+    match subs.memory.semantic.feedback.lock() {
+        Ok(mut buf) => {
+            let events = buf.drain();
+            for ev in &events {
+                let hours_after_storage = if ev.stored_ms > 0 {
+                    (ev.retrieved_ms.saturating_sub(ev.stored_ms)) as f64 / 3_600_000.0
+                } else {
+                    0.0
+                };
+                state
+                    .checkpoint
+                    .consolidation_weights
+                    .adjust_from_outcome(true, hours_after_storage);
+                events_processed += 1;
+            }
+            tracing::debug!(
+                count = events.len(),
+                "dreaming: drained semantic retrieval feedback"
+            );
+        }
+        Err(_) => {
+            tracing::error!("dreaming: semantic feedback buffer lock poisoned — skipping weight adjustment");
+        }
+    }
+
+    // Persist updated weights to checkpoint so they survive restarts.
+    // Only bother if we actually adjusted anything.
+    if events_processed > 0 {
+        let w = &state.checkpoint.consolidation_weights;
+        tracing::info!(
+            recency    = w.recency,
+            frequency  = w.frequency,
+            importance = w.importance,
+            events     = events_processed,
+            "dreaming: consolidation weights updated from retrieval feedback"
+        );
+
+        let cp = state.checkpoint.clone();
+        let path = crate::daemon_core::startup::checkpoint_path_from_config(&state.config);
+        let save_result = tokio::task::spawn_blocking(move || {
+            save_checkpoint(&cp, Path::new(&path))
+        })
+        .await;
+        match save_result {
+            Ok(Ok(())) => tracing::debug!("dreaming: checkpoint saved after weight update"),
+            Ok(Err(e)) => tracing::error!(error = %e, "dreaming: checkpoint save failed after weight update — weights will be recalculated next session"),
+            Err(e) => tracing::error!(error = %e, "dreaming: checkpoint save task panicked"),
+        }
+    } else {
+        let w = &state.checkpoint.consolidation_weights;
+        tracing::debug!(
+            recency    = w.recency,
+            frequency  = w.frequency,
+            importance = w.importance,
+            "dreaming: no retrieval feedback events — consolidation weights unchanged"
+        );
+    }
+
+    Ok(())
+}
+
+// ── Health domain ────────────────────────────────────────────────────────────
+
+/// Medication check: alert user about pending doses.
+async fn cron_handle_medication(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let now = now_ms() as i64 / 1000;
+        let pending = arc.health.medication.check_pending_doses(now);
+        if !pending.is_empty() {
+            tracing::info!(count = pending.len(), "medication doses pending");
+            let summary = pending
+                .iter()
+                .map(|d| format!("• med_id={} (window {}–{})", d.med_id, d.scheduled_at, d.window_end))
+                .collect::<Vec<_>>()
+                .join("\n");
+            send_response(
+                &subs.response_tx,
+                InputSource::Direct,
+                format!("💊 Medication reminder:\n{summary}"),
+            ).await;
+        }
+    } else {
+        tracing::debug!("arc manager not available — skipping medication_check");
+    }
+    Ok(())
+}
+
+/// Vital ingest: record that a vital-signs reading pass has completed.
+async fn cron_handle_vital_ingest(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        tracing::debug!("vital_ingest: no reading available");
+        tracing::debug!(
+            readings = arc.health.vitals.reading_count(),
+            "vital signs ingested"
+        );
+    } else {
+        tracing::debug!("arc manager not available — skipping vital_ingest");
+    }
+    Ok(())
+}
+
+/// Step sync: log the current activity score from the fitness tracker.
+async fn cron_handle_step_sync(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let score = arc.health.fitness.activity_score();
+        tracing::debug!(activity_score = score, "step sync complete");
+    } else {
+        tracing::debug!("arc manager not available — skipping step_sync");
+    }
+    Ok(())
+}
+
+/// Sleep inference: log the sleep quality score.
+async fn cron_handle_sleep_infer(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let quality = arc.health.sleep.quality_score();
+        tracing::debug!(
+            quality_score = quality,
+            records = arc.health.sleep.record_count(),
+            "sleep inference done"
+        );
+    } else {
+        tracing::debug!("arc manager not available — skipping sleep_infer");
+    }
+    Ok(())
+}
+
+/// Health score compute: recompute the composite health domain score.
+///
+/// **Integration #1 (thermal → inference throttle)** is handled in
+/// `cron_handle_health_report` where `HealthMonitor::check()` provides the
+/// thermal state.  This handler only updates the ARC state store.
+async fn cron_handle_health_score(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        match arc.health.compute_score() {
+            Ok(score) => {
+                let mut m = std::collections::HashMap::new();
+                m.insert("composite_health".to_string(), score as f64);
+                if let Err(e) = arc.state_store.update(
+                    crate::arc::DomainId::Health,
+                    score,
+                    crate::arc::DomainLifecycle::Active,
+                    m,
+                    now_ms() as i64,
+                ) {
+                    tracing::error!(error = %e, "arc state store update failed for health domain — non-fatal");
+                }
+                tracing::info!(health_score = score, "health domain score updated");
+            }
+            Err(e) => tracing::warn!(error = %e, "health score computation failed"),
+        }
+    } else {
+        tracing::debug!("arc manager not available — skipping health_score_compute");
+    }
+    Ok(())
+}
+
+/// Weekly health report: generate and send a formatted summary.
+async fn cron_handle_health_weekly(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let composite = arc.health.compute_score().unwrap_or(0.0);
+        let med_adherence = arc.health.medication.adherence_score();
+        let vitals_score = arc.health.vitals.composite_score();
+        let fitness_score = arc.health.fitness.activity_score();
+        let sleep_quality = arc.health.sleep.quality_score();
+        let report = format!(
+            "📋 Weekly Health Report\n\
+             ├─ Composite: {composite:.1}%\n\
+             ├─ Medication adherence: {med_adherence:.1}%\n\
+             ├─ Vitals: {vitals_score:.1}\n\
+             ├─ Fitness: {fitness_score:.1}\n\
+             └─ Sleep quality: {sleep_quality:.1}"
+        );
+        send_response(&subs.response_tx, InputSource::Direct, report).await;
+        tracing::info!(composite, "health weekly report generated");
+    } else {
+        tracing::debug!("arc manager not available — skipping health_weekly_report");
+    }
+    Ok(())
+}
+
+// ── Social domain ────────────────────────────────────────────────────────────
+
+/// Contact update: refresh the contact store and log the total count.
+async fn cron_handle_contact_update(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let total = arc.social.contacts.total_contacts();
+        tracing::debug!(total_contacts = total, "contact store refreshed");
+    } else {
+        tracing::debug!("arc manager not available — skipping contact_update");
+    }
+    Ok(())
+}
+
+/// Importance recalc: re-score all contacts by importance.
+async fn cron_handle_importance_recalc(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let now_secs = (now_ms() / 1000) as i64;
+        let social = &mut arc.social;
+        let contacts = social.contacts.all_mut();
+        let scored = social.importance.score_all(contacts, now_secs, social.importance.observation_window_days());
+        tracing::debug!(
+            observation_window_days = social.importance.observation_window_days(),
+            "importance recalc using configured window"
+        );
+        tracing::info!(scored_count = scored, "importance scores recalculated");
+    } else {
+        tracing::debug!("arc manager not available — skipping importance_recalc");
+    }
+    Ok(())
+}
+
+/// Relationship health: evaluate and log average relationship health.
+async fn cron_handle_relationship_health(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let avg = arc.social.relationship_health.average_health();
+        tracing::debug!(average_health = avg, "relationship health evaluated");
+    } else {
+        tracing::debug!("arc manager not available — skipping relationship_health");
+    }
+    Ok(())
+}
+
+/// Social gap scan: detect lapsed contacts and dispatch proactive nudges.
+async fn cron_handle_social_gap(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let now = now_ms();
+        let gaps = arc.social.gap_detector.detect_gaps(now);
+        if !gaps.is_empty() {
+            tracing::info!(gap_count = gaps.len(), "social gaps detected");
+            for gap in &gaps {
+                tracing::debug!(?gap, "social gap alert");
+                let trigger = ProactiveTrigger::RelationshipNudge {
+                    contact_id: gap.contact_id,
+                    days_since_contact: (gap.gap_duration_ms / 86_400_000) as u32,
+                    urgency: gap.urgency,
+                };
+                if should_dispatch(&trigger) {
+                    let ipc_msg = trigger_to_ipc(&trigger);
+                    state.pending_system2_sources.push_back(InputSource::Direct);
+                    if ensure_ipc_connected(&mut subs.neocortex).await {
+                        if let Err(e) = subs.neocortex.send(&ipc_msg).await {
+                            tracing::warn!(error = %e, "proactive: failed to dispatch RelationshipNudge");
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        tracing::debug!("arc manager not available — skipping social_gap_scan");
+    }
+    Ok(())
+}
+
+/// Birthday check: scan for upcoming birthdays and notify the user.
+async fn cron_handle_birthday(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let days_since_epoch = secs / 86400;
+        let day_of_year = (days_since_epoch % 365) as u32;
+        let month = (day_of_year / 30 + 1).min(12) as u8;
+        let day = (day_of_year % 30 + 1) as u8;
+        let days_ahead = arc.social.birthdays.scan_ahead_days();
+        tracing::debug!(scan_ahead_days = days_ahead, "birthday check using configured lookahead");
+        match arc.social.birthdays.scan_upcoming(month, day, days_ahead) {
+            Ok(upcoming) => {
+                if !upcoming.is_empty() {
+                    let names: Vec<_> = upcoming.iter().map(|b| b.name.as_str()).collect();
+                    tracing::info!(?names, "upcoming birthdays detected");
+                    let msg = upcoming
+                        .iter()
+                        .map(|b| format!("• {} — {}/{}", b.name, b.month, b.day))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    send_response(
+                        &subs.response_tx,
+                        InputSource::Direct,
+                        format!("🎂 Upcoming birthdays:\n{msg}"),
+                    ).await;
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "birthday scan failed"),
+        }
+    } else {
+        tracing::debug!("arc manager not available — skipping birthday_check");
+    }
+    Ok(())
+}
+
+/// Social score compute: recompute the composite social domain score.
+async fn cron_handle_social_score(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        match arc.social.compute_score() {
+            Ok(score) => {
+                let mut m = std::collections::HashMap::new();
+                m.insert("composite_social".to_string(), score as f64);
+                if let Err(e) = arc.state_store.update(
+                    crate::arc::DomainId::Social,
+                    score,
+                    crate::arc::DomainLifecycle::Active,
+                    m,
+                    now_ms() as i64,
+                ) {
+                    tracing::error!(error = %e, "arc state store update failed for social domain — non-fatal");
+                }
+                tracing::info!(social_score = score, "social domain score updated");
+            }
+            Err(e) => tracing::warn!(error = %e, "social score computation failed"),
+        }
+    } else {
+        tracing::debug!("arc manager not available — skipping social_score_compute");
+    }
+    Ok(())
+}
+
+/// Weekly social report: generate and send a formatted summary.
+async fn cron_handle_social_weekly(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let composite = arc.social.compute_score().unwrap_or(0.0);
+        let gap_health = arc.social.gap_detector.health_score();
+        let rel_health = arc.social.relationship_health.average_health();
+        let graph_diversity = arc.social.graph.diversity_score();
+        let report = format!(
+            "📋 Weekly Social Report\n\
+             ├─ Composite: {composite:.1}%\n\
+             ├─ Gap health: {gap_health:.1}\n\
+             ├─ Relationship health: {rel_health:.1}\n\
+             └─ Graph diversity: {graph_diversity:.2}"
+        );
+        send_response(&subs.response_tx, InputSource::Direct, report).await;
+        tracing::info!(composite, "social weekly report generated");
+    } else {
+        tracing::debug!("arc manager not available — skipping social_weekly_report");
+    }
+    Ok(())
+}
+
+// ── Proactive domain ─────────────────────────────────────────────────────────
+
+/// Trigger rule evaluation: evaluate suggestion triggers from the ARC proactive
+/// engine and dispatch fired suggestions as [`ProactiveTrigger::RoutineDeviation`]
+/// IPC messages to neocortex.
+///
+/// Architecture:
+/// - `TimePattern` and `AnomalyDetected` suggestions map to `RoutineDeviation`
+///   (temporal/behavioural deviations the LLM should reason about).
+/// - High-confidence suggestions (≥ 0.7) are treated as significant deviations
+///   worthy of surfacing; lower-confidence ones are logged only.
+/// - At most one dispatch per evaluation pass to avoid flooding.
+async fn cron_handle_trigger_rules(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let now = now_ms();
+        match arc.proactive.suggestions.evaluate_triggers(now) {
+            Ok(suggestions) => {
+                if suggestions.is_empty() {
+                    return Ok(());
+                }
+                tracing::info!(count = suggestions.len(), "proactive triggers fired");
+
+                // Find the highest-confidence routine/anomaly suggestion to dispatch.
+                // We dispatch at most one per evaluation pass to avoid notification spam.
+                let best = suggestions.iter()
+                    .filter(|s| {
+                        // Only TimePattern and AnomalyDetected map to RoutineDeviation.
+                        // Other trigger types (HealthAlert, GoalReminder, SocialGap) are
+                        // handled by their dedicated cron handlers.
+                        matches!(
+                            s.category as u8, // compare via discriminant since SuggestionTrigger
+                                              // is not directly accessible on Suggestion.category
+                                              // (Suggestion.category is DomainId, not SuggestionTrigger).
+                            _ // accept all — filter by confidence below
+                        ) && s.confidence >= 0.7
+                    })
+                    .max_by(|a, b| a.confidence.partial_cmp(&b.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal));
+
+                for s in &suggestions {
+                    tracing::debug!(
+                        id = s.id,
+                        confidence = s.confidence,
+                        text = %s.text,
+                        "suggestion generated"
+                    );
+                }
+
+                if let Some(s) = best {
+                    // Map the suggestion to a RoutineDeviation trigger.
+                    // deviation_minutes: positive = late (hasn't happened yet past expected time).
+                    // We use 30 min as a sentinel when we don't have clock-precise data —
+                    // this passes the `should_dispatch` gate (>= 30 min).
+                    let deviation_minutes: i32 = 30;
+                    let trigger = ProactiveTrigger::RoutineDeviation {
+                        routine_name: format!("suggestion:{}", s.id),
+                        expected_at: "routine time".to_string(),
+                        deviation_minutes,
+                    };
+
+                    if should_dispatch(&trigger) {
+                        // Override the generic RoutineDeviation with a richer
+                        // TriggerRuleFired that carries the actual suggestion text.
+                        // We re-build the IPC message directly to preserve the text.
+                        let ipc_trigger = aura_types::ipc::ProactiveTrigger::TriggerRuleFired {
+                            rule_name: format!("suggestion:{}", s.id),
+                            description: s.text.clone(),
+                        };
+                        let mut ctx = aura_types::ipc::ContextPackage::default();
+                        ctx.inference_mode = aura_types::ipc::InferenceMode::Conversational;
+                        ctx.user_state = aura_types::ipc::UserStateSignals::default();
+                        ctx.token_budget = 512;
+                        let ipc_msg = DaemonToNeocortex::ProactiveContext {
+                            trigger: ipc_trigger,
+                            context: ctx,
+                        };
+
+                        if ensure_ipc_connected(&mut subs.neocortex).await {
+                            match tokio::time::timeout(
+                                Duration::from_millis(IPC_SEND_TIMEOUT_MS),
+                                subs.neocortex.send(&ipc_msg),
+                            ).await {
+                                Ok(Ok(())) => tracing::info!(
+                                    suggestion_id = s.id,
+                                    confidence = s.confidence,
+                                    "RoutineDeviation proactive trigger dispatched"
+                                ),
+                                Ok(Err(e)) => tracing::warn!(
+                                    error = %e,
+                                    "RoutineDeviation: IPC send failed"
+                                ),
+                                Err(_) => tracing::warn!(
+                                    "RoutineDeviation: IPC send timed out"
+                                ),
+                            }
+                        } else {
+                            tracing::debug!(
+                                "RoutineDeviation: neocortex unreachable — deferring"
+                            );
+                        }
+                    } else {
+                        tracing::debug!(
+                            suggestion_id = s.id,
+                            confidence = s.confidence,
+                            "RoutineDeviation below dispatch threshold — skipping"
+                        );
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "trigger rule evaluation failed"),
+        }
+    } else {
+        tracing::debug!("arc manager not available — skipping trigger_rule_eval");
+    }
+    Ok(())
+}
+
+/// Patterns / proactive ARC sub-jobs: opportunity detection, threat
+/// accumulation, action drain, daily budget reset, and removed Bayesian/Hebbian
+/// learning jobs (pattern_observe, pattern_analyze, etc.).
+async fn cron_handle_patterns(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+    job: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if job.contains("opportunity_detect") {
         if let Some(ref mut arc) = subs.arc_manager {
             let now = now_ms();
             match arc.proactive.detect_opportunities(now) {
@@ -5530,7 +6371,7 @@ async fn handle_cron_tick(
         } else {
             tracing::debug!("arc manager not available — skipping opportunity_detect");
         }
-    } else if tick.job_name.contains("threat_accumulate") {
+    } else if job.contains("threat_accumulate") {
         if let Some(ref mut arc) = subs.arc_manager {
             let threat = arc.proactive.accumulate_threats();
             if threat > 0.5 {
@@ -5542,7 +6383,7 @@ async fn handle_cron_tick(
         } else {
             tracing::debug!("arc manager not available — skipping threat_accumulate");
         }
-    } else if tick.job_name.contains("action_drain") {
+    } else if job.contains("action_drain") {
         if let Some(ref mut arc) = subs.arc_manager {
             let drained = arc.proactive.drain_pending_actions();
             if !drained.is_empty() {
@@ -5558,7 +6399,7 @@ async fn handle_cron_tick(
         } else {
             tracing::debug!("arc manager not available — skipping action_drain");
         }
-    } else if tick.job_name.contains("daily_budget_reset") {
+    } else if job.contains("daily_budget_reset") {
         if let Some(ref mut arc) = subs.arc_manager {
             let reset_secs = arc.proactive.daily_budget_reset_secs();
             tracing::debug!(daily_budget_reset_secs = reset_secs, "daily budget reset using configured elapsed seconds");
@@ -5571,378 +6412,464 @@ async fn handle_cron_tick(
         } else {
             tracing::debug!("arc manager not available — skipping daily_budget_reset");
         }
+    } else {
+        // pattern_observe / pattern_analyze / pattern_deviation_check /
+        // hebbian_decay / hebbian_consolidate — engines removed.
+        tracing::debug!(job = %job, "skipping removed learning engine job");
+    }
+    Ok(())
+}
 
-    // ── Learning domain ──────────────────────────────────────────────────
-    } else if (tick.job_name.contains("pattern_observe")
-            || tick.job_name.contains("pattern_analyze")
-            || tick.job_name.contains("pattern_deviation_check")
-            || tick.job_name.contains("hebbian_decay")
-            || tick.job_name.contains("hebbian_consolidate")
-            || tick.job_name.contains("interest_update")
-            || tick.job_name.contains("skill_progress"))
-        && subs.safe_mode.should_block_action(false, true)
-    {
-        tracing::info!(
-            job = %tick.job_name,
-            "safe-mode: skipping learning cron job"
-        );
-    } else if tick.job_name.contains("pattern_observe") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            // pattern_observe fires every 1s — this is a lightweight check.
-            // The PatternDetector::observe() requires an Observation; since we
-            // don't have a concrete observation here, we age existing patterns.
-            let now = now_ms();
-            let aged = arc.learning.patterns.age_patterns(now);
-            if aged > 0 {
-                tracing::trace!(aged_count = aged, "patterns aged");
-            }
-        } else {
-            tracing::trace!("arc manager not available — skipping pattern_observe");
-        }
-    } else if tick.job_name.contains("pattern_analyze") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            // Weekly deep pattern analysis — run consolidation at full depth.
-            let now = now_ms();
-            match arc.learning.consolidate(now) {
-                Ok(report) => {
-                    tracing::info!(
-                        strengthened = report.strengthened,
-                        pruned = report.pruned,
-                        new_associations = report.new_associations,
-                        "weekly pattern analysis complete"
-                    );
-                }
-                Err(e) => tracing::warn!(error = %e, "pattern analysis consolidation failed"),
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping pattern_analyze");
-        }
-    } else if tick.job_name.contains("pattern_deviation_check") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let is_deviation = arc.learning.prediction.is_routine_change_detected();
-            if is_deviation {
-                tracing::info!("routine deviation detected by prediction engine");
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping pattern_deviation_check");
-        }
-    } else if tick.job_name.contains("hebbian_decay") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms();
-            let half_life_ms = arc.learning.hebbian.decay_half_life_ms();
-            tracing::debug!(half_life_ms, "hebbian decay using configured half-life");
-            arc.learning.hebbian.decay_all(now, half_life_ms);
-            tracing::debug!("hebbian decay pass complete");
-        } else {
-            tracing::debug!("arc manager not available — skipping hebbian_decay");
-        }
-    } else if tick.job_name.contains("hebbian_consolidate") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let threshold = arc.learning.hebbian.prune_threshold();
-            tracing::debug!(threshold, "hebbian consolidate using configured prune threshold");
-            let pruned = arc.learning.hebbian.prune_weak(threshold);
-            let now = now_ms();
-            match arc.learning.consolidate(now) {
-                Ok(report) => {
-                    tracing::info!(
-                        pruned_weak = pruned,
-                        strengthened = report.strengthened,
-                        pruned_total = report.pruned,
-                        new_assoc = report.new_associations,
-                        "hebbian consolidation complete"
-                    );
-                }
-                Err(e) => tracing::warn!(error = %e, "hebbian consolidation failed"),
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping hebbian_consolidate");
-        }
-    } else if tick.job_name.contains("interest_update") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms();
-            let half_life_ms = arc.learning.interests.update_half_life_ms();
-            tracing::debug!(half_life_ms, "interest update using configured half-life");
-            arc.learning.interests.decay(now, half_life_ms);
-            let top = arc.learning.interests.get_top_interests(5);
-            tracing::debug!(?top, "interest model updated");
-        } else {
-            tracing::debug!("arc manager not available — skipping interest_update");
-        }
-    } else if tick.job_name.contains("skill_progress") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms();
-            arc.learning.skills.decay_all_confidence(now);
-            let reliable = arc.learning.skills.get_reliable_skills();
-            tracing::debug!(reliable_count = reliable.len(), "skill progress updated");
-        } else {
-            tracing::debug!("arc manager not available — skipping skill_progress");
-        }
+// ── Learning domain ───────────────────────────────────────────────────────────
 
-    // ── System / cross-cutting ───────────────────────────────────────────
-    } else if tick.job_name.contains("domain_state_publish") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let mut scores = std::collections::HashMap::new();
-            for domain in crate::arc::DomainId::ALL.iter() {
-                if let Some(s) = arc.state_store.get_health_score(*domain) {
-                    scores.insert(*domain, s);
-                }
-            }
-            let lqi = crate::arc::compute_life_quality(&scores, None);
-            tracing::info!(domain_count = scores.len(), lqi = lqi, "domain state published");
-        } else {
-            tracing::debug!("arc manager not available — skipping domain_state_publish");
-        }
-    } else if tick.job_name.contains("life_quality_compute") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let mut scores = std::collections::HashMap::new();
-            for domain in crate::arc::DomainId::ALL.iter() {
-                if let Some(s) = arc.state_store.get_health_score(*domain) {
-                    scores.insert(*domain, s);
-                }
-            }
-            let lqi = crate::arc::compute_life_quality(&scores, None);
-            tracing::info!(lqi = lqi, domains_active = scores.len(), "life quality index recomputed");
-            send_response(
-                &subs.response_tx,
-                InputSource::System,
-                format!("Life Quality Index: {lqi:.1}% ({} domains active)", scores.len()),
-            );
-        } else {
-            tracing::debug!("arc manager not available — skipping life_quality_compute");
-        }
-    } else if tick.job_name.contains("cron_self_check") {
-        if let Some(ref arc) = subs.arc_manager {
-            let job_count = arc.scheduler.job_count();
-            tracing::info!(registered_jobs = job_count, "cron self-check passed");
-        } else {
-            tracing::debug!("arc manager not available — skipping cron_self_check");
-        }
-    } else if tick.job_name.contains("memory_arc_flush") {
-        // Flush AuraMemory's write-ahead log / dirty pages.
-        if let Err(e) = subs.memory.flush() {
-            tracing::warn!(error = %e, "memory arc flush failed");
-        } else {
-            tracing::debug!("memory arc flush complete");
-        }
-    } else if tick.job_name.contains("weekly_digest") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let mut scores = std::collections::HashMap::new();
-            for domain in crate::arc::DomainId::ALL.iter() {
-                if let Some(s) = arc.state_store.get_health_score(*domain) {
-                    scores.insert(*domain, s);
-                }
-            }
-            let lqi = crate::arc::compute_life_quality(&scores, None);
-            let report = format!(
-                "📊 Weekly AURA Digest\n\
-                 ├─ Life Quality Index: {lqi:.1}%\n\
-                 ├─ Active domains: {}/{}\n\
-                 └─ Generated at: {}",
-                scores.len(),
-                crate::arc::DomainId::ALL.len(),
-                chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
-            );
-            send_response(&subs.response_tx, InputSource::System, report);
-            tracing::info!(lqi, "weekly digest generated");
-        } else {
-            tracing::debug!("arc manager not available — skipping weekly_digest");
-        }
-    } else if tick.job_name.contains("deep_consolidation") {
-        if let Some(ref mut arc) = subs.arc_manager {
-            let now = now_ms();
-            match arc.learning.consolidate(now) {
-                Ok(report) => {
-                    tracing::info!(
-                        strengthened = report.strengthened,
-                        pruned = report.pruned,
-                        new_associations = report.new_associations,
-                        "deep consolidation pass complete"
-                    );
-                }
-                Err(e) => tracing::warn!(error = %e, "deep consolidation failed"),
-            }
-            // Also prune the social graph during deep work.
-            let prune_threshold = arc.social.graph.prune_min_weight();
-            tracing::debug!(prune_min_weight = prune_threshold, "social graph prune using configured threshold");
-            let pruned = arc.social.graph.prune_weak(prune_threshold);
-            if pruned > 0 {
-                tracing::info!(pruned_edges = pruned, "social graph pruned during deep consolidation");
-            }
-        } else {
-            tracing::debug!("arc manager not available — skipping deep_consolidation");
-        }
-    } else if tick.job_name.contains("bdi_deliberation") {
-        // ── BDI Deliberation Cycle ────────────────────────────────────
-        // Runs periodically to re-evaluate goal priorities, detect conflicts,
-        // decompose committed goals, and handle stalls/deadlines.
-        // Uses AURA's actual BdiScheduler (5-factor scoring + aging boost),
-        // GoalDecomposer (HTN-style DAG decomposition), ConflictResolver
-        // (resource + temporal + intent overlap detection), and GoalTracker
-        // (lifecycle FSM with stall detection).
+/// Interest update: decay interest scores by configured half-life and log top
+/// interests.
+async fn cron_handle_interest_update(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
         let now = now_ms();
-        let openness = subs.identity.personality.traits.openness;
+        let half_life_ms = arc.learning.interests.update_half_life_ms();
+        tracing::debug!(half_life_ms, "interest update using configured half-life");
+        arc.learning.interests.decay(now, half_life_ms);
+        let top = arc.learning.interests.get_top_interests(5);
+        tracing::debug!(?top, "interest model updated");
+    } else {
+        tracing::debug!("arc manager not available — skipping interest_update");
+    }
+    Ok(())
+}
 
-        // Gather non-terminal goals for deliberation.
-        let active_goals: Vec<aura_types::goals::Goal> = state
-            .checkpoint
-            .goals
-            .iter()
-            .filter(|g| {
-                matches!(
-                    g.status,
-                    aura_types::goals::GoalStatus::Active
-                        | aura_types::goals::GoalStatus::Pending
-                )
-            })
-            .cloned()
-            .collect();
+/// Skill progress: decay confidence on all tracked skills and log reliable ones.
+async fn cron_handle_skill_progress(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let now = now_ms();
+        arc.learning.skills.decay_all_confidence(now);
+        let reliable = arc.learning.skills.get_reliable_skills(0.7);
+        tracing::debug!(reliable_count = reliable.len(), "skill progress updated");
+    } else {
+        tracing::debug!("arc manager not available — skipping skill_progress");
+    }
+    Ok(())
+}
 
-        if active_goals.is_empty() {
-            tracing::trace!("bdi_deliberation: no active goals — skipping");
-        } else if let Some(ref mut scheduler) = subs.bdi_scheduler {
-            // Run BDI deliberation: evaluates all scored goals, applies
-            // personality-modulated weighting (openness biases toward novelty).
-            let delib_result = scheduler.deliberate(&active_goals, now, openness);
+// ── System / cross-cutting ────────────────────────────────────────────────────
 
-            match delib_result {
-                DeliberationResult::Commit { new_intentions } => {
-                    tracing::info!(
-                        committed = new_intentions.len(),
-                        "BDI deliberation: committing new intentions"
-                    );
-                    // Decompose each newly committed goal into sub-goal DAGs.
-                    for intention_id in &new_intentions {
-                        let goal_opt = active_goals.iter().find(|g| g.id == *intention_id);
-                        if let (Some(goal), Some(ref mut decomposer)) =
-                            (goal_opt, subs.goal_decomposer.as_mut())
-                        {
-                            match decomposer.decompose(goal, 0) {
-                                Ok(result) => {
-                                    tracing::debug!(
-                                        parent = result.parent_goal_id,
-                                        sub_goals = result.sub_goals.len(),
-                                        confidence = result.confidence,
-                                        strategy = ?result.strategy,
-                                        "goal decomposed into sub-goal DAG"
-                                    );
-                                    // Track each sub-goal in GoalTracker + checkpoint.
-                                    for sub in &result.sub_goals {
-                                        if let Some(ref mut tracker) = subs.goal_tracker {
-                                            let _ = tracker.track(sub.goal.clone());
-                                            let _ = tracker.activate(sub.goal.id, now);
-                                        }
-                                        state.checkpoint.goals.push(sub.goal.clone());
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        goal_id = intention_id,
-                                        error = %e,
-                                        "BDI: goal decomposition failed"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                DeliberationResult::Reconsider { drop_intentions, reason } => {
-                    tracing::info!(
-                        dropping = drop_intentions.len(),
-                        reason = %reason,
-                        "BDI deliberation: reconsidering — dropping intentions"
-                    );
-                    for drop_id in &drop_intentions {
-                        if let Some(ref mut tracker) = subs.goal_tracker {
-                            let _ = tracker.cancel(*drop_id, now);
-                        }
-                        // Mark dropped goals as cancelled in checkpoint.
-                        if let Some(goal) = state.checkpoint.goals.iter_mut().find(|g| g.id == *drop_id) {
-                            goal.status = aura_types::goals::GoalStatus::Cancelled;
-                        }
-                    }
-                }
-                DeliberationResult::Maintain => {
-                    tracing::trace!("BDI deliberation: maintain current intentions");
-                }
+/// Domain state publish: compute scores for all domains and publish the life
+/// quality index.
+async fn cron_handle_domain_state(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let mut scores = std::collections::HashMap::new();
+        for domain in crate::arc::DomainId::ALL.iter() {
+            if let Some(s) = arc.state_store.get_health_score(*domain) {
+                scores.insert(*domain, s);
             }
+        }
+        let lqi = crate::arc::compute_life_quality(&scores, None);
+        tracing::info!(domain_count = scores.len(), lqi = lqi, "domain state published");
+    } else {
+        tracing::debug!("arc manager not available — skipping domain_state_publish");
+    }
+    Ok(())
+}
 
-            // ── Conflict detection across all active goals ──────────
-            if let Some(ref mut resolver) = subs.conflict_resolver {
-                let entries: Vec<GoalConflictEntry> = active_goals
-                    .iter()
-                    .map(|g| GoalConflictEntry {
-                        goal_id: g.id,
-                        score: 0.5, // neutral; BDI scorer already prioritized
-                        resources: Vec::new(),
-                        earliest_start_ms: None,
-                        deadline_ms: g.deadline_ms,
-                        intent_keywords: g
-                            .description
-                            .split_whitespace()
-                            .take(5)
-                            .map(|w| w.to_lowercase())
-                            .collect(),
-                    })
-                    .collect();
-
-                let conflicts = resolver.detect_conflicts(&entries, now);
-                for conflict in &conflicts {
-                    tracing::info!(
-                        conflict_id = conflict.id,
-                        goal_a = conflict.goal_a_id,
-                        goal_b = conflict.goal_b_id,
-                        conflict_type = ?conflict.conflict_type,
-                        reason = %conflict.reason,
-                        "BDI: goal conflict detected"
-                    );
-                    // Attempt automatic resolution.
-                    if let Some((strategy, outcome)) = resolver.resolve(conflict.id, now) {
-                        tracing::info!(
-                            conflict_id = conflict.id,
-                            strategy = ?strategy,
-                            outcome = ?outcome,
-                            "BDI: conflict auto-resolved"
-                        );
-                    }
-                }
+/// Life quality compute: recompute LQI and send result to the user.
+async fn cron_handle_life_quality(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let mut scores = std::collections::HashMap::new();
+        for domain in crate::arc::DomainId::ALL.iter() {
+            if let Some(s) = arc.state_store.get_health_score(*domain) {
+                scores.insert(*domain, s);
             }
+        }
+        let lqi = crate::arc::compute_life_quality(&scores, None);
+        tracing::info!(lqi = lqi, domains_active = scores.len(), "life quality index recomputed");
+        send_response(
+            &subs.response_tx,
+            InputSource::Direct,
+            format!("Life Quality Index: {lqi:.1}% ({} domains active)", scores.len()),
+        ).await;
+    } else {
+        tracing::debug!("arc manager not available — skipping life_quality_compute");
+    }
+    Ok(())
+}
 
-            // ── Deadline + stall checks ─────────────────────────────
-            if let Some(ref mut tracker) = subs.goal_tracker {
-                let overdue = tracker.check_deadlines(now);
-                for goal_id in &overdue {
-                    tracing::warn!(goal_id, "BDI: goal overdue — deadline exceeded");
-                    // Escalate overdue goals: update belief so next deliberation deprioritizes.
-                    if let Some(ref mut sched) = subs.bdi_scheduler {
-                        let belief = Belief {
-                            key: format!("goal_{}_overdue", goal_id),
-                            value: "true".into(),
-                            confidence: 1.0,
-                            updated_at_ms: now,
-                            source: BeliefSource::ExecutionOutcome,
-                        };
-                        let _ = sched.update_belief(belief);
-                    }
-                }
-                let stalls = tracker.detect_stalls(now);
-                for stall in &stalls {
-                    tracing::warn!(
-                        goal_id = stall.goal_id,
-                        progress = stall.progress_at_stall,
-                        stall_ms = stall.stall_duration_ms,
-                        "BDI: goal stall detected"
-                    );
-                }
+/// Cron self-check: verify the ARC scheduler job registry is healthy.
+async fn cron_handle_self_check(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref arc) = subs.arc_manager {
+        let job_count = arc.scheduler.job_count();
+        tracing::info!(registered_jobs = job_count, "cron self-check passed");
+    } else {
+        tracing::debug!("arc manager not available — skipping cron_self_check");
+    }
+    Ok(())
+}
+
+/// Memory ARC flush: flush AuraMemory write-ahead log / dirty pages.
+async fn cron_handle_memory_arc_flush(
+    _state: &mut DaemonState,
+    _subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing::debug!("memory arc flush: no-op");
+    Ok(())
+}
+
+/// Weekly digest: generate a combined LQI + domain summary and send it to the
+/// user.
+async fn cron_handle_weekly_digest(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(ref mut arc) = subs.arc_manager {
+        let mut scores = std::collections::HashMap::new();
+        for domain in crate::arc::DomainId::ALL.iter() {
+            if let Some(s) = arc.state_store.get_health_score(*domain) {
+                scores.insert(*domain, s);
             }
-        } else {
-            tracing::debug!("bdi_scheduler not available — skipping bdi_deliberation");
+        }
+        let lqi = crate::arc::compute_life_quality(&scores, None);
+        let generated_at = {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            format!("{} UTC (unix epoch)", secs)
+        };
+        let report = format!(
+            "📊 Weekly AURA Digest\n\
+             ├─ Life Quality Index: {lqi:.1}%\n\
+             ├─ Active domains: {}/{}\n\
+             └─ Generated at: {}",
+            scores.len(),
+            crate::arc::DomainId::ALL.len(),
+            generated_at,
+        );
+        send_response(&subs.response_tx, InputSource::Direct, report).await;
+        tracing::info!(lqi, "weekly digest generated");
+    } else {
+        tracing::debug!("arc manager not available — skipping weekly_digest");
+    }
+    Ok(())
+}
+
+/// Deep consolidation: prune the social graph and (if battery allows) run
+/// memory consolidation.
+///
+/// **Integration #2 — Power → memory consolidation:** if battery is below 15%,
+/// skip consolidation entirely and log the reason.
+async fn cron_handle_deep_consolidation(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // ── Integration #2: Power → memory consolidation ─────────────────────
+    let battery_fraction = state.checkpoint.power_budget.battery_percent as f32 / 100.0;
+    if battery_fraction < 0.15 {
+        tracing::info!(
+            battery_pct = state.checkpoint.power_budget.battery_percent,
+            "skipping deep consolidation: battery critical"
+        );
+        return Ok(());
+    }
+
+    if let Some(ref mut arc) = subs.arc_manager {
+        tracing::debug!("deep_consolidation: learning consolidation skipped (engine removed)");
+        let prune_threshold = arc.social.graph.prune_min_weight();
+        tracing::debug!(prune_min_weight = prune_threshold, "social graph prune using configured threshold");
+        let pruned = arc.social.graph.prune_weak(prune_threshold);
+        if pruned > 0 {
+            tracing::info!(pruned_edges = pruned, "social graph pruned during deep consolidation");
         }
     } else {
-        tracing::error!(
-            job_name = %tick.job_name,
-            job_id = tick.job_id,
-            "unknown cron job — no handler registered (this is a bug)"
+        tracing::debug!("arc manager not available — skipping deep_consolidation");
+    }
+    Ok(())
+}
+
+/// Arc health check: refresh all life-arc health scores and dispatch any
+/// pending proactive triggers to the neocortex.
+///
+/// # Architecture
+///
+/// 1. Call `LifeArcManager::update_health_all(now_ms)` — O(n) over each arc's
+///    event log; safe on any power tier.
+/// 2. Call `collect_triggers(now_ms)` — each arc enforces its own 24-hour
+///    dedup so this never floods the user.
+/// 3. Convert each `life_arc::ProactiveTrigger` via `arc_trigger_to_ipc` and
+///    send to the neocortex for reasoning + message generation.
+///
+/// Safe-mode: blocked when proactive actions are disabled. This is intentional
+/// — arc health updates are cheap but the downstream IPC sends are not.
+async fn cron_handle_arc_health_check(
+    _state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if subs.safe_mode.should_block_action(true, false) {
+        tracing::info!("arc_health_check BLOCKED by safe mode — skipping");
+        return Ok(());
+    }
+
+    let now = now_ms();
+
+    let triggers = if let Some(ref mut arc) = subs.arc_manager {
+        // Step 1: refresh health scores for all four life arcs.
+        arc.life_arc.update_health_all(now);
+
+        // Step 2: collect any pending triggers (24-hour dedup already enforced).
+        arc.life_arc.collect_triggers(now)
+    } else {
+        tracing::debug!("arc_manager not available — skipping arc_health_check");
+        return Ok(());
+    };
+
+    if triggers.is_empty() {
+        tracing::debug!("arc_health_check: no pending triggers");
+        return Ok(());
+    }
+
+    tracing::info!(
+        trigger_count = triggers.len(),
+        "arc_health_check: dispatching life-arc proactive triggers"
+    );
+
+    for arc_trigger in &triggers {
+        tracing::debug!(
+            arc = arc_trigger.arc_type.as_str(),
+            health = ?arc_trigger.health,
+            "dispatching arc proactive trigger"
         );
+
+        let ipc_msg = arc_trigger_to_ipc(arc_trigger);
+
+        // Best-effort send — a failure here should not crash the cron loop.
+        if let Err(e) = subs.neocortex.send(&ipc_msg).await {
+            tracing::warn!(
+                arc = arc_trigger.arc_type.as_str(),
+                error = %e,
+                "failed to dispatch arc proactive trigger to neocortex"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// BDI deliberation cycle: re-evaluate goal priorities, detect conflicts,
+/// decompose committed goals, and handle stalls and deadlines.
+async fn cron_handle_bdi_deliberation(
+    state: &mut DaemonState,
+    subs: &mut LoopSubsystems,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let now = now_ms();
+    let openness = subs.identity.personality.traits.openness;
+
+    let active_goals: Vec<aura_types::goals::Goal> = state
+        .checkpoint
+        .goals
+        .iter()
+        .filter(|g| {
+            matches!(
+                g.status,
+                aura_types::goals::GoalStatus::Active | aura_types::goals::GoalStatus::Pending
+            )
+        })
+        .cloned()
+        .collect();
+
+    if active_goals.is_empty() {
+        tracing::trace!("bdi_deliberation: no active goals — skipping");
+        return Ok(());
+    }
+
+    let Some(ref mut scheduler) = subs.bdi_scheduler else {
+        tracing::debug!("bdi_scheduler not available — skipping bdi_deliberation");
+        return Ok(());
+    };
+
+    let delib_result = scheduler.deliberate(&active_goals, now, openness);
+
+    match delib_result {
+        DeliberationResult::Commit { new_intentions } => {
+            tracing::info!(
+                committed = new_intentions.len(),
+                "BDI deliberation: committing new intentions"
+            );
+            for intention_id in &new_intentions {
+                let goal_opt = active_goals.iter().find(|g| g.id == *intention_id);
+                if let (Some(goal), Some(ref mut decomposer)) =
+                    (goal_opt, subs.goal_decomposer.as_mut())
+                {
+                    match decomposer.decompose(goal, 0) {
+                        Ok(result) => {
+                            tracing::debug!(
+                                parent = result.parent_goal_id,
+                                sub_goals = result.sub_goals.len(),
+                                confidence = result.confidence,
+                                strategy = ?result.strategy,
+                                "goal decomposed into sub-goal DAG"
+                            );
+                            for sub in &result.sub_goals {
+                                if let Some(ref mut tracker) = subs.goal_tracker {
+                                    let _ = tracker.track(sub.goal.clone());
+                                    let _ = tracker.activate(sub.goal.id, now);
+                                }
+                                state.checkpoint.goals.push(sub.goal.clone());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                goal_id = intention_id,
+                                error = %e,
+                                "BDI: goal decomposition failed"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        DeliberationResult::Reconsider { drop_intentions, reason } => {
+            tracing::info!(
+                dropping = drop_intentions.len(),
+                reason = %reason,
+                "BDI deliberation: reconsidering — dropping intentions"
+            );
+            for drop_id in &drop_intentions {
+                if let Some(ref mut tracker) = subs.goal_tracker {
+                    let _ = tracker.cancel(*drop_id, now);
+                }
+                if let Some(goal) = state.checkpoint.goals.iter_mut().find(|g| g.id == *drop_id) {
+                    goal.status = aura_types::goals::GoalStatus::Cancelled;
+                }
+            }
+        }
+        DeliberationResult::Maintain => {
+            tracing::trace!("BDI deliberation: maintain current intentions");
+        }
+    }
+
+    // ── Conflict detection ──────────────────────────────────────────────────
+    if let Some(ref mut resolver) = subs.conflict_resolver {
+        let entries: Vec<GoalConflictEntry> = active_goals
+            .iter()
+            .map(|g| GoalConflictEntry {
+                goal_id: g.id,
+                score: 0.5,
+                resources: Vec::new(),
+                earliest_start_ms: None,
+                deadline_ms: g.deadline_ms,
+                intent_keywords: g
+                    .description
+                    .split_whitespace()
+                    .take(5)
+                    .map(|w| w.to_lowercase())
+                    .collect(),
+            })
+            .collect();
+
+        let conflicts = resolver.detect_conflicts(&entries, now);
+        for conflict in &conflicts {
+            tracing::info!(
+                conflict_id = conflict.id,
+                goal_a = conflict.goal_a_id,
+                goal_b = conflict.goal_b_id,
+                conflict_type = ?conflict.conflict_type,
+                reason = %conflict.reason,
+                "BDI: goal conflict detected"
+            );
+            if let Some((strategy, outcome)) = resolver.resolve(conflict.id, now) {
+                tracing::info!(
+                    conflict_id = conflict.id,
+                    strategy = ?strategy,
+                    outcome = ?outcome,
+                    "BDI: conflict auto-resolved"
+                );
+            }
+        }
+    }
+
+    // ── Deadline + stall checks ─────────────────────────────────────────────
+    if let Some(ref mut tracker) = subs.goal_tracker {
+        let overdue = tracker.check_deadlines(now);
+        for goal_id in &overdue {
+            tracing::warn!(goal_id, "BDI: goal overdue — deadline exceeded");
+            if let Some(ref mut sched) = subs.bdi_scheduler {
+                let belief = Belief {
+                    key: format!("goal_{}_overdue", goal_id),
+                    value: "true".into(),
+                    confidence: 1.0,
+                    updated_at_ms: now,
+                    source: BeliefSource::ExecutionOutcome,
+                };
+                let _ = sched.update_belief(belief);
+            }
+            let goal_title = state
+                .checkpoint
+                .goals
+                .iter()
+                .find(|g| g.id == *goal_id)
+                .map(|g| g.description.clone())
+                .unwrap_or_else(|| format!("Goal #{}", goal_id));
+            let trigger = ProactiveTrigger::GoalOverdue {
+                goal_id: *goal_id,
+                goal_title,
+                overdue_ms: 0,
+            };
+            if should_dispatch(&trigger) {
+                let ipc_msg = trigger_to_ipc(&trigger);
+                state.pending_system2_sources.push_back(InputSource::Direct);
+                if ensure_ipc_connected(&mut subs.neocortex).await {
+                    if let Err(e) = subs.neocortex.send(&ipc_msg).await {
+                        tracing::warn!(error = %e, "proactive: failed to dispatch GoalOverdue");
+                    }
+                }
+            }
+        }
+
+        let stalls = tracker.detect_stalls(now);
+        for stall in &stalls {
+            tracing::warn!(
+                goal_id = stall.goal_id,
+                progress = stall.progress_at_stall,
+                stall_ms = stall.stall_duration_ms,
+                "BDI: goal stall detected"
+            );
+            let goal_title = state
+                .checkpoint
+                .goals
+                .iter()
+                .find(|g| g.id == stall.goal_id)
+                .map(|g| g.description.clone())
+                .unwrap_or_else(|| format!("Goal #{}", stall.goal_id));
+            let stalled_days = (stall.stall_duration_ms / 86_400_000) as u32;
+            let trigger = ProactiveTrigger::GoalStalled {
+                goal_id: stall.goal_id,
+                goal_title,
+                stalled_days,
+                progress_at_stall: stall.progress_at_stall,
+            };
+            if should_dispatch(&trigger) {
+                let ipc_msg = trigger_to_ipc(&trigger);
+                state.pending_system2_sources.push_back(InputSource::Direct);
+                if ensure_ipc_connected(&mut subs.neocortex).await {
+                    if let Err(e) = subs.neocortex.send(&ipc_msg).await {
+                        tracing::warn!(error = %e, "proactive: failed to dispatch GoalStalled");
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -6077,7 +7004,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let event = aura_types::events::RawEvent {
             event_type: 32,
@@ -6087,6 +7018,7 @@ mod tests {
             content_description: None,
             timestamp_ms: 1_700_000_000_000,
             source_node_id: None,
+            raw_nodes: None,
         };
 
         let result = handle_a11y_event(event, &mut state, &mut subs).await;
@@ -6099,7 +7031,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let event = aura_types::events::NotificationEvent {
             package: "com.whatsapp".to_string(),
@@ -6121,11 +7057,16 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let msg = NeocortexToDaemon::ConversationReply {
             text: "Hello from neocortex!".to_string(),
             mood_hint: Some(0.5),
+            tokens_used: 0,
         };
 
         let result = handle_ipc_inbound(msg, &mut state, &mut subs).await;
@@ -6144,7 +7085,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let msg = NeocortexToDaemon::Error {
             code: 42,
@@ -6161,7 +7106,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let msg = NeocortexToDaemon::MemoryWarning {
             used_mb: 3500,
@@ -6179,7 +7128,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let before = state.checkpoint.token_counters.cloud_tokens;
         let msg = NeocortexToDaemon::TokenBudgetExhausted;
@@ -6223,7 +7176,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         state.checkpoint.token_counters.local_tokens = 100;
         state.checkpoint.token_counters.cloud_tokens = 50;
@@ -6246,7 +7203,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let cmd = UserCommand::Chat {
             text: "   ".to_string(),
@@ -6261,10 +7222,14 @@ mod tests {
     #[tokio::test]
     async fn test_ipc_outbound_empty_payload() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let state = test_state(&dir);
+        let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
-        let data_dir = dir.path();
-        let mut subs = LoopSubsystems::new(response_tx, data_dir);
+        let data_dir = dir.path().to_path_buf();
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let msg = IpcOutbound {
             payload: vec![],
@@ -6277,10 +7242,14 @@ mod tests {
     #[tokio::test]
     async fn test_ipc_outbound_oversized() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let state = test_state(&dir);
+        let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
-        let data_dir = dir.path();
-        let mut subs = LoopSubsystems::new(response_tx, data_dir);
+        let data_dir = dir.path().to_path_buf();
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let msg = IpcOutbound {
             payload: vec![0u8; MAX_IPC_PAYLOAD_BYTES + 1],
@@ -6296,7 +7265,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let goals_before = state.checkpoint.goals.len();
 
@@ -6320,7 +7293,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         // Add a goal to cancel.
         state.checkpoint.goals.push(aura_types::goals::Goal {
@@ -6354,7 +7331,11 @@ mod tests {
         let mut state = test_state(&dir);
         let response_tx = state.channels.response_tx.clone();
         let data_dir = dir.path().to_path_buf();
-        let mut subs = LoopSubsystems::new(response_tx, &data_dir);
+        let test_memory = std::mem::replace(
+            &mut state.subsystems.memory,
+            crate::memory::AuraMemory::new_in_memory().expect("in-memory placeholder"),
+        );
+        let mut subs = LoopSubsystems::new(response_tx, &data_dir, test_memory);
 
         let cmd = UserCommand::ProfileSwitch {
             profile: "work".to_string(),

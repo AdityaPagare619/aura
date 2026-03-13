@@ -12,5 +12,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
+[features]
+# Build without real llama.cpp (for CI, testing, or host builds).
+# When enabled, the native C compilation step is skipped entirely.
+stub = []
+
 [build-dependencies]
 cc = "1"

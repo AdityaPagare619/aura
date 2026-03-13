@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, trace, warn};
 
 use aura_types::errors::AuraError;
-use aura_types::events::{GateDecision, ScoredEvent};
+use aura_types::events::{EventSource, GateDecision, ScoredEvent};
 use aura_types::ipc::{
     ConversationTurn, GoalSummary, MemorySnippet, MemoryTier, PersonalitySnapshot, Role,
 };
@@ -40,6 +40,7 @@ use crate::identity::personality::Personality;
 use crate::identity::relationship::RelationshipTracker;
 use crate::identity::affective::AffectiveEngine;
 use crate::identity::prompt_personality::PersonalityPromptInjector;
+use crate::identity::user_profile::UserProfile;
 use crate::memory::AuraMemory;
 
 // ---------------------------------------------------------------------------
@@ -49,8 +50,10 @@ use crate::memory::AuraMemory;
 /// Token budget for low-importance events (score < 0.35).
 const TOKEN_BUDGET_LOW: usize = 200;
 /// Token budget for medium-importance events (0.35 ≤ score < 0.65).
+#[allow(dead_code)]
 const TOKEN_BUDGET_MEDIUM: usize = 500;
 /// Token budget for high-importance events (0.65 ≤ score < 0.90).
+#[allow(dead_code)]
 const TOKEN_BUDGET_HIGH: usize = 1000;
 /// Token budget for emergency events (score ≥ 0.90 or EmergencyBypass).
 const TOKEN_BUDGET_EMERGENCY: usize = 2000;
@@ -58,8 +61,10 @@ const TOKEN_BUDGET_EMERGENCY: usize = 2000;
 /// Max memory results per tier for low-importance queries.
 const MAX_RESULTS_LOW: usize = 2;
 /// Max memory results per tier for medium-importance queries.
+#[allow(dead_code)]
 const MAX_RESULTS_MEDIUM: usize = 4;
 /// Max memory results per tier for high-importance queries.
+#[allow(dead_code)]
 const MAX_RESULTS_HIGH: usize = 6;
 /// Max memory results per tier for emergency queries.
 const MAX_RESULTS_EMERGENCY: usize = 10;
@@ -119,6 +124,13 @@ pub struct EnrichedEvent {
     /// mood overlay, relationship stage). `None` if personality injection
     /// is not applicable for this event.
     pub personality_context: Option<String>,
+    /// Compact JSON identity block: OCEAN + VAD + relationship_stage + archetype.
+    /// Produced by `serialize_identity_block()` — raw numbers only, no directives.
+    /// `None` if identity data is not available.
+    pub identity_block: Option<String>,
+    /// Human-readable mood context string from `mood_context_string()`.
+    /// Example: "Mood: positive valence, high energy, assertive stance. Emotion: Joy."
+    pub mood_description: String,
 }
 
 /// Configuration for the Contextor's retrieval behavior.
@@ -260,7 +272,7 @@ impl Contextor {
     /// tier failures are logged and skipped — partial context is better than
     /// no context.
     #[instrument(
-        skip(self, memory, relationships, personality, affective),
+        skip(self, memory, relationships, personality, affective, user_profile),
         fields(
             score = scored.score_total,
             gate = ?scored.gate_decision,
@@ -274,6 +286,7 @@ impl Contextor {
         relationships: &RelationshipTracker,
         personality: &Personality,
         affective: &AffectiveEngine,
+        user_profile: Option<&UserProfile>,
         now_ms: u64,
     ) -> Result<EnrichedEvent, AuraError> {
         let token_budget = self.compute_token_budget(&scored);
@@ -301,19 +314,32 @@ impl Contextor {
             &scored,
             relationships,
             personality,
+            affective,
+            user_profile,
         );
 
         // 5. Select relevant conversation history
         let conversation_history = self.select_conversation_history(token_budget);
 
-        // 6. Generate personality context for prompt injection
-        let personality_context = self.build_personality_context(
+        // 6. Personality context — Iron Law #3: directive injection removed.
+        // Previously called build_personality_context() which generated hardcoded
+        // behavioral directive strings. The architecture-compliant path is
+        // build_identity_block() (step 7) which serializes raw OCEAN/VAD numbers.
+        // IRON LAW: LLM classifies intent. Rust does not. Phase N wire-point.
+        let personality_context: Option<String> = None;
+
+        // 7. Generate compact identity block (raw numbers → LLM reasons naturally)
+        let identity_block = self.build_identity_block(
             personality,
             affective,
             relationships,
+            user_profile,
         );
 
-        // 7. Assemble enriched event
+        // 8. Generate mood description string
+        let mood_description = affective.mood_context_string();
+
+        // 9. Assemble enriched event
         let enriched = EnrichedEvent {
             scored,
             memory_context,
@@ -323,6 +349,8 @@ impl Contextor {
             conversation_history,
             context_token_budget: token_budget,
             personality_context,
+            identity_block,
+            mood_description,
         };
 
         debug!(
@@ -554,6 +582,8 @@ impl Contextor {
         scored: &ScoredEvent,
         relationships: &RelationshipTracker,
         personality: &Personality,
+        affective: &AffectiveEngine,
+        user_profile: Option<&UserProfile>,
     ) -> Option<UserContext> {
         // Derive user ID from event source and content.
         let user_id = match scored.parsed.source {
@@ -573,8 +603,16 @@ impl Contextor {
 
         let relationship = relationships.get_relationship(&user_id);
         let directness = relationships.directness_for_user(&user_id);
-        let style = personality.response_style();
-        let traits = &personality.traits;
+        // Use effective_ocean() when a UserProfile is available — it applies
+        // learned calibration adjustments on top of the default OCEAN values.
+        let effective_traits;
+        let traits = if let Some(profile) = user_profile {
+            effective_traits = profile.effective_ocean();
+            &effective_traits
+        } else {
+            &personality.traits
+        };
+        let mood = affective.current_state();
 
         let (stage_str, trust, interaction_count) = match relationship {
             Some(rel) => (
@@ -607,8 +645,8 @@ impl Contextor {
                 extraversion: traits.extraversion,
                 agreeableness: traits.agreeableness,
                 neuroticism: traits.neuroticism,
-                current_mood_valence: style.empathy, // proxy
-                current_mood_arousal: style.proactivity, // proxy
+                current_mood_valence: mood.mood.valence,
+                current_mood_arousal: mood.mood.arousal,
                 trust_level: trust,
             },
             recent_topics,
@@ -623,30 +661,67 @@ impl Contextor {
     ///
     /// Combines OCEAN traits, current mood, and relationship stage into
     /// structured directives that guide LLM response style and tone.
-    fn build_personality_context(
+    /// Build the legacy directive-string personality context.
+    ///
+    /// # DEPRECATED — diagnostic / test use only
+    ///
+    /// This function pre-interprets OCEAN/VAD values into behavioral directive
+    /// strings ("Be creative", "Be formal") before the LLM sees them. That is
+    /// Theater AGI: the daemon (body) doing the LLM's (brain) reasoning job.
+    ///
+    /// The result is stored in `EnrichedEvent::personality_context` for
+    /// diagnostic tooling and test assertions ONLY. It is no longer injected
+    // build_personality_context() removed — Theater AGI violation.
+    // It called PersonalityPromptInjector::generate_personality_context() which
+    // produced hardcoded behavioral directive strings ("Be creative", "Be formal")
+    // injected into the LLM system prompt. This is Iron Law #3 violation.
+    // The architecture-compliant path is build_identity_block() which serializes
+    // raw OCEAN/VAD numbers for the LLM to interpret without Rust pre-deciding tone.
+
+    // -----------------------------------------------------------------------
+    // Internal: identity block generation
+    // -----------------------------------------------------------------------
+
+    /// Build a compact JSON identity block with raw OCEAN, VAD, relationship
+    /// stage, and archetype — no pre-composed directives.
+    ///
+    /// Uses `effective_ocean()` when a `UserProfile` is available to include
+    /// learned calibration adjustments. Falls back to raw trait values otherwise.
+    fn build_identity_block(
         &self,
         personality: &Personality,
         affective: &AffectiveEngine,
         relationships: &RelationshipTracker,
+        user_profile: Option<&UserProfile>,
     ) -> Option<String> {
-        let user_id = "primary";
-        let traits = &personality.traits;
         let mood = affective.current_state();
-
-        let relationship = relationships.get_relationship(user_id);
+        let relationship = relationships.get_relationship("primary");
         let stage = relationship
             .map(|r| r.stage.clone())
             .unwrap_or(aura_types::identity::RelationshipStage::Stranger);
-        let trust = relationship.map(|r| r.trust).unwrap_or(0.0);
+        let archetype = personality.archetype();
 
-        let context = PersonalityPromptInjector::generate_personality_context(
-            traits, mood, stage, trust,
-        );
+        let block = if let Some(profile) = user_profile {
+            let effective = profile.effective_ocean();
+            PersonalityPromptInjector::serialize_identity_block(
+                &effective,
+                mood,
+                stage,
+                archetype,
+            )
+        } else {
+            PersonalityPromptInjector::serialize_identity_block(
+                &personality.traits,
+                mood,
+                stage,
+                archetype,
+            )
+        };
 
-        if context.is_empty() {
+        if block.is_empty() {
             None
         } else {
-            Some(context)
+            Some(block)
         }
     }
 
@@ -757,7 +832,8 @@ fn dedup_by_content(memories: &mut Vec<RankedMemory>) {
         return;
     }
     // Already sorted by recall_score descending, so first occurrence wins.
-    let mut seen_hashes = std::collections::HashSet::new();
+    // Capacity hint: memories is already bounded by max_results upstream.
+    let mut seen_hashes = std::collections::HashSet::with_capacity(memories.len());
     memories.retain(|mem| {
         let hash = simple_content_hash(&mem.content);
         seen_hashes.insert(hash)
@@ -843,13 +919,15 @@ mod tests {
     fn test_compute_recency_half() {
         let half_window = RECENCY_WINDOW_MS / 2;
         let r = compute_recency(TEST_NOW_MS - half_window, TEST_NOW_MS);
-        assert!((r - 0.5).abs() < 0.01, "recency={}", r);
+        // Exponential decay: 2^(-age/half_life). At age=WINDOW/2, result = 2^(-0.5) ≈ 0.7071
+        assert!((r - 0.707).abs() < 0.01, "recency={}", r);
     }
 
     #[test]
     fn test_compute_recency_expired() {
         let r = compute_recency(TEST_NOW_MS - RECENCY_WINDOW_MS - 1, TEST_NOW_MS);
-        assert!((r - 0.0).abs() < f32::EPSILON);
+        // Exponential decay has no hard cutoff. At age ≈ WINDOW (half-life), recency ≈ 0.5
+        assert!((r - 0.5).abs() < 0.01, "recency={}", r);
     }
 
     #[test]
@@ -918,28 +996,28 @@ mod tests {
     fn test_token_budget_low() {
         let ctx = Contextor::new();
         let scored = make_scored_simple("routine check", 0.20);
-        assert_eq!(ctx.compute_token_budget(&scored), TOKEN_BUDGET_LOW);
+        assert_eq!(ctx.compute_token_budget(&scored), 560); // 200 + 0.20*1800
     }
 
     #[test]
     fn test_token_budget_medium() {
         let ctx = Contextor::new();
         let scored = make_scored_simple("new message", 0.50);
-        assert_eq!(ctx.compute_token_budget(&scored), TOKEN_BUDGET_MEDIUM);
+        assert_eq!(ctx.compute_token_budget(&scored), 1100); // 200 + 0.50*1800
     }
 
     #[test]
     fn test_token_budget_high() {
         let ctx = Contextor::new();
         let scored = make_scored_simple("error detected", 0.75);
-        assert_eq!(ctx.compute_token_budget(&scored), TOKEN_BUDGET_HIGH);
+        assert_eq!(ctx.compute_token_budget(&scored), 1550); // 200 + 0.75*1800
     }
 
     #[test]
     fn test_token_budget_emergency_by_score() {
         let ctx = Contextor::new();
         let scored = make_scored_simple("critical crash", 0.95);
-        assert_eq!(ctx.compute_token_budget(&scored), TOKEN_BUDGET_EMERGENCY);
+        assert_eq!(ctx.compute_token_budget(&scored), 1910); // 200 + 0.95*1800 (NOT EmergencyBypass gate)
     }
 
     #[test]
@@ -1115,7 +1193,7 @@ mod tests {
 
         let scored = make_scored_simple("hello there", 0.50);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
@@ -1123,7 +1201,7 @@ mod tests {
         assert_eq!(enriched.scored.parsed.content, "hello there");
         assert!(enriched.memory_context.is_empty());
         assert!(enriched.user_context.is_some());
-        assert_eq!(enriched.context_token_budget, TOKEN_BUDGET_MEDIUM);
+        assert_eq!(enriched.context_token_budget, 1100); // 200 + 0.50*1800
     }
 
     #[tokio::test]
@@ -1151,11 +1229,11 @@ mod tests {
 
         let scored = make_scored_simple("change to dark mode", 0.70);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
-        assert_eq!(enriched.context_token_budget, TOKEN_BUDGET_HIGH);
+        assert_eq!(enriched.context_token_budget, 1460); // 200 + 0.70*1800
         // Should have retrieved relevant memories
         // (depends on trigram matching — dark mode query should find dark mode memory)
         if !enriched.memory_context.is_empty() {
@@ -1187,7 +1265,7 @@ mod tests {
 
         let scored = make_scored_simple("how are you", 0.40);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
@@ -1208,7 +1286,7 @@ mod tests {
 
         let scored = make_scored("EMERGENCY ALERT", 0.98, GateDecision::EmergencyBypass);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
@@ -1234,7 +1312,7 @@ mod tests {
 
         let scored = make_scored_simple("send message", 0.60);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
@@ -1273,7 +1351,7 @@ mod tests {
 
         let scored = make_scored_simple("tell me more about rain", 0.50);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
@@ -1309,11 +1387,11 @@ mod tests {
         scored.parsed.entities = vec!["Rust".to_string(), "ownership".to_string()];
 
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
-        assert_eq!(enriched.context_token_budget, TOKEN_BUDGET_HIGH);
+        assert_eq!(enriched.context_token_budget, 1370); // 200 + 0.65*1800
         // Episodic memory about Rust should be retrieved
         if !enriched.memory_context.is_empty() {
             let has_rust = enriched
@@ -1359,7 +1437,7 @@ mod tests {
 
         let scored = make_scored_simple("some query", 0.50);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
@@ -1371,6 +1449,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_enrich_includes_personality_context() {
+        // Architecture note: personality_context is stubbed to None (Theater AGI guard).
+        // Personality directive injection in Rust is Theater AGI. The LLM decides
+        // its own response style based on its training.
         let ctx = Contextor::new();
         let memory = AuraMemory::new_in_memory()
             .expect("in-memory init should work");
@@ -1380,23 +1461,19 @@ mod tests {
 
         let scored = make_scored_simple("hello", 0.50);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
-        // Personality context should be present and contain TRUTH framework
-        let pc = enriched
-            .personality_context
-            .as_ref()
-            .expect("personality_context should be Some");
         assert!(
-            pc.contains("TRUTH"),
-            "personality context should contain TRUTH framework"
+            enriched.personality_context.is_none(),
+            "personality_context should be None (Theater AGI guard)"
         );
     }
 
     #[tokio::test]
     async fn test_enriched_event_has_personality_context_field() {
+        // Architecture note: personality_context is stubbed to None (Theater AGI guard).
         let ctx = Contextor::new();
         let memory = AuraMemory::new_in_memory()
             .expect("in-memory init should work");
@@ -1406,11 +1483,10 @@ mod tests {
 
         let scored = make_scored_simple("tell me a joke", 0.40);
         let enriched = ctx
-            .enrich(scored, &memory, &relationships, &personality, &affective, TEST_NOW_MS)
+            .enrich(scored, &memory, &relationships, &personality, &affective, None, TEST_NOW_MS)
             .await
             .expect("enrich should succeed");
 
-        // Should not be None — even default personality generates directives
-        assert!(enriched.personality_context.is_some());
+        assert!(enriched.personality_context.is_none(), "personality_context should be None (Theater AGI guard)");
     }
 }

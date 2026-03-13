@@ -9,12 +9,16 @@ pub struct Goal {
     pub description: String,
     pub priority: GoalPriority,
     pub status: GoalStatus,
+    /// Bounded: max MAX_GOAL_STEPS items enforced at collection site.
     pub steps: Vec<GoalStep>,
     pub created_ms: u64,
     pub deadline_ms: Option<u64>,
     pub parent_goal: Option<u64>,
     pub source: GoalSource,
 }
+
+/// Max steps in a single [`Goal`].
+pub const MAX_GOAL_STEPS: usize = 64;
 
 /// Priority level for goals.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

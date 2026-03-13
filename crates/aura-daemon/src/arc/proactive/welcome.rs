@@ -39,10 +39,11 @@ const WEEKLY_HIGHLIGHTS_COUNT: usize = 3;
 /// A single welcome-back greeting to show the user.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WelcomeGreeting {
-    /// The greeting message text.
-    pub message: String,
-    /// Optional tip or insight to accompany the greeting.
-    pub tip: Option<String>,
+    /// Signal key for the greeting — passed to the LLM, not user-facing prose.
+    /// Examples: "daily_tip_0", "weekly_highlight_0", "milestone_30d".
+    pub greeting_key: &'static str,
+    /// Optional signal key for an accompanying tip (passed to LLM).
+    pub tip_key: Option<&'static str>,
     /// The category of greeting.
     pub category: GreetingCategory,
     /// Day number since onboarding completion.
@@ -269,13 +270,13 @@ impl WelcomeEngine {
         // Mark tip as shown.
         self.state.daily_tips_shown |= 1 << tip_index;
 
-        let (message, tip) = daily_tip_content(tip_index, personality);
+        let (greeting_key, tip_key) = daily_tip_content(tip_index, personality);
 
         debug!(day, tip_index, "generating daily tip");
 
         WelcomeGreeting {
-            message,
-            tip: Some(tip),
+            greeting_key,
+            tip_key: Some(tip_key),
             category: GreetingCategory::DailyTip,
             day_number: day,
         }
@@ -298,13 +299,13 @@ impl WelcomeEngine {
             self.state.weekly_highlights_shown |= 1 << highlight_index;
         }
 
-        let (message, tip) = weekly_highlight_content(highlight_index, personality);
+        let (greeting_key, tip_key) = weekly_highlight_content(highlight_index, personality);
 
         debug!(day, week_number, "generating weekly highlight");
 
         WelcomeGreeting {
-            message,
-            tip: Some(tip),
+            greeting_key,
+            tip_key: Some(tip_key),
             category: GreetingCategory::WeeklyHighlight,
             day_number: day,
         }
@@ -327,7 +328,7 @@ impl WelcomeEngine {
 
         for occasion in &self.special_occasions {
             if occasion.day_of_year == day_of_year {
-                let message = personality_tint(&occasion.template, personality);
+                let greeting_key = personality_tint_key(personality);
 
                 self.state.last_greeting_day = current_day;
                 self.state.total_greetings_shown =
@@ -336,8 +337,8 @@ impl WelcomeEngine {
                 info!(occasion = %occasion.name, "special occasion greeting");
 
                 return Some(WelcomeGreeting {
-                    message,
-                    tip: None,
+                    greeting_key,
+                    tip_key: None,
                     category: GreetingCategory::SpecialOccasion,
                     day_number: self.state.days_since_onboarding(current_day),
                 });
@@ -368,7 +369,7 @@ impl WelcomeEngine {
             return None;
         }
 
-        let message = milestone_message(days_since, personality);
+        let greeting_key = milestone_message(days_since, personality);
 
         self.state.last_greeting_day = current_day;
         self.state.total_greetings_shown = self.state.total_greetings_shown.saturating_add(1);
@@ -376,8 +377,8 @@ impl WelcomeEngine {
         info!(days = days_since, "milestone greeting generated");
 
         Some(WelcomeGreeting {
-            message,
-            tip: None,
+            greeting_key,
+            tip_key: None,
             category: GreetingCategory::Milestone,
             day_number: days_since,
         })
@@ -461,148 +462,84 @@ impl Default for WelcomeEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Content generation helpers (personality-influenced)
+// Content generation helpers (personality-influenced signal keys)
 // ---------------------------------------------------------------------------
 
-/// Tint a message template with personality influence.
-fn personality_tint(template: &str, personality: &OceanTraits) -> String {
-    // High extraversion → more enthusiastic.
-    // High agreeableness → warmer tone.
-    // High openness → more creative phrasing.
+/// Return a personality-variant signal key for special-occasion greetings.
+///
+/// The LLM uses the key together with the `SpecialOccasion.template` field
+/// to compose the actual user-facing message.  No prose is assembled here.
+fn personality_tint_key(personality: &OceanTraits) -> &'static str {
     if personality.extraversion > 0.65 {
-        format!("{template} I'm really glad to have you here!")
+        "personality_extraverted"
     } else if personality.agreeableness > 0.65 {
-        format!("{template} It's nice to be working together.")
+        "personality_agreeable"
     } else {
-        template.to_string()
+        "personality_neutral"
     }
 }
 
-/// Generate daily tip content based on tip index and personality.
-fn daily_tip_content(index: usize, personality: &OceanTraits) -> (String, String) {
+/// Return (greeting_key, tip_key) signal pair for a daily tip by index.
+///
+/// Keys are passed to the LLM — no user-facing prose is assembled here.
+fn daily_tip_content(index: usize, personality: &OceanTraits) -> (&'static str, &'static str) {
     let warm = personality.agreeableness > 0.6;
     let direct = personality.extraversion < 0.4;
 
     match index {
         0 => {
-            let msg = if warm {
-                "Welcome back! Great to see you again.".to_string()
-            } else {
-                "Welcome back. Let's get started.".to_string()
-            };
-            let tip = "You can ask me anything — from setting reminders to answering questions about your day.".to_string();
-            (msg, tip)
+            let greeting = if warm { "daily_tip_0_warm" } else { "daily_tip_0_neutral" };
+            (greeting, "daily_tip_0_tip")
         }
         1 => {
-            let msg = if direct {
-                "Quick tip for today.".to_string()
-            } else {
-                "Here's something useful for day 2!".to_string()
-            };
-            let tip =
-                "Try asking me to summarize your notifications — I can help you catch up quickly."
-                    .to_string();
-            (msg, tip)
+            let greeting = if direct { "daily_tip_1_direct" } else { "daily_tip_1_friendly" };
+            (greeting, "daily_tip_1_tip")
         }
-        2 => {
-            let msg = "Day 3 — you're building a great habit.".to_string();
-            let tip = "I learn your preferences over time. The more we interact, the better I understand you.".to_string();
-            (msg, tip)
-        }
-        3 => {
-            let msg = "Good to see you on day 4.".to_string();
-            let tip = "Did you know you can ask me about your privacy settings at any time? Just say 'show my privacy settings'.".to_string();
-            (msg, tip)
-        }
-        4 => {
-            let msg = "Day 5 — halfway through the first week!".to_string();
-            let tip = "I can help you set up routines. Try saying 'create a morning routine' to get started.".to_string();
-            (msg, tip)
-        }
+        2 => ("daily_tip_2", "daily_tip_2_tip"),
+        3 => ("daily_tip_3", "daily_tip_3_tip"),
+        4 => ("daily_tip_4", "daily_tip_4_tip"),
         5 => {
-            let msg = if warm {
-                "Almost through your first week! You're doing wonderfully.".to_string()
-            } else {
-                "Day 6 — one more day to go.".to_string()
-            };
-            let tip = "Explore my health tracking features — I can remind you to stay hydrated or take breaks.".to_string();
-            (msg, tip)
+            let greeting = if warm { "daily_tip_5_warm" } else { "daily_tip_5_neutral" };
+            (greeting, "daily_tip_5_tip")
         }
-        6 => {
-            let msg = "Congratulations on completing your first week!".to_string();
-            let tip = "From now on, I'll check in less frequently — but I'm always here when you need me.".to_string();
-            (msg, tip)
-        }
-        _ => {
-            let msg = "Welcome back!".to_string();
-            let tip = "Ask me anything — I'm here to help.".to_string();
-            (msg, tip)
-        }
+        6 => ("daily_tip_6", "daily_tip_6_tip"),
+        _ => ("daily_tip_default", "daily_tip_default_tip"),
     }
 }
 
-/// Generate weekly highlight content based on week index and personality.
-fn weekly_highlight_content(index: usize, personality: &OceanTraits) -> (String, String) {
+/// Return (greeting_key, tip_key) signal pair for a weekly highlight by index.
+fn weekly_highlight_content(index: usize, personality: &OceanTraits) -> (&'static str, &'static str) {
     let enthusiastic = personality.extraversion > 0.6;
 
     match index {
         0 => {
-            let msg = if enthusiastic {
-                "Week 2 — we're really getting to know each other!".to_string()
-            } else {
-                "It's been about two weeks. Here's what I've noticed.".to_string()
-            };
-            let tip = "I've been learning your patterns. Check your profile to see what I've picked up so far.".to_string();
-            (msg, tip)
+            let greeting = if enthusiastic { "weekly_0_enthusiastic" } else { "weekly_0_calm" };
+            (greeting, "weekly_0_tip")
         }
-        1 => {
-            let msg = "Week 3 — here's your weekly highlight.".to_string();
-            let tip =
-                "Try exploring the proactive suggestions I make — they're tailored to your habits."
-                    .to_string();
-            (msg, tip)
-        }
-        2 => {
-            let msg = "Almost a month together!".to_string();
-            let tip = "After this week, I'll only reach out for special occasions or milestones. You can always start a conversation though!".to_string();
-            (msg, tip)
-        }
-        _ => {
-            let msg = "Here's your weekly check-in.".to_string();
-            let tip =
-                "Remember, you can adjust how often I greet you in your settings.".to_string();
-            (msg, tip)
-        }
+        1 => ("weekly_1", "weekly_1_tip"),
+        2 => ("weekly_2", "weekly_2_tip"),
+        _ => ("weekly_default", "weekly_default_tip"),
     }
 }
 
-/// Generate a milestone message.
-fn milestone_message(days: u32, personality: &OceanTraits) -> String {
+/// Return a milestone greeting signal key.
+fn milestone_message(days: u32, personality: &OceanTraits) -> &'static str {
     let warm = personality.agreeableness > 0.6;
     let enthusiastic = personality.extraversion > 0.6;
 
     match days {
         30 => {
-            if enthusiastic {
-                "One month together! We've come a long way — here's to many more!".to_string()
-            } else if warm {
-                "It's been a month since we started. I appreciate you sticking around.".to_string()
-            } else {
-                "30 days. Our collaboration continues to grow.".to_string()
-            }
+            if enthusiastic { "milestone_30d_enthusiastic" }
+            else if warm { "milestone_30d_warm" }
+            else { "milestone_30d_neutral" }
         }
-        60 => "Two months together. I've learned a lot about how to help you best.".to_string(),
-        90 => "Three months! Our working relationship is well established by now.".to_string(),
+        60 => "milestone_60d",
+        90 => "milestone_90d",
         180 => {
-            if warm {
-                "Half a year together — that's a real milestone. Thank you for trusting me."
-                    .to_string()
-            } else {
-                "180 days of collaboration. Here's to the next 180.".to_string()
-            }
+            if warm { "milestone_180d_warm" } else { "milestone_180d_neutral" }
         }
-        365 => "One year together! What an incredible journey it's been.".to_string(),
-        _ => format!("{days} days together — thank you for being here."),
+        365 => "milestone_365d",
+        _ => "milestone_generic",
     }
 }
 
@@ -717,7 +654,7 @@ mod tests {
         let g = greeting.expect("should have greeting");
         assert_eq!(g.category, GreetingCategory::DailyTip);
         assert_eq!(g.day_number, 1);
-        assert!(g.tip.is_some());
+        assert!(g.tip_key.is_some());
     }
 
     #[test]
@@ -798,14 +735,15 @@ mod tests {
         assert!(g.is_some());
         let g = g.expect("greeting");
         assert_eq!(g.category, GreetingCategory::SpecialOccasion);
-        assert!(g.message.contains("Happy birthday"));
+        // greeting_key reflects personality variant (not hardcoded prose)
+        assert!(!g.greeting_key.is_empty());
     }
 
     #[test]
     fn test_personality_tint_high_extraversion() {
         let personality = warm_personality();
-        let result = personality_tint("Hello there.", &personality);
-        assert!(result.contains("really glad"), "got: {result}");
+        let key = personality_tint_key(&personality);
+        assert_eq!(key, "personality_extraverted", "got: {key}");
     }
 
     #[test]
@@ -817,8 +755,8 @@ mod tests {
             agreeableness: 0.3,
             neuroticism: 0.5,
         };
-        let result = personality_tint("Hello there.", &personality);
-        assert_eq!(result, "Hello there.");
+        let key = personality_tint_key(&personality);
+        assert_eq!(key, "personality_neutral");
     }
 
     #[test]
@@ -874,6 +812,6 @@ mod tests {
         assert!(g.is_some());
         let g = g.expect("greeting");
         assert_eq!(g.category, GreetingCategory::Milestone);
-        assert!(g.message.contains("One year"));
+        assert_eq!(g.greeting_key, "milestone_365d");
     }
 }

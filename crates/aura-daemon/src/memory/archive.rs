@@ -67,6 +67,7 @@ const ALGO_LZ4: u8 = 0x01;
 const ALGO_ZSTD: u8 = 0x02;
 
 /// Default compression level for LZ4 (0-16, higher = more compression)
+#[allow(dead_code)] // Phase 8: used by LZ4 compression pipeline when enabled
 const LZ4_COMPRESSION_LEVEL: i32 = 1;
 
 /// Compress data using the specified algorithm.

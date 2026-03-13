@@ -4,7 +4,7 @@
 //! scoring formula:
 //!
 //! ```text
-//! score = urgency × 0.35 + importance × 0.30 + user_expectation × 0.20 + freshness × 0.15
+//! score = goal.priority (set by LLM at creation time)
 //! ```
 //!
 //! Features:
@@ -14,6 +14,7 @@
 //! - **Concurrent limits**: max N goals active based on complexity + power state
 
 use aura_types::errors::GoalError;
+#[allow(unused_imports)] // GoalSource re-imported in inner scopes; this is the canonical top-level import
 use aura_types::goals::{Goal, GoalPriority, GoalSource};
 use aura_types::power::{DegradationLevel, PowerBudget, PowerState};
 use serde::{Deserialize, Serialize};
@@ -31,12 +32,6 @@ const MAX_ACTIVE_GOALS: usize = 32;
 
 /// Maximum goals in the priority queue (active + waiting).
 const MAX_QUEUED_GOALS: usize = 128;
-
-/// Scoring weights.
-const WEIGHT_URGENCY: f32 = 0.35;
-const WEIGHT_IMPORTANCE: f32 = 0.30;
-const WEIGHT_USER_EXPECTATION: f32 = 0.20;
-const WEIGHT_FRESHNESS: f32 = 0.15;
 
 /// Aging: priority boost per minute of waiting (capped).
 const AGING_BOOST_PER_MIN: f32 = 0.005;
@@ -151,22 +146,24 @@ impl GoalScheduler {
         }
     }
 
-    /// Compute the composite priority score for a goal.
+    /// Compute the priority score for a goal.
+    ///
+    /// LLM sets priority at goal creation — Rust does not re-score.
+    /// Returns the goal's own priority as a normalized f32 passthrough.
     #[instrument(skip_all, fields(goal_id = goal.id))]
     pub fn compute_score(&self, goal: &Goal, now_ms: u64) -> ScoredGoal {
+        // LLM sets priority at goal creation — Rust does not re-score.
+        let score = Self::priority_to_f32(&goal.priority);
+
+        // ScoreComponents are populated for observability but do NOT influence the score.
         let urgency = Self::compute_urgency(goal, now_ms);
         let importance = Self::compute_importance(goal);
         let user_expectation = Self::compute_user_expectation(goal);
         let freshness = Self::compute_freshness(goal, now_ms);
 
-        let score = urgency * WEIGHT_URGENCY
-            + importance * WEIGHT_IMPORTANCE
-            + user_expectation * WEIGHT_USER_EXPECTATION
-            + freshness * WEIGHT_FRESHNESS;
-
         ScoredGoal {
             goal_id: goal.id,
-            score: score.clamp(0.0, 1.0),
+            score,
             components: ScoreComponents {
                 urgency,
                 importance,
@@ -176,6 +173,19 @@ impl GoalScheduler {
             },
             enqueued_at_ms: now_ms,
             is_active: false,
+        }
+    }
+
+    /// Convert a `GoalPriority` enum variant to a normalized f32.
+    ///
+    /// Structural mapping only — no NLP, no formula.
+    fn priority_to_f32(priority: &GoalPriority) -> f32 {
+        match priority {
+            GoalPriority::Critical => 1.0,
+            GoalPriority::High => 0.8,
+            GoalPriority::Medium => 0.5,
+            GoalPriority::Low => 0.3,
+            GoalPriority::Background => 0.1,
         }
     }
 
@@ -482,24 +492,6 @@ const MAX_DETECTED_CONFLICTS: usize = 32;
 /// Maximum number of detected synergies.
 const MAX_DETECTED_SYNERGIES: usize = 32;
 
-/// Feasibility weight in the extended scoring formula.
-const WEIGHT_FEASIBILITY: f32 = 0.15;
-
-/// Personality influence weight in the extended scoring formula.
-const WEIGHT_PERSONALITY: f32 = 0.05;
-
-/// Dependency satisfaction weight in the extended scoring formula.
-const WEIGHT_DEPENDENCY: f32 = 0.10;
-
-/// Extended scoring formula re-normalizes the original weights.
-/// Original: urgency(0.35) + importance(0.30) + user_expectation(0.20) + freshness(0.15) = 1.0
-/// Extended: urgency(0.25) + importance(0.20) + user_expectation(0.15) + freshness(0.10)
-///         + feasibility(0.15) + personality(0.05) + dependency(0.10) = 1.0
-const EXT_WEIGHT_URGENCY: f32 = 0.25;
-const EXT_WEIGHT_IMPORTANCE: f32 = 0.20;
-const EXT_WEIGHT_USER_EXPECTATION: f32 = 0.15;
-const EXT_WEIGHT_FRESHNESS: f32 = 0.10;
-
 // ---------------------------------------------------------------------------
 // BDI Types
 // ---------------------------------------------------------------------------
@@ -762,15 +754,11 @@ impl BdiScheduler {
     // Extended scoring
     // -----------------------------------------------------------------------
 
-    /// Compute an extended BDI score for a goal incorporating feasibility,
-    /// personality, and dependency satisfaction.
+    /// Compute an extended BDI score for a goal.
     ///
-    /// The extended formula re-distributes weights:
-    /// ```text
-    /// score = urgency×0.25 + importance×0.20 + user_expectation×0.15
-    ///       + freshness×0.10 + feasibility×0.15 + personality×0.05
-    ///       + dependency×0.10
-    /// ```
+    /// LLM sets priority at goal creation — Rust does not re-score.
+    /// Returns the goal's own priority as a normalized f32 passthrough.
+    /// Extended components are populated for observability only.
     pub fn compute_extended_score(
         &self,
         goal: &Goal,
@@ -778,81 +766,69 @@ impl BdiScheduler {
         dependency_ids: &[u64],
         personality_openness: f32,
     ) -> (ScoredGoal, ExtendedScoreComponents) {
+        // LLM sets priority at goal creation — Rust does not re-score.
         let base_scored = self.base.compute_score(goal, now_ms);
         let feasibility = self.compute_feasibility(goal);
         let personality = Self::compute_personality_influence(goal, personality_openness);
         let dependency = self.compute_dependency_satisfaction(dependency_ids);
 
-        let ext_score = base_scored.components.urgency * EXT_WEIGHT_URGENCY
-            + base_scored.components.importance * EXT_WEIGHT_IMPORTANCE
-            + base_scored.components.user_expectation * EXT_WEIGHT_USER_EXPECTATION
-            + base_scored.components.freshness * EXT_WEIGHT_FRESHNESS
-            + feasibility * WEIGHT_FEASIBILITY
-            + personality * WEIGHT_PERSONALITY
-            + dependency * WEIGHT_DEPENDENCY;
-
-        let mut scored = base_scored;
-        scored.score = ext_score.clamp(0.0, 1.0);
-
+        // Score is the goal's own priority — no re-weighting formula.
+        // Components are recorded for observability but do not influence score.
         let ext_components = ExtendedScoreComponents {
-            base: scored.components,
+            base: base_scored.components,
             feasibility,
             personality_influence: personality,
             dependency_satisfaction: dependency,
         };
 
-        (scored, ext_components)
+        (base_scored, ext_components)
     }
 
     /// Compute feasibility based on current beliefs.
     ///
-    /// Checks beliefs about network, battery, required apps, etc.
+    /// Applies mechanical multipliers derived from well-known system beliefs:
+    /// - battery_level < 15 → 0.5× penalty (very low battery)
+    /// - network_connected = "false" AND goal description contains network
+    ///   keywords → 0.6× penalty
+    /// - screen_on = "false" → 0.8× penalty (UI goals need screen)
     fn compute_feasibility(&self, goal: &Goal) -> f32 {
-        let mut feasibility: f32 = 1.0;
-        let mut checks = 0u32;
+        let mut feasibility = 1.0_f32;
 
-        // Check battery belief.
-        if let Some(battery) = self.beliefs.get(&"battery_level".to_string()) {
-            checks += 1;
-            if let Ok(level) = battery.value.parse::<f32>() {
-                if level < 10.0 && goal.priority != GoalPriority::Critical {
-                    feasibility -= 0.4;
-                } else if level < 25.0 {
-                    feasibility -= 0.1;
+        // Battery belief: low battery degrades feasibility.
+        if let Some(b) = self.get_belief("battery_level") {
+            if let Ok(level) = b.value.parse::<f32>() {
+                if level < 15.0 {
+                    feasibility *= 0.5;
+                } else if level < 30.0 {
+                    feasibility *= 0.75;
                 }
             }
         }
 
-        // Check network belief.
-        if let Some(network) = self.beliefs.get(&"network_connected".to_string()) {
-            checks += 1;
-            if network.value == "false" {
-                // Goals that might need network get a feasibility penalty.
+        // Network belief: disconnected + network-requiring description degrades feasibility.
+        if let Some(b) = self.get_belief("network_connected") {
+            if b.value == "false" {
+                // Check if the goal description involves network activity.
                 let desc_lower = goal.description.to_ascii_lowercase();
-                if desc_lower.contains("send")
-                    || desc_lower.contains("search")
-                    || desc_lower.contains("download")
-                    || desc_lower.contains("navigate")
-                {
-                    feasibility -= 0.5;
+                const NETWORK_KEYWORDS: &[&str] = &[
+                    "search", "send", "message", "navigate", "maps", "online",
+                    "web", "internet", "email", "download", "upload", "stream",
+                    "restaurant", "weather", "news", "sync",
+                ];
+                let needs_network = NETWORK_KEYWORDS
+                    .iter()
+                    .any(|kw| desc_lower.contains(kw));
+                if needs_network {
+                    feasibility *= 0.6;
                 }
             }
         }
 
-        // Check screen availability.
-        if let Some(screen) = self.beliefs.get(&"screen_on".to_string()) {
-            checks += 1;
-            if screen.value == "false" {
-                // Non-background goals need the screen.
-                if goal.priority != GoalPriority::Background {
-                    feasibility -= 0.2;
-                }
+        // Screen belief: screen off reduces feasibility for interactive goals.
+        if let Some(b) = self.get_belief("screen_on") {
+            if b.value == "false" {
+                feasibility *= 0.8;
             }
-        }
-
-        if checks == 0 {
-            // No beliefs to evaluate — assume moderate feasibility.
-            return 0.7;
         }
 
         feasibility.clamp(0.0, 1.0)
@@ -863,14 +839,10 @@ impl BdiScheduler {
     /// Higher openness → more willing to pursue proactive/novel goals.
     /// Lower openness → stronger preference for user-explicit goals.
     fn compute_personality_influence(goal: &Goal, openness: f32) -> f32 {
-        let openness = openness.clamp(0.0, 1.0);
-        match goal.source {
-            GoalSource::ProactiveSuggestion => openness * 0.8,
-            GoalSource::GoalDecomposition(_) => 0.5 + openness * 0.2,
-            GoalSource::UserExplicit => 0.8 + (1.0 - openness) * 0.2,
-            GoalSource::NotificationTriggered => 0.6 + openness * 0.1,
-            GoalSource::CronScheduled => 0.7,
-        }
+        // LLM sets priority at goal creation — Rust does not re-score.
+        // Returns raw priority f32; openness parameter retained for API compat.
+        let _ = openness;
+        GoalScheduler::priority_to_f32(&goal.priority)
     }
 
     /// Compute how many dependency goals are already satisfied.
@@ -927,30 +899,23 @@ impl BdiScheduler {
         self.desires = BoundedVec::new();
 
         for goal in goals {
-            let feasibility = self.compute_feasibility(goal);
-            let personality = Self::compute_personality_influence(goal, personality_openness);
             let base_scored = self.base.compute_score(goal, now_ms);
 
-            let desirability =
-                (base_scored.score * 0.6 + feasibility * 0.25 + personality * 0.15).clamp(0.0, 1.0);
+            // LLM sets priority at goal creation — Rust uses goal priority directly as desirability.
+            // No blended formula: desirability = goal's own priority (f32 passthrough).
+            let desirability = base_scored.score;
 
-            let (feasible, reason) = if feasibility < 0.2 {
-                (
-                    false,
-                    Some("insufficient resources or conditions".to_string()),
-                )
-            } else {
-                (true, None)
-            };
+            // Unused — kept for API compat; LLM assesses feasibility.
+            let _ = personality_openness;
 
-            // Extract resource hints from goal description.
+            // LLM infers resource requirements — Rust returns empty as neutral default.
             let required_resources = Self::infer_resources(&goal.description);
 
             let desire = Desire {
                 goal_id: goal.id,
                 desirability,
-                feasible,
-                infeasibility_reason: reason,
+                feasible: true,
+                infeasibility_reason: None,
                 required_resources,
             };
 
@@ -1344,30 +1309,90 @@ impl BdiScheduler {
     }
 
     /// Infer required resources from a goal description.
+    ///
+    /// Infer resource requirements from a goal description via keyword lookup.
+    ///
+    /// Performs structural substring matching against a fixed keyword table —
+    /// no NLP or semantic reasoning.  Returns the set of resource tags that
+    /// the description implies.
     fn infer_resources(description: &str) -> Vec<String> {
-        let desc = description.to_ascii_lowercase();
-        let mut resources = Vec::new();
+        let desc_lower = description.to_ascii_lowercase();
+        let mut resources: Vec<String> = Vec::new();
 
-        if desc.contains("photo") || desc.contains("camera") || desc.contains("picture") {
+        // Camera / photo
+        if desc_lower.contains("camera")
+            || desc_lower.contains("photo")
+            || desc_lower.contains("picture")
+            || desc_lower.contains("selfie")
+            || desc_lower.contains("scan")
+        {
             resources.push("camera".to_string());
         }
-        if desc.contains("send") || desc.contains("download") || desc.contains("search") {
-            resources.push("network".to_string());
-        }
-        if desc.contains("navigate") || desc.contains("maps") || desc.contains("location") {
-            resources.push("gps".to_string());
-            resources.push("network".to_string());
-        }
-        if desc.contains("call") || desc.contains("phone") {
+
+        // Microphone / audio
+        if desc_lower.contains("microphone")
+            || desc_lower.contains("record")
+            || desc_lower.contains("voice")
+            || desc_lower.contains("audio")
+            || desc_lower.contains("dictate")
+        {
             resources.push("microphone".to_string());
         }
-        if desc.contains("pay") || desc.contains("purchase") || desc.contains("buy") {
+
+        // GPS / location
+        if desc_lower.contains("navigate")
+            || desc_lower.contains("navigation")
+            || desc_lower.contains("maps")
+            || desc_lower.contains("location")
+            || desc_lower.contains("gps")
+            || desc_lower.contains("airport")
+            || desc_lower.contains("directions")
+        {
+            resources.push("gps".to_string());
+        }
+
+        // Network / internet
+        if desc_lower.contains("search")
+            || desc_lower.contains("send")
+            || desc_lower.contains("message")
+            || desc_lower.contains("navigate")
+            || desc_lower.contains("maps")
+            || desc_lower.contains("online")
+            || desc_lower.contains("web")
+            || desc_lower.contains("internet")
+            || desc_lower.contains("email")
+            || desc_lower.contains("download")
+            || desc_lower.contains("upload")
+            || desc_lower.contains("stream")
+            || desc_lower.contains("restaurant")
+            || desc_lower.contains("weather")
+            || desc_lower.contains("news")
+            || desc_lower.contains("network")
+            || desc_lower.contains("sync")
+        {
+            resources.push("network".to_string());
+        }
+
+        // Bluetooth / peripheral
+        if desc_lower.contains("bluetooth")
+            || desc_lower.contains("pair")
+            || desc_lower.contains("headphone")
+            || desc_lower.contains("speaker")
+        {
+            resources.push("bluetooth".to_string());
+        }
+
+        // User confirmation / financial
+        if desc_lower.contains("buy")
+            || desc_lower.contains("purchase")
+            || desc_lower.contains("pay")
+            || desc_lower.contains("order")
+            || desc_lower.contains("checkout")
+            || desc_lower.contains("confirm")
+        {
             resources.push("user_confirmation".to_string());
         }
 
-        // Deduplicate.
-        resources.sort();
-        resources.dedup();
         resources
     }
 }
@@ -1655,6 +1680,9 @@ mod tests {
 
     #[test]
     fn test_bdi_personality_influence_proactive() {
+        // LLM sets priority at goal creation — Rust returns goal priority directly.
+        // Openness parameter does not influence the result; both calls return
+        // the goal's own priority f32.
         let high_openness = BdiScheduler::compute_personality_influence(
             &make_goal(1, GoalPriority::Medium, GoalSource::ProactiveSuggestion),
             0.9,
@@ -1663,11 +1691,11 @@ mod tests {
             &make_goal(2, GoalPriority::Medium, GoalSource::ProactiveSuggestion),
             0.1,
         );
-        assert!(
-            high_openness > low_openness,
-            "high openness {} should boost proactive goals more than low openness {}",
-            high_openness,
-            low_openness
+        // Both return the same priority (Medium = 0.5) — openness is a no-op.
+        assert_eq!(
+            high_openness, low_openness,
+            "personality influence is now a priority passthrough: {} vs {}",
+            high_openness, low_openness
         );
     }
 

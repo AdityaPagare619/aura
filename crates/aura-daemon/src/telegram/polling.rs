@@ -101,6 +101,9 @@ impl HttpBackend for StubHttpBackend {
 /// Telegram Bot API long-polling client.
 ///
 /// Manages the poll loop, outgoing message queue flushing, and raw API calls.
+// Phase 8 wire point: bot_token read by polling loop once Telegram bridge is
+// activated from the JNI boot path.
+#[allow(dead_code)]
 pub struct TelegramPoller {
     bot_token: String,
     base_url: String,

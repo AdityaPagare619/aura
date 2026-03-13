@@ -26,10 +26,15 @@ pub enum DslCondition {
     },
     AppInForeground(String),
     ScreenContainsText(String),
+    /// Bounded: max MAX_DSL_CONDITION_OPERANDS items enforced at construction site.
     And(Vec<DslCondition>),
+    /// Bounded: max MAX_DSL_CONDITION_OPERANDS items enforced at construction site.
     Or(Vec<DslCondition>),
     Not(Box<DslCondition>),
 }
+
+/// Max operands in a compound [`DslCondition::And`] or [`DslCondition::Or`].
+pub const MAX_DSL_CONDITION_OPERANDS: usize = 16;
 
 /// Strategy when a step fails.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,10 +46,14 @@ pub enum FailureStrategy {
     /// Abort the entire plan.
     Abort,
     /// Execute fallback steps instead.
+    /// Bounded: max MAX_FAILURE_FALLBACK_STEPS items enforced at construction site.
     Fallback(Vec<DslStep>),
     /// Ask the user what to do.
     AskUser(String),
 }
+
+/// Max fallback steps in [`FailureStrategy::Fallback`].
+pub const MAX_FAILURE_FALLBACK_STEPS: usize = 8;
 
 impl Default for FailureStrategy {
     fn default() -> Self {
@@ -79,6 +88,7 @@ impl SafetyLevel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DslBlock {
     pub name: String,
+    /// Bounded at runtime to `max_total_steps` entries — enforced by `can_add_steps()` at construction site.
     pub steps: Vec<DslStep>,
     pub max_total_steps: u32,
     pub safety_level: SafetyLevel,
@@ -116,7 +126,7 @@ impl DslBlock {
 pub struct ToolCall {
     /// Tool name, matching a key in `TOOL_REGISTRY`.
     pub tool_name: String,
-    /// Resolved parameter values.
+    /// Resolved parameter values. Bounded at runtime to MAX_TOOL_PARAMETERS entries — enforced by consumer.
     pub parameters: Vec<(String, ParamValue)>,
     /// Risk level (copied from tool schema for quick checks).
     pub risk_level: RiskLevel,

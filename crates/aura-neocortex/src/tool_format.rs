@@ -28,6 +28,7 @@ use aura_types::tools::{find_tool, ParamValue, RiskLevel, TOOL_REGISTRY};
 const MAX_PLAN_STEPS: usize = 64;
 
 /// Maximum number of tool parameters we accept per tool call.
+#[allow(dead_code)] // Phase 5/8: used by ReAct tool-call parser validation
 const MAX_TOOL_PARAMS: usize = 16;
 
 /// Maximum length of any single string field from LLM output (64 KB).
@@ -408,6 +409,7 @@ fn parse_failure_strategy(value: &serde_json::Value) -> Result<FailureStrategy, 
 /// ```
 ///
 /// Validates tool name against `TOOL_REGISTRY` and converts parameter values.
+#[allow(dead_code)] // Phase 5/8: called by ReAct loop when parsing LLM tool-call JSON
 #[tracing::instrument(level = "debug", skip(json))]
 pub fn parse_tool_call(json: &str) -> Result<ToolCall, AuraError> {
     let trimmed = json.trim();
@@ -471,6 +473,7 @@ pub fn parse_tool_call(json: &str) -> Result<ToolCall, AuraError> {
 }
 
 /// Convert a `serde_json::Value` to a `ParamValue`.
+#[allow(dead_code)] // Phase 5/8: used by parse_tool_call parameter conversion
 fn json_to_param_value(value: &serde_json::Value) -> ParamValue {
     match value {
         serde_json::Value::String(s) => ParamValue::String(truncate_string(s, MAX_STRING_LEN)),
@@ -488,6 +491,22 @@ fn json_to_param_value(value: &serde_json::Value) -> ParamValue {
 ///
 /// This is used when the daemon sends back a previous plan for re-planning
 /// or when the teacher stack needs to show the model what it previously produced.
+///
+/// # Phase 4 Wire Point
+///
+/// **Not yet called externally.** Wire this when the following are implemented:
+///
+/// - **ALPHA** (`ipc_handler.rs` → `handle_inference()`): When a `Replan` or
+///   `Strategist` request arrives and `payload.previous_plan` is `Some(_)`,
+///   call `format_plan_for_context(&previous_plan)` and inject the result into
+///   the `ContextBuilder` before dispatching to the inference engine.
+///
+/// - **EPSILON** (`context.rs` → `ContextBuilder::build()`): Alongside the
+///   existing `previous_attempt` injection, inject the previous plan text so
+///   the LLM can reason about what it previously produced vs. what failed.
+///
+/// DO NOT DELETE — part of the re-planning feedback loop.
+#[allow(dead_code)]
 #[tracing::instrument(level = "trace", skip(plan))]
 pub fn format_plan_for_context(plan: &ActionPlan) -> String {
     let mut out = String::with_capacity(1024);
@@ -519,6 +538,26 @@ pub fn format_plan_for_context(plan: &ActionPlan) -> String {
 }
 
 /// Format a `ToolCallResult` as a compact text block for re-planning context.
+///
+/// # Phase 4 Wire Points
+///
+/// **Not yet called externally.** Wire this when the following are implemented:
+///
+/// - **ALPHA** (`ipc_handler.rs` → `DaemonToNeocortex::ReActStep` handler,
+///   ~lines 341–355): The current handler builds a raw observation string
+///   manually. Once the daemon sends typed `ToolCallResult` structs instead of
+///   raw strings, replace that manual construction with a call to this function.
+///
+/// - **BETA** (`inference.rs` → `infer_react_loop()`, ~lines 617–626): When
+///   assembling the observation turn after a tool call returns, call
+///   `format_tool_result_for_context(&result)` to produce the observation text
+///   instead of constructing it inline.
+///
+/// Prerequisite: daemon IPC must be updated to send `ToolCallResult` typed
+/// payloads rather than `(tool_name: String, observation: String)` pairs.
+///
+/// DO NOT DELETE — part of the ReAct tool execution feedback loop.
+#[allow(dead_code)]
 #[tracing::instrument(level = "trace", skip(result))]
 pub fn format_tool_result_for_context(result: &ToolCallResult) -> String {
     let status = if result.success { "OK" } else { "FAILED" };
@@ -563,6 +602,13 @@ pub fn format_tools_compact() -> String {
 }
 
 /// Format a brief description of an `ActionType` (one-liner).
+///
+/// Called internally by [`format_plan_for_context`] to render each plan step.
+/// The `dead_code` lint fires because `format_plan_for_context` has no external
+/// callers yet (Phase 4). Once that function is wired, this warning disappears.
+///
+/// DO NOT DELETE — transitively used by the re-planning feedback loop.
+#[allow(dead_code)]
 pub fn format_action_brief(action: &ActionType) -> String {
     match action {
         ActionType::Tap { x, y } => format!("Tap({x},{y})"),

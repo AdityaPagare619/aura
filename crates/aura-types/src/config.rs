@@ -30,6 +30,8 @@ pub struct AuraConfig {
     pub policy: PolicyConfig,
     #[serde(default)]
     pub onboarding: OnboardingConfig,
+    #[serde(default)]
+    pub token_budget: TokenBudgetConfig,
 }
 
 /// Daemon process configuration.
@@ -136,6 +138,34 @@ pub struct NeocortexConfig {
     pub inference_timeout_ms: u32,
     /// Path to model files directory.
     pub model_dir: String,
+    /// Default model identifier — used for display, logging, and as a hint
+    /// to `ModelScanner` when selecting which GGUF file to prefer.
+    /// Users can override this in `aura.config.toml`; the compiled default
+    /// is Qwen3-8B (Full8B tier, Q4_K_M quantization).
+    #[serde(default = "default_model_name")]
+    pub default_model_name: String,
+    /// Absolute path to the default GGUF model file.
+    /// Resolved at startup; `~` is expanded to the user home directory.
+    /// If empty or the file does not exist, `ModelScanner` falls back to
+    /// scanning `model_dir` and selecting by RAM estimate.
+    /// Default: `~/aura/models/qwen3-8b-q4_k_m.gguf`
+    #[serde(default = "default_model_path")]
+    pub default_model_path: String,
+    /// Native context window for the default model (tokens).
+    /// Set to Qwen3-8B's full 32 K context; lower this on memory-constrained
+    /// devices or override per-request via `ModelParams::n_ctx`.
+    #[serde(default = "default_model_context_size")]
+    pub default_model_context_size: u32,
+}
+
+fn default_model_name() -> String {
+    "Qwen3-8B-Q4_K_M".to_string()
+}
+fn default_model_path() -> String {
+    "~/aura/models/qwen3-8b-q4_k_m.gguf".to_string()
+}
+fn default_model_context_size() -> u32 {
+    32_768
 }
 
 impl Default for NeocortexConfig {
@@ -146,6 +176,9 @@ impl Default for NeocortexConfig {
             max_memory_mb: 2048,
             inference_timeout_ms: 60_000,
             model_dir: "/data/local/tmp/aura/models".to_string(),
+            default_model_name: default_model_name(),
+            default_model_path: default_model_path(),
+            default_model_context_size: default_model_context_size(),
         }
     }
 }
@@ -504,6 +537,7 @@ pub struct TelegramConfig {
     #[serde(default)]
     pub bot_token: String,
     /// Allowed chat IDs (empty = deny all).
+    /// Bounded: max MAX_TELEGRAM_ALLOWED_CHAT_IDS items enforced at load site.
     #[serde(default)]
     pub allowed_chat_ids: Vec<i64>,
     /// Polling interval (ms).
@@ -525,6 +559,9 @@ impl Default for TelegramConfig {
         }
     }
 }
+
+/// Max allowed chat IDs in [`TelegramConfig`].
+pub const MAX_TELEGRAM_ALLOWED_CHAT_IDS: usize = 32;
 
 /// Voice input/output (TTS/STT) configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -632,6 +669,7 @@ pub struct PolicyConfig {
     #[serde(default = "default_max_rules_per_event")]
     pub max_rules_per_event: u32,
     /// Ordered list of policy rules (first match wins).
+    /// Bounded: max MAX_POLICY_RULES items enforced at load site.
     #[serde(default)]
     pub rules: Vec<PolicyRuleConfig>,
 }
@@ -654,6 +692,9 @@ impl Default for PolicyConfig {
     }
 }
 
+/// Max policy rules in [`PolicyConfig`].
+pub const MAX_POLICY_RULES: usize = 256;
+
 /// A single PolicyGate rule — action glob pattern mapped to an effect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyRuleConfig {
@@ -667,6 +708,52 @@ pub struct PolicyRuleConfig {
     pub reason: String,
     /// Priority — lower number = evaluated first (0 = highest priority).
     pub priority: u32,
+}
+
+/// Token budget configuration for daemon-side LLM context window overflow prevention.
+///
+/// These values are consumed by `TokenBudgetManager` in `aura-daemon`.
+/// All fields have sensible defaults for the Qwen3-8B model used on-device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenBudgetConfig {
+    /// Maximum tokens allowed per agentic session before forced compaction.
+    #[serde(default = "default_token_budget_session_limit")]
+    pub session_limit: u32,
+    /// Tokens reserved for the LLM response — excluded from the planning budget.
+    #[serde(default = "default_token_budget_response_reserve")]
+    pub response_reserve: u32,
+    /// Fraction of session_limit at which `BudgetStatus::Warning` fires
+    /// and advisory summarization is recommended (0.0–1.0).
+    #[serde(default = "default_token_budget_compaction_threshold")]
+    pub compaction_threshold: f32,
+    /// Fraction of session_limit at which `BudgetStatus::Critical` fires
+    /// and mandatory summarization is enforced (0.0–1.0).
+    #[serde(default = "default_token_budget_force_compaction_threshold")]
+    pub force_compaction_threshold: f32,
+}
+
+fn default_token_budget_session_limit() -> u32 {
+    2048
+}
+fn default_token_budget_response_reserve() -> u32 {
+    512
+}
+fn default_token_budget_compaction_threshold() -> f32 {
+    0.75
+}
+fn default_token_budget_force_compaction_threshold() -> f32 {
+    0.90
+}
+
+impl Default for TokenBudgetConfig {
+    fn default() -> Self {
+        Self {
+            session_limit: 2048,
+            response_reserve: 512,
+            compaction_threshold: 0.75,
+            force_compaction_threshold: 0.90,
+        }
+    }
 }
 
 /// Onboarding / first-run configuration.
@@ -787,5 +874,28 @@ mod tests {
             ..RoutingConfig::default()
         };
         assert!(!bad.weights_valid());
+    }
+
+    #[test]
+    fn test_neocortex_default_model_is_qwen3() {
+        let cfg = NeocortexConfig::default();
+        assert!(
+            cfg.default_model_name.to_lowercase().contains("qwen3"),
+            "default model name must reference Qwen3, got: {}",
+            cfg.default_model_name
+        );
+        assert!(
+            cfg.default_model_path.contains("qwen3"),
+            "default model path must reference qwen3 GGUF, got: {}",
+            cfg.default_model_path
+        );
+        assert!(
+            cfg.default_model_path.ends_with(".gguf"),
+            "default model path must be a .gguf file"
+        );
+        assert_eq!(
+            cfg.default_model_context_size, 32_768,
+            "Qwen3-8B default context must be 32768 tokens"
+        );
     }
 }

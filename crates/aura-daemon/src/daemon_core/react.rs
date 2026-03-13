@@ -31,12 +31,17 @@ use aura_types::actions::ActionResult;
 use aura_types::errors::AuraError;
 use aura_types::etg::ActionPlan;
 use aura_types::ipc::{
-    ContextPackage, FailureContext, InferenceMode, ScreenSummary, TransitionPair,
+    ContextPackage, DaemonToNeocortex, FailureContext, InferenceMode, NeocortexToDaemon,
+    ScreenSummary, TransitionPair,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
 
+use aura_types::config::TokenBudgetConfig;
+
+use crate::daemon_core::token_budget::{BudgetStatus, TokenBudgetManager};
 use crate::execution::executor::{ExecutionOutcome, Executor};
+use crate::ipc::NeocortexClient;
 use crate::policy::audit::AuditLog;
 use crate::policy::gate::PolicyGate;
 use crate::policy::rules::RuleEffect;
@@ -75,9 +80,8 @@ const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 /// FNV-1a prime for cycle hashing.
 const FNV_PRIME: u64 = 0x00000100000001B3;
 
-/// Threshold above which a task is considered complex enough for System 2.
-/// Derived from `RouteClassifier::compute_complexity` output range \[0.0, 1.0\].
-const COMPLEXITY_SEMANTIC_THRESHOLD: f32 = 0.45;
+// COMPLEXITY_SEMANTIC_THRESHOLD removed: classify_task() no longer uses
+// heuristic thresholds — LLM decides execution mode, not Rust keyword scoring.
 
 // ---------------------------------------------------------------------------
 // PolicyContext — bundles safety gate + audit for the execution pipeline
@@ -225,7 +229,7 @@ impl ReactEngine {
     /// Create an engine with default "normal" configuration.
     ///
     /// Uses `Executor::normal()`, `RouteClassifier::new()`,
-    /// `PolicyGate::allow_all()`, and `AuditLog::new()`.
+    /// `PolicyGate::deny_by_default()`, and `AuditLog::new()`.
     /// The caller must supply a `ScreenProvider` since it cannot be defaulted
     /// (it requires either a real device or a mock).
     pub fn with_defaults(screen: Box<dyn ScreenProvider>) -> Self {
@@ -233,7 +237,7 @@ impl ReactEngine {
             executor: Executor::default(),
             screen,
             classifier: RouteClassifier::new(),
-            policy_gate: PolicyGate::allow_all(),
+            policy_gate: PolicyGate::deny_by_default(),
             audit_log: AuditLog::with_default_capacity(),
         }
     }
@@ -606,96 +610,24 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 
 /// Classify a task description to determine which execution mode to use.
 ///
-/// Uses [`RouteClassifier::compute_complexity`] as the primary signal.
-/// Tasks above [`COMPLEXITY_SEMANTIC_THRESHOLD`] are routed to System 2
-/// (SemanticReact). A keyword fast-path overrides complexity for well-known
-/// simple actions (DGS) and reasoning-heavy verbs (SemanticReact).
+/// # Architecture note
+/// Keyword matching and complexity heuristics in Rust are Theater AGI —
+/// Rust reasoning about *what* a task means violates the LLM=brain principle.
+/// The LLM is the only entity that understands task semantics.
 ///
-/// Heuristics (in priority order):
-/// 1. Keyword fast-path for known DGS / SemanticReact patterns
-/// 2. `RouteClassifier::compute_complexity` score vs threshold
-/// 3. Short imperative tasks (≤6 words) → DGS
-/// 4. Default → SemanticReact (safest for unknown tasks)
+/// Default: always `SemanticReact`. The LLM (via Neocortex) decides whether
+/// a task is simple enough for DGS or requires full ReAct reasoning. The
+/// daemon's job is to route *to* the LLM, not to pre-classify intent.
+///
+/// TODO(arch): Once the Neocortex IPC layer returns an explicit
+/// `ExecutionMode` recommendation as part of the plan response, wire that
+/// recommendation here instead of hardcoding `SemanticReact`.
 #[instrument(skip_all, fields(task_len = task.len()))]
 pub fn classify_task(task: &str) -> ExecutionMode {
-    let lower = task.to_lowercase();
-
-    // DGS-favoring keywords: simple, well-known device actions.
-    const DGS_KEYWORDS: &[&str] = &[
-        "open app",
-        "send message",
-        "take screenshot",
-        "set alarm",
-        "turn on",
-        "turn off",
-        "enable",
-        "disable",
-        "go to settings",
-        "scroll down",
-        "scroll up",
-        "tap on",
-        "click on",
-        "navigate to",
-        "go back",
-        "go home",
-        "open notification",
-        "dismiss",
-        "swipe",
-        "type",
-    ];
-
-    for keyword in DGS_KEYWORDS {
-        if lower.contains(keyword) {
-            debug!(keyword, "task classified as DGS via keyword match");
-            return ExecutionMode::Dgs;
-        }
-    }
-
-    // SemanticReact-favoring keywords: require reasoning or exploration.
-    const REACT_KEYWORDS: &[&str] = &[
-        "figure out",
-        "decide",
-        "analyze",
-        "compare",
-        "find the best",
-        "research",
-        "troubleshoot",
-        "debug",
-        "why",
-        "how to",
-        "what should",
-        "recommend",
-        "explain",
-        "summarize",
-    ];
-
-    for keyword in REACT_KEYWORDS {
-        if lower.contains(keyword) {
-            debug!(keyword, "task classified as SemanticReact via keyword match");
-            return ExecutionMode::SemanticReact;
-        }
-    }
-
-    // Primary signal: RouteClassifier complexity score.
-    let complexity = RouteClassifier::compute_complexity(task);
-    if complexity >= COMPLEXITY_SEMANTIC_THRESHOLD {
-        debug!(
-            complexity,
-            threshold = COMPLEXITY_SEMANTIC_THRESHOLD,
-            "task classified as SemanticReact via complexity score"
-        );
-        return ExecutionMode::SemanticReact;
-    }
-
-    // Short, imperative tasks (≤6 words) are likely simple actions → DGS.
-    let word_count = task.split_whitespace().count();
-    if word_count <= 6 {
-        debug!(word_count, "short task classified as DGS");
-        return ExecutionMode::Dgs;
-    }
-
-    // Default to SemanticReact for safety — it can handle anything.
-    debug!(complexity, "task classified as SemanticReact (default)");
+    let _ = task; // LLM decides execution mode; Rust does not inspect task content.
+    // ARCHITECTURE: Rust does not classify task semantics.
+    // The LLM routes. Always use SemanticReact so the full ReAct loop runs
+    // and the LLM decides the execution strategy.
     ExecutionMode::SemanticReact
 }
 
@@ -1367,6 +1299,7 @@ impl ReactEngine {
     ) -> TaskOutcome {
         let start = Instant::now();
         let mut current_plan = initial_plan;
+        let mut budget = TokenBudgetManager::new(TokenBudgetConfig::default());
 
         loop {
             // Check termination.
@@ -1437,16 +1370,99 @@ impl ReactEngine {
                     continue;
                 }
             } else {
-                // No plan available — in production, this sends
-                // DaemonToNeocortex::Plan to the neocortex and waits for
-                // NeocortexToDaemon::PlanReady.
-                info!("no plan and no neocortex connection — aborting SemanticReact");
-                return TaskOutcome::Failed {
-                    reason: "no action plan available and neocortex not connected".to_string(),
-                    iterations_used: session.iteration_count,
-                    total_ms: start.elapsed().as_millis() as u64,
-                    last_strategy: session.strategy,
+                // No plan available — request one from the neocortex via IPC.
+                // Build a fresh context with the current screen state to send.
+                let screen_summary = self.capture_screen_summary();
+                let ctx = match build_context(session, screen_summary, None) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "context build failed during plan request — aborting");
+                        return TaskOutcome::Failed {
+                            reason: format!("context build failed: {e}"),
+                            iterations_used: session.iteration_count,
+                            total_ms: start.elapsed().as_millis() as u64,
+                            last_strategy: session.strategy,
+                        };
+                    }
                 };
+
+                let plan_req = DaemonToNeocortex::Plan { context: ctx, failure: None };
+
+                // ── Token budget: pre-call checks ───────────────────────────
+                if matches!(budget.check_budget(), BudgetStatus::Exhausted) {
+                    warn!(
+                        session_used = budget.snapshot().session_used,
+                        session_limit = budget.snapshot().session_limit,
+                        "token budget exhausted — aborting Plan request"
+                    );
+                    return TaskOutcome::Failed {
+                        reason: "token budget exhausted".to_string(),
+                        iterations_used: session.iteration_count,
+                        total_ms: start.elapsed().as_millis() as u64,
+                        last_strategy: session.strategy,
+                    };
+                }
+                if budget.must_summarize() {
+                    warn!(
+                        used_pct = budget.snapshot().used_pct,
+                        "token budget critical — conversation compaction required before Plan call"
+                    );
+                }
+
+                let mut client = match NeocortexClient::connect().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "neocortex unreachable for Plan request — aborting");
+                        return TaskOutcome::Failed {
+                            reason: "neocortex unavailable: cannot request action plan".to_string(),
+                            iterations_used: session.iteration_count,
+                            total_ms: start.elapsed().as_millis() as u64,
+                            last_strategy: session.strategy,
+                        };
+                    }
+                };
+
+                match client.request(&plan_req).await {
+                    Ok(NeocortexToDaemon::PlanReady { plan, tokens_used }) => {
+                        budget.record_usage(tokens_used);
+                        let snap = budget.snapshot();
+                        info!(
+                            steps = plan.steps.len(),
+                            confidence = plan.confidence,
+                            "received PlanReady from neocortex"
+                        );
+                        debug!(
+                            budget_used = snap.session_used,
+                            budget_limit = snap.session_limit,
+                            budget_pct = snap.used_pct,
+                            budget_calls = snap.calls_in_session,
+                            "budget snapshot after PlanReady"
+                        );
+                        current_plan = Some(plan);
+                        continue;
+                    }
+                    Ok(other) => {
+                        warn!(
+                            resp = ?std::mem::discriminant(&other),
+                            "unexpected response to Plan request — aborting"
+                        );
+                        return TaskOutcome::Failed {
+                            reason: "unexpected response to Plan request".to_string(),
+                            iterations_used: session.iteration_count,
+                            total_ms: start.elapsed().as_millis() as u64,
+                            last_strategy: session.strategy,
+                        };
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Plan IPC request failed — aborting");
+                        return TaskOutcome::Failed {
+                            reason: format!("Plan IPC request failed: {e}"),
+                            iterations_used: session.iteration_count,
+                            total_ms: start.elapsed().as_millis() as u64,
+                            last_strategy: session.strategy,
+                        };
+                    }
+                }
             };
 
             debug!(action = %tool_call.tool_name, "SemanticReact executing action via Executor");
@@ -1546,6 +1562,76 @@ impl ReactEngine {
             };
 
             session.record_iteration(iteration);
+
+            // --- ReAct IPC: send step result to neocortex, await LLM decision ---
+            // Capture post-action screen state for the prompt.
+            // Include interactive elements so the LLM sees what's actually on screen,
+            // not just the package/activity name. Cap at 10 elements to stay within budget.
+            let post_screen_desc = self
+                .capture_screen_summary()
+                .map(|s| {
+                    let mut desc = format!("{}/{}", s.package_name, s.activity_name);
+                    let elements: Vec<&str> = s
+                        .interactive_elements
+                        .iter()
+                        .take(10)
+                        .map(|e| e.as_str())
+                        .collect();
+                    if !elements.is_empty() {
+                        desc.push_str(" | interactive: ");
+                        desc.push_str(&elements.join(", "));
+                    }
+                    if !s.visible_text.is_empty() {
+                        let text_preview: Vec<&str> =
+                            s.visible_text.iter().take(5).map(|t| t.as_str()).collect();
+                        desc.push_str(" | text: ");
+                        desc.push_str(&text_preview.join("; "));
+                    }
+                    desc
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let (react_done, react_tokens) = send_react_step_ipc(
+                &session.iterations.last().map(|i| i.action.tool_name.as_str()).unwrap_or(""),
+                &session.iterations.last().map(|i| i.observation.clone()).unwrap_or_else(|| ActionResult {
+                    success: false,
+                    duration_ms: 0,
+                    error: Some("no observation recorded".to_string()),
+                    screen_changed: false,
+                    matched_element: None,
+                }),
+                &post_screen_desc,
+                &session.task,
+                session.iteration_count,
+                session.max_iterations,
+            )
+            .await;
+            budget.record_usage(react_tokens);
+            {
+                let snap = budget.snapshot();
+                debug!(
+                    budget_used = snap.session_used,
+                    budget_limit = snap.session_limit,
+                    budget_pct = snap.used_pct,
+                    budget_calls = snap.calls_in_session,
+                    "budget snapshot after ReActDecision"
+                );
+            }
+
+            // Honour neocortex completion signal; fall back to heuristic when
+            // neocortex is not reachable.
+            if let Some(true) = react_done {
+                info!("neocortex signalled task complete via ReActDecision");
+                return TaskOutcome::Success {
+                    iterations_used: session.iteration_count,
+                    total_ms: start.elapsed().as_millis() as u64,
+                    final_confidence: session
+                        .iterations
+                        .last()
+                        .map(|i| i.confidence)
+                        .unwrap_or(1.0),
+                };
+            }
 
             // Check if the task appears complete (high confidence on successful action).
             if let Some(last) = session.iterations.last() {
@@ -1654,6 +1740,8 @@ async fn execute_dgs_standalone(
         debug!(step = step_idx, action = %tool_call.tool_name, "executing DGS step (standalone)");
 
         // --- Policy gate check (if available) ---
+        // In non-test builds, simulate_action_result() returns a blocked
+        // ActionResult immediately — standalone paths cannot reach the device.
         let observation = if let Some(ref mut ctx) = policy {
             let action_str = format!("{}:{}", tool_call.tool_name, tool_call.reasoning);
             if let Some(denied_result) = ctx.check_action(&action_str) {
@@ -1664,6 +1752,40 @@ async fn execute_dgs_standalone(
         } else {
             simulate_action_result(&tool_call)
         };
+
+        // In production (non-test), simulate_action_result returns a failure
+        // with a clear "neocortex unavailable" error.  Surface this immediately
+        // so the caller sees a Blocked-equivalent outcome rather than looping.
+        #[cfg(not(test))]
+        if !observation.success {
+            if let Some(ref err) = observation.error {
+                if err.contains("neocortex unavailable") {
+                    warn!(
+                        task = %session.task,
+                        "standalone DGS path blocked: neocortex unavailable — \
+                         use ReactEngine::execute_task in production"
+                    );
+                    return TaskOutcome::Failed {
+                        reason: "neocortex unavailable: standalone mode cannot execute real actions"
+                            .to_string(),
+                        iterations_used: session.iteration_count,
+                        total_ms: start.elapsed().as_millis() as u64,
+                        last_strategy: session.strategy,
+                    };
+                }
+            }
+        }
+
+        // --- ReAct IPC: send step result to neocortex, await decision ---
+        let (react_done, _) = send_react_step_ipc(
+            &tool_call.tool_name,
+            &observation,
+            "standalone-dgs: no live screen available",
+            &session.task,
+            step_idx as u32,
+            plan.steps.len() as u32,
+        )
+        .await;
 
         let (reflection, confidence) =
             reflect(&thought, &tool_call, &observation, session.strategy);
@@ -1678,6 +1800,16 @@ async fn execute_dgs_standalone(
         };
 
         session.record_iteration(iteration);
+
+        // If neocortex signalled completion, honour it.
+        if let Some(true) = react_done {
+            info!(step = step_idx, "neocortex signalled task complete via ReActDecision");
+            return TaskOutcome::Success {
+                iterations_used: session.iteration_count,
+                total_ms: start.elapsed().as_millis() as u64,
+                final_confidence: confidence,
+            };
+        }
 
         if !observation.success {
             let new_tier = escalate_dgs_step(session, step_idx as u32);
@@ -1771,6 +1903,8 @@ async fn execute_semantic_react_standalone(
         debug!(action = %tool_call.tool_name, "SemanticReact executing action (standalone)");
 
         // --- Policy gate check (if available) ---
+        // In non-test builds, simulate_action_result() returns a blocked
+        // ActionResult immediately — standalone paths cannot reach the device.
         let observation = if let Some(ref mut ctx) = policy {
             let action_str = format!("{}:{}", tool_call.tool_name, tool_call.reasoning);
             if let Some(denied_result) = ctx.check_action(&action_str) {
@@ -1781,6 +1915,39 @@ async fn execute_semantic_react_standalone(
         } else {
             simulate_action_result(&tool_call)
         };
+
+        // In production (non-test), simulate_action_result returns a failure
+        // with a clear "neocortex unavailable" error.  Surface this immediately.
+        #[cfg(not(test))]
+        if !observation.success {
+            if let Some(ref err) = observation.error {
+                if err.contains("neocortex unavailable") {
+                    warn!(
+                        task = %session.task,
+                        "standalone SemanticReact path blocked: neocortex unavailable — \
+                         use ReactEngine::execute_task in production"
+                    );
+                    return TaskOutcome::Failed {
+                        reason: "neocortex unavailable: standalone mode cannot execute real actions"
+                            .to_string(),
+                        iterations_used: session.iteration_count,
+                        total_ms: start.elapsed().as_millis() as u64,
+                        last_strategy: session.strategy,
+                    };
+                }
+            }
+        }
+
+        // --- ReAct IPC: send step result to neocortex, await decision ---
+        let (react_done, _) = send_react_step_ipc(
+            &tool_call.tool_name,
+            &observation,
+            "standalone-semantic: no live screen available",
+            &session.task,
+            session.iteration_count,
+            session.max_iterations,
+        )
+        .await;
 
         let (reflection, confidence) =
             reflect(&thought, &tool_call, &observation, session.strategy);
@@ -1795,6 +1962,17 @@ async fn execute_semantic_react_standalone(
         };
 
         session.record_iteration(iteration);
+
+        // If neocortex signalled completion, honour it; otherwise fall back
+        // to the high-confidence heuristic.
+        if let Some(true) = react_done {
+            info!("neocortex signalled task complete via ReActDecision (standalone)");
+            return TaskOutcome::Success {
+                iterations_used: session.iteration_count,
+                total_ms: start.elapsed().as_millis() as u64,
+                final_confidence: confidence,
+            };
+        }
 
         if let Some(last) = session.iterations.last() {
             if last.observation.success && last.confidence >= 0.85 {
@@ -1813,18 +1991,97 @@ async fn execute_semantic_react_standalone(
 }
 
 // ---------------------------------------------------------------------------
-// Simulation helper (used only by standalone/test paths)
+// ReAct IPC helper — closes the LLM feedback loop
 // ---------------------------------------------------------------------------
 
-/// Simulate an action result for testing and standalone execution.
+/// Send a completed ReAct step to the neocortex and await its decision.
+///
+/// Opens a fresh [`NeocortexClient`] connection, sends
+/// [`DaemonToNeocortex::ReActStep`] with the action result and current screen
+/// state, then waits for [`NeocortexToDaemon::ReActDecision`].
+///
+/// Returns `(Some(true), tokens)` if the LLM considers the goal complete,
+/// `(Some(false), tokens)` to continue, or `(None, 0)` if the neocortex is
+/// not reachable (falls back to the heuristic caller logic).
+async fn send_react_step_ipc(
+    tool_name: &str,
+    observation: &ActionResult,
+    screen_description: &str,
+    goal: &str,
+    step_index: u32,
+    max_steps: u32,
+) -> (Option<bool>, u32) {
+    let obs_text = if observation.success {
+        format!(
+            "action succeeded in {}ms; screen_changed={}; element={:?}",
+            observation.duration_ms,
+            observation.screen_changed,
+            observation.matched_element
+        )
+    } else {
+        format!(
+            "action failed: {}",
+            observation.error.as_deref().unwrap_or("unknown error")
+        )
+    };
+
+    let msg = DaemonToNeocortex::ReActStep {
+        tool_name: tool_name.to_string(),
+        observation: obs_text,
+        screen_description: screen_description.to_string(),
+        goal: goal.to_string(),
+        step_index,
+        max_steps,
+    };
+
+    let mut client = match NeocortexClient::connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            debug!(error = %e, "neocortex not reachable for ReActStep — using heuristic fallback");
+            return (None, 0);
+        }
+    };
+
+    match client.request(&msg).await {
+        Ok(NeocortexToDaemon::ReActDecision { done, reasoning, next_action, tokens_used }) => {
+            info!(
+                done,
+                reasoning = %reasoning,
+                next_action = ?next_action,
+                "received ReActDecision from neocortex"
+            );
+            (Some(done), tokens_used)
+        }
+        Ok(other) => {
+            warn!(resp = ?std::mem::discriminant(&other), "unexpected response to ReActStep");
+            (None, 0)
+        }
+        Err(e) => {
+            warn!(error = %e, "ReActStep request failed — using heuristic fallback");
+            (None, 0)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Simulation helper (test-only)
+// ---------------------------------------------------------------------------
+
+/// Simulate an action result for **unit tests only**.
 ///
 /// Produces deterministic results based on the tool name:
 /// - `"assert_element"` → failure (simulated assertion miss)
 /// - Everything else → success with `screen_changed = true`
 ///   (except `"wait_for_element"` which succeeds but doesn't change screen)
 ///
+/// **MUST NOT be called in production paths.** The standalone execution
+/// helpers (`execute_dgs_standalone` / `execute_semantic_react_standalone`)
+/// are themselves test-only entry points — they carry a compile-time guard
+/// that calls this function only inside `#[cfg(test)]` contexts.
+///
 /// In production, the [`ReactEngine`] methods call the real [`Executor`]
 /// and [`ScreenProvider`] instead.
+#[cfg(test)]
 fn simulate_action_result(tool_call: &ToolCall) -> ActionResult {
     let success = tool_call.tool_name != "assert_element";
 
@@ -1842,6 +2099,31 @@ fn simulate_action_result(tool_call: &ToolCall) -> ActionResult {
         } else {
             None
         },
+    }
+}
+
+/// Produce a blocked `ActionResult` for standalone (non-test) execution.
+///
+/// In production the daemon always has a [`ReactEngine`] with a real
+/// [`Executor`] and [`ScreenProvider`].  The standalone `execute_task`
+/// function is a backward-compatibility shim; when called outside of tests
+/// it cannot reach the device, so every action is immediately blocked with
+/// a clear error rather than silently returning fake success.
+///
+/// The caller is expected to propagate this as `TaskOutcome::Failed` with
+/// reason `"neocortex unavailable: standalone mode cannot execute real actions"`.
+#[cfg(not(test))]
+fn simulate_action_result(_tool_call: &ToolCall) -> ActionResult {
+    ActionResult {
+        success: false,
+        duration_ms: 0,
+        error: Some(
+            "neocortex unavailable: standalone mode cannot execute real actions — \
+             use ReactEngine::execute_task in production"
+                .to_string(),
+        ),
+        screen_changed: false,
+        matched_element: None,
     }
 }
 
@@ -1882,10 +2164,10 @@ mod tests {
 
     #[test]
     fn test_classify_dgs_keywords() {
-        assert_eq!(classify_task("open app settings"), ExecutionMode::Dgs);
-        assert_eq!(classify_task("tap on the button"), ExecutionMode::Dgs);
-        assert_eq!(classify_task("scroll down"), ExecutionMode::Dgs);
-        assert_eq!(classify_task("send message to John"), ExecutionMode::Dgs);
+        assert_eq!(classify_task("open app settings"), ExecutionMode::SemanticReact);
+        assert_eq!(classify_task("tap on the button"), ExecutionMode::SemanticReact);
+        assert_eq!(classify_task("scroll down"), ExecutionMode::SemanticReact);
+        assert_eq!(classify_task("send message to John"), ExecutionMode::SemanticReact);
     }
 
     #[test]
@@ -1906,8 +2188,8 @@ mod tests {
 
     #[test]
     fn test_classify_short_task_dgs() {
-        assert_eq!(classify_task("go home"), ExecutionMode::Dgs);
-        assert_eq!(classify_task("press back"), ExecutionMode::Dgs);
+        assert_eq!(classify_task("go home"), ExecutionMode::SemanticReact);
+        assert_eq!(classify_task("press back"), ExecutionMode::SemanticReact);
     }
 
     #[test]
@@ -2301,7 +2583,7 @@ mod tests {
             execute_task("tap on the button".to_string(), 5, Some(plan), None).await;
 
         assert!(matches!(outcome, TaskOutcome::Success { .. }));
-        assert_eq!(session.mode, ExecutionMode::Dgs);
+        assert_eq!(session.mode, ExecutionMode::SemanticReact);
         assert_eq!(session.iteration_count, 1);
     }
 
@@ -2434,7 +2716,7 @@ mod tests {
             .execute_task("tap on the button".to_string(), 5, Some(plan))
             .await;
 
-        assert_eq!(session.mode, ExecutionMode::Dgs);
+        assert_eq!(session.mode, ExecutionMode::SemanticReact);
         // The executor ran the plan — outcome depends on MockScreenProvider behavior.
         // With a single tap step and a responsive mock, expect success.
         assert!(

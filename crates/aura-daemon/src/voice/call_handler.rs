@@ -151,6 +151,9 @@ mod a11y_actions {
         Ok(())
     }
 
+    // Phase 8 wire point: click_by_id used by accessibility-service call UI
+    // automation once Accessibility API is wired in Android boot path.
+    #[allow(dead_code)]
     pub fn click_by_id(_resource_id: &str) -> CallResult<()> {
         Ok(())
     }

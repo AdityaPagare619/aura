@@ -44,6 +44,9 @@ pub enum QueueStatus {
 }
 
 impl QueueStatus {
+    // Phase 8 wire point: as_str / from_str used by queue persistence layer
+    // when serialising status to SQLite for crash recovery.
+    #[allow(dead_code)]
     fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -54,6 +57,7 @@ impl QueueStatus {
         }
     }
 
+    #[allow(dead_code)]
     fn from_str(s: &str) -> Self {
         match s {
             "pending" => Self::Pending,

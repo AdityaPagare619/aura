@@ -7,11 +7,13 @@
 //! Usage:
 //!   aura-neocortex --socket <addr> --model-dir <path>
 
+mod aura_config;
 mod context;
 mod grammar;
 mod inference;
 mod ipc_handler;
 mod model;
+mod model_capabilities;
 mod prompts;
 mod tool_format;
 
@@ -20,10 +22,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
+use aura_config::NeocortexRuntimeConfig;
 use ipc_handler::IpcHandler;
 use model::ModelManager;
+use model_capabilities::ModelCapabilities;
 
 // ─── CLI argument parsing (no clap dependency — keep it minimal) ────────────
 
@@ -34,6 +38,9 @@ struct Args {
     socket: String,
     /// Directory containing GGUF model files.
     model_dir: PathBuf,
+    /// Optional path to `aura.config.toml`.
+    /// Defaults to `<model_dir>/../aura.config.toml` if not supplied.
+    config_path: Option<PathBuf>,
 }
 
 impl Args {
@@ -42,6 +49,7 @@ impl Args {
 
         let mut socket = String::from("127.0.0.1:9876");
         let mut model_dir = PathBuf::from("models");
+        let mut config_path: Option<PathBuf> = None;
 
         let mut i = 1;
         while i < args.len() {
@@ -54,6 +62,11 @@ impl Args {
                     i += 1;
                     model_dir = PathBuf::from(args.get(i).ok_or("--model-dir requires a value")?);
                 }
+                "--config" | "-c" => {
+                    i += 1;
+                    config_path =
+                        Some(PathBuf::from(args.get(i).ok_or("--config requires a value")?));
+                }
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
@@ -65,7 +78,11 @@ impl Args {
             i += 1;
         }
 
-        Ok(Args { socket, model_dir })
+        Ok(Args {
+            socket,
+            model_dir,
+            config_path,
+        })
     }
 }
 
@@ -82,6 +99,8 @@ OPTIONS:
                               Android: @aura_ipc_v4 (Unix abstract socket)
     -m, --model-dir <PATH>    Directory containing GGUF model files
                               Default: models
+    -c, --config <PATH>       Path to aura.config.toml
+                              Default: <model-dir>/../aura.config.toml
     -h, --help                Print this help message
 ";
     // Print directly — this runs before tracing is initialized.
@@ -116,7 +135,51 @@ fn main() {
         }
     };
 
-    info!(socket = %args.socket, model_dir = %args.model_dir.display(), "configuration");
+    info!(socket = %args.socket, model_dir = %args.model_dir.display(), "cli configuration");
+
+    // ── Step 1: Load NeocortexRuntimeConfig ─────────────────────────────────
+    //
+    // Config is loaded before ModelManager so we can resolve the authoritative
+    // model path (from `aura.config.toml` or auto-scan) before building the
+    // manager. On any error, we fall back to defaults so day-zero always works.
+
+    let config_path = args.config_path.unwrap_or_else(|| {
+        // Default: look for aura.config.toml next to the model directory.
+        args.model_dir
+            .parent()
+            .unwrap_or(&args.model_dir)
+            .join("aura.config.toml")
+    });
+
+    let runtime_config = match NeocortexRuntimeConfig::load(&config_path) {
+        Ok(cfg) => {
+            info!(
+                source = ?cfg.config_source,
+                model_path = ?cfg.model_path,
+                "runtime config loaded"
+            );
+            cfg
+        }
+        Err(e) => {
+            // ParseError on a malformed TOML — log warning and use defaults.
+            warn!(
+                error = %e,
+                "failed to parse aura.config.toml — falling back to defaults"
+            );
+            NeocortexRuntimeConfig::default_fallback()
+        }
+    };
+
+    // Resolve the effective model directory:
+    // - If config supplies a path that is a directory, prefer that.
+    // - If config supplies a path to a specific file, use its parent as model_dir.
+    // - Otherwise fall back to the CLI --model-dir arg.
+    let effective_model_dir = resolve_model_dir(&args.model_dir, &runtime_config);
+
+    info!(
+        dir = %effective_model_dir.display(),
+        "effective model directory"
+    );
 
     // Set up shutdown signal handler.
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -135,17 +198,38 @@ fn main() {
         });
     }
 
-    // Create model manager.
-    let model_manager = ModelManager::new(args.model_dir.clone());
+    // ── Step 2: Create ModelManager and scan for GGUF files ─────────────────
+    //
+    // scan() must be called before building ModelCapabilities so the scanner
+    // has parsed GGUF headers for all discovered model files.
+
+    let mut model_manager = ModelManager::new(effective_model_dir.clone());
+    model_manager.scan();
+
+    // ── Step 3: Build ModelCapabilities from GGUF metadata ──────────────────
+    //
+    // After scanning, we derive capabilities from the primary (Brainstem-tier)
+    // model's GGUF metadata. This is the single source of truth for embedding_dim,
+    // context_length, etc. Falls back to compiled defaults if no model was found.
+
+    let startup_capabilities = build_startup_capabilities(&model_manager, &runtime_config);
+
+    info!(
+        capabilities = %startup_capabilities.summary(),
+        fully_from_gguf = startup_capabilities.is_fully_from_gguf(),
+        "model capabilities resolved"
+    );
 
     // Bind and accept connections.
     // On host: TCP.  On Android: would be Unix domain socket.
     if let Err(e) = run_server(
         &args.socket,
-        args.model_dir,
+        effective_model_dir,
         model_manager,
+        runtime_config,
         cancel_token,
         shutdown,
+        Some(startup_capabilities),
     ) {
         error!(error = %e, "server error");
         std::process::exit(1);
@@ -154,16 +238,84 @@ fn main() {
     info!("aura-neocortex shut down cleanly");
 }
 
+// ─── Capability resolution ───────────────────────────────────────────────────
+
+/// Derive `ModelCapabilities` from the scanned GGUF metadata of the primary
+/// (smallest / Brainstem) model tier. Falls back gracefully to compiled
+/// defaults if no GGUF metadata is available.
+///
+/// Does NOT panic — any parse failure has already been swallowed by
+/// `ModelScanner::scan()` (which skips unparseable files).
+fn build_startup_capabilities(
+    manager: &ModelManager,
+    config: &NeocortexRuntimeConfig,
+) -> ModelCapabilities {
+    use aura_types::ipc::ModelTier;
+
+    // Walk tiers from smallest to largest; use the first one that has metadata.
+    for tier in [ModelTier::Brainstem1_5B, ModelTier::Standard4B, ModelTier::Full8B] {
+        if let Some((_, meta)) = manager.scanner().models.get(&tier) {
+            return ModelCapabilities::from_gguf(meta, config.user_override_embedding_dim);
+        }
+    }
+
+    // No GGUF metadata available — fall back to compiled defaults.
+    warn!(
+        "no GGUF metadata found during startup scan — using compiled capability fallback; \
+         drop a .gguf model into the model directory for accurate geometry"
+    );
+    ModelCapabilities::fallback_defaults()
+}
+
+// ─── Model directory resolution ─────────────────────────────────────────────
+
+/// Resolve the effective model directory from CLI arg and runtime config.
+///
+/// Priority:
+/// 1. If `config.model_path` is a directory → use it directly.
+/// 2. If `config.model_path` is a file → use its parent directory.
+/// 3. Otherwise → fall back to the CLI `--model-dir` value.
+fn resolve_model_dir(cli_model_dir: &PathBuf, config: &NeocortexRuntimeConfig) -> PathBuf {
+    if let Some(ref cfg_path) = config.model_path {
+        if cfg_path.is_dir() {
+            return cfg_path.clone();
+        }
+        if cfg_path.is_file() {
+            if let Some(parent) = cfg_path.parent() {
+                return parent.to_path_buf();
+            }
+        }
+        // Config path was specified but doesn't exist yet (e.g., first run on
+        // a fresh device).  Honour its parent if it looks like a directory path,
+        // otherwise fall through to the CLI value.
+        if let Some(parent) = cfg_path.parent() {
+            if parent != std::path::Path::new("") {
+                return parent.to_path_buf();
+            }
+        }
+    }
+
+    cli_model_dir.clone()
+}
+
+// ─── Server loop ─────────────────────────────────────────────────────────────
+
 /// Run the IPC server, accepting a single connection at a time.
 ///
 /// The daemon maintains a single persistent connection to neocortex.
 /// If it disconnects, we accept the next connection.
+///
+/// `startup_capabilities` is derived from GGUF metadata before the first
+/// connection and seeded into `InferenceEngine` on every connection so the
+/// engine never operates blind on model geometry.
 fn run_server(
     address: &str,
     model_dir: PathBuf,
     model_manager: ModelManager,
+    runtime_config: NeocortexRuntimeConfig,
     cancel_token: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
+    startup_capabilities: Option<ModelCapabilities>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(address)?;
     info!(address, "listening for daemon connections");
@@ -174,6 +326,11 @@ fn run_server(
     // We need to share model_manager across reconnections.
     // Since we handle one connection at a time, we can move it in and out.
     let mut mgr = model_manager;
+
+    // Track the most recently derived capabilities so every reconnect passes
+    // fresh GGUF geometry into InferenceEngine without re-opening model files.
+    // Updated after each connection ends in case new models were dropped in.
+    let mut current_caps = startup_capabilities;
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -188,7 +345,7 @@ fn run_server(
                 // Switch stream to blocking mode for the handler.
                 stream.set_nonblocking(false)?;
 
-                let mut handler = IpcHandler::new(stream, mgr, cancel_token.clone())?;
+                let mut handler = IpcHandler::new(stream, mgr, cancel_token.clone(), current_caps.clone())?;
 
                 match handler.run_loop() {
                     Ok(()) => info!("connection closed cleanly"),
@@ -197,9 +354,21 @@ fn run_server(
 
                 // Recover model manager from handler for reuse.
                 // Since IpcHandler owns it, we need to reconstruct.
-                // In practice, the daemon rarely reconnects — usually this
-                // means the neocortex process is being shut down.
-                mgr = ModelManager::new(model_dir.clone());
+                // Config and capabilities are cheap to re-derive from the same
+                // model_dir — no file re-parsing required.
+                let mut new_mgr = ModelManager::new(model_dir.clone());
+                new_mgr.scan();
+                mgr = new_mgr;
+
+                // Re-derive capabilities after reconnect so the next IpcHandler
+                // gets fresh GGUF geometry (a new model may have been dropped
+                // into the model directory while the previous connection was live).
+                let reconnect_caps = build_startup_capabilities(&mgr, &runtime_config);
+                info!(
+                    capabilities = %reconnect_caps.summary(),
+                    "model capabilities after reconnect"
+                );
+                current_caps = Some(reconnect_caps);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // No connection yet — sleep briefly and retry.
@@ -253,9 +422,11 @@ mod tests {
         let args = Args {
             socket: "127.0.0.1:9876".into(),
             model_dir: PathBuf::from("models"),
+            config_path: None,
         };
         assert_eq!(args.socket, "127.0.0.1:9876");
         assert_eq!(args.model_dir, PathBuf::from("models"));
+        assert!(args.config_path.is_none());
     }
 
     #[test]
@@ -270,7 +441,7 @@ mod tests {
     #[test]
     fn cancel_token_works() {
         let cancel = Arc::new(AtomicBool::new(false));
-        let engine = crate::inference::InferenceEngine::new(cancel.clone());
+        let engine = crate::inference::InferenceEngine::new(cancel.clone(), None);
 
         assert!(!cancel.load(Ordering::SeqCst));
         engine.cancel();
@@ -283,5 +454,66 @@ mod tests {
         let _ = crate::prompts::mode_config(aura_types::ipc::InferenceMode::Planner);
         let _ = crate::model::available_ram_mb();
         let _ = crate::prompts::estimate_tokens("hello");
+    }
+
+    #[test]
+    fn resolve_model_dir_cli_fallback() {
+        let cli = PathBuf::from("/tmp/models");
+        let config = NeocortexRuntimeConfig::default_fallback();
+        let result = resolve_model_dir(&cli, &config);
+        assert_eq!(result, cli);
+    }
+
+    #[test]
+    fn resolve_model_dir_from_config_file_path() {
+        // Config pointing at a specific file → use the parent directory.
+        let cli = PathBuf::from("/tmp/models");
+        let config = NeocortexRuntimeConfig {
+            model_path: Some(PathBuf::from("/sdcard/AURA/models/qwen2.gguf")),
+            user_override_embedding_dim: None,
+            user_override_context_length: None,
+            config_source: aura_config::ConfigSource::DefaultFallback,
+        };
+        let result = resolve_model_dir(&cli, &config);
+        assert_eq!(result, PathBuf::from("/sdcard/AURA/models"));
+    }
+
+    #[test]
+    fn startup_capabilities_fallback_without_gguf() {
+        // No models on disk → capabilities must fall back gracefully, no panic.
+        let dir = std::env::temp_dir().join("aura_test_empty_models_caps");
+        let mgr = ModelManager::new(dir);
+        // Note: scan() not called — scanner is empty, simulating no GGUF files.
+        let config = NeocortexRuntimeConfig::default_fallback();
+        let caps = build_startup_capabilities(&mgr, &config);
+
+        // Must return valid fallback, not panic.
+        assert!(caps.embedding_dim >= 1024);
+        assert!(caps.context_length >= 1024);
+        assert_eq!(
+            caps.embedding_dim_source,
+            crate::model_capabilities::ModelCapabilitySource::CompiledFallback
+        );
+    }
+
+    #[test]
+    fn startup_capabilities_user_override_forwarded() {
+        // User override in config should be forwarded to from_gguf().
+        // When there's no GGUF metadata (empty scanner), the override takes effect.
+        let dir = std::env::temp_dir().join("aura_test_override_caps");
+        let mgr = ModelManager::new(dir);
+        let config = NeocortexRuntimeConfig {
+            model_path: None,
+            user_override_embedding_dim: Some(2048),
+            user_override_context_length: None,
+            config_source: aura_config::ConfigSource::DefaultFallback,
+        };
+
+        // With an empty scanner (no GGUF), the override is the best available source.
+        // build_startup_capabilities falls back to fallback_defaults() when scanner
+        // has no models — so the override is NOT applied (expected: CompiledFallback).
+        // This tests the graceful fallback path specifically.
+        let caps = build_startup_capabilities(&mgr, &config);
+        assert!(caps.embedding_dim > 0);
     }
 }

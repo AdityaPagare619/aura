@@ -21,6 +21,9 @@ async-trait = "0.1"
 lz4 = { workspace = true }
 zstd = { workspace = true }
 reqwest = { version = "0.12", features = ["multipart", "json"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = { version = "0.8", features = ["getrandom"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

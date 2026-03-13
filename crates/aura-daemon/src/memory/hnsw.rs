@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use aura_types::errors::{AuraError, MemError};
-use tracing::instrument;
+use tracing::{info, instrument, warn};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -17,6 +17,7 @@ use tracing::instrument;
 /// Default max connections per node per layer.
 const DEFAULT_M: usize = 16;
 /// Max connections at layer 0 (2 * M).
+#[allow(dead_code)] // Phase 8: used by HNSW layer-0 topology configuration
 const DEFAULT_M_MAX0: usize = 32;
 /// Candidates to consider during construction.
 const DEFAULT_EF_CONSTRUCTION: usize = 200;

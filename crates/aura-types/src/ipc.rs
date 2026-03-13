@@ -6,7 +6,7 @@ use crate::etg::ActionPlan;
 // ─── Sub-types used throughout IPC ──────────────────────────────────────────
 
 /// Model quantisation / size tier.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ModelTier {
     /// ~1.5B params — reflexive brainstem tasks.
     Brainstem1_5B,
@@ -73,9 +73,16 @@ pub struct MemorySnippet {
 pub struct ScreenSummary {
     pub package_name: String,
     pub activity_name: String,
+    /// Bounded: max MAX_SCREEN_INTERACTIVE_ELEMENTS items enforced at collection site.
     pub interactive_elements: Vec<String>,
+    /// Bounded: max MAX_SCREEN_VISIBLE_TEXT items enforced at collection site.
     pub visible_text: Vec<String>,
 }
+
+/// Max interactive elements in a [`ScreenSummary`] snapshot.
+pub const MAX_SCREEN_INTERACTIVE_ELEMENTS: usize = 128;
+/// Max visible text lines in a [`ScreenSummary`] snapshot.
+pub const MAX_SCREEN_VISIBLE_TEXT: usize = 64;
 
 /// Summary of active goal progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,8 +90,12 @@ pub struct GoalSummary {
     pub description: String,
     pub progress_percent: u8,
     pub current_step: String,
+    /// Bounded: max MAX_GOAL_BLOCKERS items enforced at collection site.
     pub blockers: Vec<String>,
 }
+
+/// Max blockers in a [`GoalSummary`] snapshot.
+pub const MAX_GOAL_BLOCKERS: usize = 8;
 
 /// OCEAN personality snapshot sent with context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +125,7 @@ impl Default for PersonalitySnapshot {
     }
 }
 
-/// Current user activity state.
+/// Current user activity state (simple legacy enum, retained for compatibility).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum UserState {
     Active,
@@ -123,6 +134,106 @@ pub enum UserState {
     Driving,
     InMeeting,
     Unknown,
+}
+
+/// Time of day bucket derived from wall-clock hour.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TimeOfDay {
+    EarlyMorning, // 04–08
+    Morning,      // 08–12
+    Afternoon,    // 12–17
+    Evening,      // 17–21
+    Night,        // 21–04
+}
+
+impl Default for TimeOfDay {
+    fn default() -> Self {
+        TimeOfDay::Morning
+    }
+}
+
+/// Device thermal load.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ThermalLevel {
+    Normal,
+    Warm,
+    Hot,
+    Critical,
+}
+
+impl Default for ThermalLevel {
+    fn default() -> Self {
+        ThermalLevel::Normal
+    }
+}
+
+/// Estimated physical location type (no GPS coordinates — privacy safe).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LocationType {
+    Home,
+    Work,
+    Transit,
+    Outdoor,
+    Unknown,
+}
+
+impl Default for LocationType {
+    fn default() -> Self {
+        LocationType::Unknown
+    }
+}
+
+/// Device orientation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Orientation {
+    Portrait,
+    Landscape,
+    Unknown,
+}
+
+impl Default for Orientation {
+    fn default() -> Self {
+        Orientation::Unknown
+    }
+}
+
+/// Rich user and device state signals sent with every context package.
+///
+/// All fields are raw sensor readings — no pre-composed text. The LLM
+/// receives these as numbers/enums and reasons about them naturally.
+/// JNI calls that fail on non-Android hosts silently return defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserStateSignals {
+    pub time_of_day: TimeOfDay,
+    /// Battery level 0–100. 255 = unknown.
+    pub battery_level: u8,
+    pub is_charging: bool,
+    pub thermal_state: ThermalLevel,
+    pub network_available: bool,
+    /// Foreground app package name, empty if unknown.
+    pub foreground_app: String,
+    pub estimated_location_type: LocationType,
+    pub device_orientation: Orientation,
+    pub is_screen_on: bool,
+    /// Total steps today from pedometer, 0 if unavailable.
+    pub step_count_today: u32,
+}
+
+impl Default for UserStateSignals {
+    fn default() -> Self {
+        Self {
+            time_of_day: TimeOfDay::default(),
+            battery_level: 255,
+            is_charging: false,
+            thermal_state: ThermalLevel::default(),
+            network_available: true,
+            foreground_app: String::new(),
+            estimated_location_type: LocationType::default(),
+            device_orientation: Orientation::default(),
+            is_screen_on: true,
+            step_count_today: 0,
+        }
+    }
 }
 
 /// Inference mode — each implies different generation parameters.
@@ -197,19 +308,32 @@ pub struct FailureContext {
 /// Full context package sent to neocortex for inference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPackage {
+    /// Bounded: max MAX_CONVERSATION_HISTORY items enforced at collection site.
     pub conversation_history: Vec<ConversationTurn>,
+    /// Bounded: max MAX_MEMORY_SNIPPETS items enforced at collection site.
     pub memory_snippets: Vec<MemorySnippet>,
     pub current_screen: Option<ScreenSummary>,
     pub active_goal: Option<GoalSummary>,
     pub personality: PersonalitySnapshot,
-    pub user_state: UserState,
+    pub user_state: UserStateSignals,
     pub inference_mode: InferenceMode,
     pub token_budget: u32,
+    /// Compact JSON identity block: OCEAN + VAD + relationship_stage + archetype.
+    /// Raw numbers only — the LLM reasons about these naturally.
+    /// `None` if identity data is not available for this request.
+    pub identity_block: Option<String>,
+    /// Human-readable mood context string.
+    /// Example: "Mood: positive valence, high energy, assertive stance. Emotion: Joy."
+    pub mood_description: String,
 }
 
 impl ContextPackage {
     /// Maximum allowed context package size (64 KB).
     pub const MAX_SIZE: usize = 65_536;
+    /// Max conversation turns in a [`ContextPackage`].
+    pub const MAX_CONVERSATION_HISTORY: usize = 64;
+    /// Max memory snippets in a [`ContextPackage`].
+    pub const MAX_MEMORY_SNIPPETS: usize = 32;
 
     /// Estimate the serialized size of this context package.
     /// Used to enforce the ≤64KB constraint before sending over IPC.
@@ -246,11 +370,20 @@ impl ContextPackage {
             }
         }
 
-        // Fixed-size fields: personality (32), user_state (1), inference_mode (1), token_budget (4)
-        size += 38;
+        // Fixed-size fields: personality (32), inference_mode (1), token_budget (4)
+        size += 37;
 
         // PersonalitySnapshot: 8 f32s = 32 bytes
         size += 32;
+
+        // UserStateSignals: foreground_app string + fixed fields (~20 bytes)
+        size += self.user_state.foreground_app.len() + 20;
+
+        // identity_block and mood_description
+        if let Some(ref ib) = self.identity_block {
+            size += ib.len();
+        }
+        size += self.mood_description.len();
 
         size
     }
@@ -264,11 +397,62 @@ impl Default for ContextPackage {
             current_screen: None,
             active_goal: None,
             personality: PersonalitySnapshot::default(),
-            user_state: UserState::Unknown,
+            user_state: UserStateSignals::default(),
             inference_mode: InferenceMode::Conversational,
             token_budget: 2048,
+            identity_block: None,
+            mood_description: String::new(),
         }
     }
+}
+
+// ─── Proactive trigger types ─────────────────────────────────────────────────
+
+/// A typed proactive trigger detected by the daemon.
+///
+/// Each variant carries only raw, factual data — never pre-composed text.
+/// The LLM (neocortex) receives this as part of a [`DaemonToNeocortex::ProactiveContext`]
+/// message and is responsible for generating all user-facing language.
+///
+/// Architecture law: **Daemon encodes structured facts. LLM encodes language.**
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProactiveTrigger {
+    /// A user goal has been stalled (no progress recorded) for N days.
+    GoalStalled {
+        goal_id: u64,
+        title: String,
+        stalled_days: u32,
+    },
+    /// A user goal has passed its deadline by N days.
+    GoalOverdue {
+        goal_id: u64,
+        title: String,
+        overdue_days: u32,
+    },
+    /// A social relationship has gone silent past the configured threshold.
+    ///
+    /// `contact_name` should be resolved from the contacts store before
+    /// constructing this trigger; falling back to `"contact:<id>"` is
+    /// acceptable until a contact-name resolution service is wired in.
+    SocialGap {
+        contact_name: String,
+        days_since_contact: u32,
+    },
+    /// A health or system metric has crossed a threshold warranting attention.
+    HealthAlert {
+        metric: String,
+        value: f32,
+        threshold: f32,
+    },
+    /// Memory consolidation identified a recurring pattern worth surfacing.
+    MemoryInsight {
+        summary: String,
+    },
+    /// A configured trigger rule fired (routine deviation, contextual rule, etc.).
+    TriggerRuleFired {
+        rule_name: String,
+        description: String,
+    },
 }
 
 // ─── Daemon → Neocortex messages ────────────────────────────────────────────
@@ -308,6 +492,57 @@ pub enum DaemonToNeocortex {
     Ping,
     /// Request to embed text into a neural vector.
     Embed { text: String },
+    /// One step of a ReAct loop: send action result + screen state for LLM decision.
+    ReActStep {
+        /// The tool/action that was just executed.
+        tool_name: String,
+        /// The raw observation string from executing the action.
+        // TODO(types): Phase 4 wire-point — typed payload enum pending IPC finalization
+        observation: String,
+        /// Current screen description captured after the action.
+        screen_description: String,
+        /// The original goal being pursued.
+        goal: String,
+        /// How many steps have been taken so far.
+        step_index: u32,
+        /// Maximum steps allowed for this task.
+        max_steps: u32,
+    },
+    /// A proactive opportunity detected by the daemon.
+    ///
+    /// The daemon sends typed structured data; the LLM generates the natural-language
+    /// message for the user. **Never send format strings here — send typed facts.**
+    ///
+    /// The neocortex must respond with [`NeocortexToDaemon::ConversationReply`].
+    ProactiveContext {
+        /// The type of proactive trigger that fired, carrying only raw factual data.
+        trigger: ProactiveTrigger,
+        /// Full user context for the LLM to reason about (OCEAN, VAD, memories, etc.).
+        context: ContextPackage,
+    },
+    /// Ask the LLM to generalize/summarize a prompt. Used during the memory
+    /// consolidation (dreaming) phase. Rust never reasons — only the LLM may
+    /// synthesize meaning from raw episodes.
+    ///
+    /// The neocortex must respond with [`NeocortexToDaemon::Summary`].
+    Summarize {
+        /// The full prompt to send to the LLM, including the raw episode text.
+        prompt: String,
+    },
+    /// Ask the LLM to score a candidate plan (0.0–1.0).
+    ///
+    /// The neocortex must respond with [`NeocortexToDaemon::PlanScore`].
+    ScorePlan { plan: ActionPlan },
+    /// Ask the LLM to classify a failure string into a [`FailureCategory`]-
+    /// equivalent label.
+    ///
+    /// The neocortex must respond with [`NeocortexToDaemon::FailureClassification`].
+    ClassifyFailure {
+        /// The raw error string produced by the failing operation.
+        error: String,
+        /// Serialised environment / context hints for the LLM.
+        context: String,
+    },
 }
 
 // ─── Neocortex → Daemon messages ────────────────────────────────────────────
@@ -325,11 +560,19 @@ pub enum NeocortexToDaemon {
     /// Model unloaded.
     Unloaded,
     /// Action plan ready.
-    PlanReady { plan: ActionPlan },
+    PlanReady {
+        plan: ActionPlan,
+        /// Tokens consumed generating this plan. 0 = not reported by neocortex.
+        #[serde(default)]
+        tokens_used: u32,
+    },
     /// Conversational reply.
     ConversationReply {
         text: String,
         mood_hint: Option<f32>,
+        /// Tokens consumed generating this reply. 0 = not reported by neocortex.
+        #[serde(default)]
+        tokens_used: u32,
     },
     /// Composed DSL script.
     ComposedScript { steps: Vec<DslStep> },
@@ -345,6 +588,45 @@ pub enum NeocortexToDaemon {
     TokenBudgetExhausted,
     /// Response to an Embed request.
     Embedding { vector: Vec<f32> },
+    /// LLM decision after processing a ReAct step.
+    ReActDecision {
+        /// Whether the LLM considers the goal complete.
+        done: bool,
+        /// Reasoning / explanation from the LLM.
+        reasoning: String,
+        /// Next action to take, if not done.
+        // TODO(types): Phase 4 wire-point — typed payload enum pending IPC finalization
+        next_action: Option<String>,
+        /// Tokens consumed generating this decision. 0 = not reported by neocortex.
+        #[serde(default)]
+        tokens_used: u32,
+    },
+    /// Response to a [`DaemonToNeocortex::Summarize`] request.
+    ///
+    /// Contains the LLM-generated generalization/insight derived from raw episodes.
+    Summary {
+        /// The synthesized text from the LLM.
+        text: String,
+        /// Tokens consumed generating this summary. 0 = not reported by neocortex.
+        #[serde(default)]
+        tokens_used: u32,
+    },
+    /// Response to a [`DaemonToNeocortex::ScorePlan`] request.
+    ///
+    /// Contains a score in the range \[0.0, 1.0\] for the candidate plan.
+    PlanScore {
+        /// Quality score for the candidate plan. Higher is better.
+        score: f32,
+    },
+    /// Response to a [`DaemonToNeocortex::ClassifyFailure`] request.
+    ///
+    /// Contains the LLM-assigned failure category label matching
+    /// `FailureCategory` variant names: `"Transient"`, `"Strategic"`,
+    /// `"Environmental"`, `"Capability"`, or `"Safety"`.
+    FailureClassification {
+        /// Failure category name as a string (matches `FailureCategory` variant).
+        category: String,
+    },
 }
 
 #[cfg(test)]

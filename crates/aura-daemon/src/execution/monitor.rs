@@ -23,6 +23,10 @@
 use std::time::Instant;
 use tracing::warn;
 
+/// Maximum number of violation entries retained per task.
+/// Prevents unbounded growth in pathological long-running tasks.
+const MAX_MONITOR_VIOLATIONS: usize = 2048;
+
 /// Which invariant was violated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvariantViolation {
@@ -308,7 +312,7 @@ impl ExecutionMonitor {
         for (violation, triggered) in &checks {
             if *triggered {
                 warn!(invariant = violation.name(), "invariant violated");
-                self.violations.push((*violation, now_ms));
+                self.record_violation(*violation, now_ms);
                 return Some(*violation);
             }
         }
@@ -320,20 +324,27 @@ impl ExecutionMonitor {
     pub fn check_step_invariants(&mut self) -> Option<InvariantViolation> {
         if self.step.elapsed_ms() > self.limits.max_step_elapsed_ms {
             let v = InvariantViolation::StepElapsed;
-            self.violations.push((v, self.task.elapsed_ms()));
+            self.record_violation(v, self.task.elapsed_ms());
             return Some(v);
         }
         if self.step.retries > self.limits.max_action_retries {
             let v = InvariantViolation::ActionRetries;
-            self.violations.push((v, self.task.elapsed_ms()));
+            self.record_violation(v, self.task.elapsed_ms());
             return Some(v);
         }
         if self.step.fallback_depth > self.limits.max_step_fallback_depth {
             let v = InvariantViolation::StepFallbackDepth;
-            self.violations.push((v, self.task.elapsed_ms()));
+            self.record_violation(v, self.task.elapsed_ms());
             return Some(v);
         }
         None
+    }
+
+    /// Record a violation, capped at MAX_MONITOR_VIOLATIONS to prevent unbounded growth.
+    fn record_violation(&mut self, v: InvariantViolation, timestamp_ms: u64) {
+        if self.violations.len() < MAX_MONITOR_VIOLATIONS {
+            self.violations.push((v, timestamp_ms));
+        }
     }
 
     /// Get the violation history.

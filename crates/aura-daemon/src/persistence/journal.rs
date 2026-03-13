@@ -27,6 +27,11 @@ use std::path::{Path, PathBuf};
 /// Hard limit on journal file size (1 MB).
 const MAX_JOURNAL_BYTES: u64 = 1_024 * 1_024;
 
+/// Maximum number of entries returned from a single recovery pass.
+/// The 1 MB file cap already bounds this in practice, but this enforces an
+/// explicit, auditable limit so recovery Vecs are never unbounded in code.
+const MAX_RECOVERY_ENTRIES: usize = 8_192;
+
 /// Header size per entry: length(4) + checksum(4) = 8 bytes.
 const ENTRY_HEADER_SIZE: usize = 8;
 
@@ -432,15 +437,23 @@ impl WriteAheadJournal {
 
             if cat_byte == COMMIT_MARKER {
                 // Commit marker — promote pending entries to committed.
+                // Cap total committed entries to MAX_RECOVERY_ENTRIES.
+                let remaining = MAX_RECOVERY_ENTRIES.saturating_sub(all_entries.len());
+                if pending_entries.len() > remaining {
+                    pending_entries.truncate(remaining);
+                }
                 all_entries.append(&mut pending_entries);
                 committed_transactions += 1;
                 last_commit_offset = entry_end;
             } else if let Some(category) = JournalCategory::from_byte(cat_byte) {
-                pending_entries.push(JournalEntry {
-                    timestamp_ms,
-                    category,
-                    payload: body[ENTRY_MIN_BODY..].to_vec(),
-                });
+                // Only buffer up to MAX_RECOVERY_ENTRIES pending entries.
+                if all_entries.len() + pending_entries.len() < MAX_RECOVERY_ENTRIES {
+                    pending_entries.push(JournalEntry {
+                        timestamp_ms,
+                        category,
+                        payload: body[ENTRY_MIN_BODY..].to_vec(),
+                    });
+                }
             } else {
                 tracing::warn!(
                     offset,

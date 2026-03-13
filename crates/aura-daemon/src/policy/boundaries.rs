@@ -1183,7 +1183,7 @@ fn matches_action_pattern(action: &str, pattern: &str) -> bool {
         return false;
     }
     let action_bytes = action.as_bytes();
-    let pat_bytes = pattern.as_bytes();
+    let _pat_bytes = pattern.as_bytes();
 
     let mut start = 0;
     while start + pat_len <= action_bytes.len() {
@@ -1193,7 +1193,7 @@ fn matches_action_pattern(action: &str, pattern: &str) -> bool {
                 abs_pos == 0 || matches!(action_bytes[abs_pos - 1], b'_' | b'/');
             let after_pos = abs_pos + pat_len;
             let after_ok = after_pos == action_bytes.len()
-                || matches!(action_bytes[after_pos], b'_' | b'/');
+                || matches!(action_bytes[after_pos], b'_' | b'/' | b' ' | b'-' | b'.');
             if before_ok && after_ok {
                 return true;
             }

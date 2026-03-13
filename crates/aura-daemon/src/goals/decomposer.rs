@@ -10,6 +10,7 @@
 
 use aura_types::actions::ActionType;
 use aura_types::errors::GoalError;
+#[allow(unused_imports)] // GoalStep/StepStatus re-imported in inner scopes; this is the canonical top-level import
 use aura_types::goals::{Goal, GoalSource, GoalStatus, GoalStep, StepStatus};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -324,96 +325,18 @@ impl GoalDecomposer {
     // -- Private helpers ----------------------------------------------------
 
     /// Try to match the goal against known templates.
-    fn try_template_decomposition(&mut self, goal: &Goal) -> Option<DecompositionResult> {
-        let desc_lower = goal.description.to_ascii_lowercase();
-
-        // Find best matching template.
-        let mut best_match: Option<(usize, usize)> = None; // (template_index, match_count)
-
-        for (idx, template) in self.templates.iter().enumerate() {
-            let match_count = template
-                .trigger_keywords
-                .iter()
-                .filter(|kw| desc_lower.contains(&kw.to_ascii_lowercase()))
-                .count();
-
-            if match_count > 0 {
-                match best_match {
-                    Some((_, best_count)) if match_count > best_count => {
-                        best_match = Some((idx, match_count));
-                    }
-                    None => {
-                        best_match = Some((idx, match_count));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let (template_idx, _) = best_match?;
-        let template = &self.templates.as_slice()[template_idx];
-
-        // Convert template steps into sub-goals.
-        let mut sub_goals = Vec::with_capacity(template.steps.len().min(MAX_SUB_GOALS));
-        let base_id = self.next_sub_goal_id;
-
-        for (i, step_tmpl) in template.steps.iter().enumerate() {
-            if i >= MAX_SUB_GOALS {
-                break;
-            }
-
-            let sub_goal_id = base_id + i as u64;
-            let step = GoalStep {
-                index: 0,
-                description: step_tmpl.description.clone(),
-                action: step_tmpl.action.clone(),
-                status: StepStatus::Pending,
-                attempts: 0,
-                max_attempts: step_tmpl.max_attempts,
-            };
-
-            let sub = Goal {
-                id: sub_goal_id,
-                description: step_tmpl.description.clone(),
-                priority: goal.priority,
-                status: GoalStatus::Pending,
-                steps: vec![step],
-                created_ms: goal.created_ms,
-                deadline_ms: goal.deadline_ms,
-                parent_goal: Some(goal.id),
-                source: GoalSource::GoalDecomposition(goal.id),
-            };
-
-            // Compute dependencies for this sub-goal.
-            let deps: Vec<usize> = template
-                .dependencies
-                .iter()
-                .filter(|(_, to)| *to == i)
-                .map(|(from, _)| *from)
-                .collect();
-
-            sub_goals.push(SubGoal {
-                goal: sub,
-                depends_on: deps,
-                index: i,
-            });
-        }
-
-        self.next_sub_goal_id = base_id + sub_goals.len() as u64;
-
-        let estimated_duration: u32 = template
-            .steps
-            .iter()
-            .filter_map(|s| s.action.as_ref().map(|a| a.default_timeout()))
-            .sum();
-
-        Some(DecompositionResult {
-            parent_goal_id: goal.id,
-            strategy: DecompositionStrategy::TemplateBased,
-            sub_goals,
-            confidence: template.success_rate,
-            estimated_duration_ms: estimated_duration,
-        })
+    ///
+    /// # Architecture note
+    ///
+    /// Template selection requires understanding natural language semantics —
+    /// that belongs to the LLM brain, not Rust. Rust does not do keyword
+    /// matching here. The LLM receives the goal description and the template
+    /// catalogue and picks the appropriate template (or none) as part of the
+    /// ReAct think step. This function always returns `None` so that the
+    /// `decompose()` caller falls through to `flag_for_llm()`.
+    fn try_template_decomposition(&mut self, _goal: &Goal) -> Option<DecompositionResult> {
+        // LLM decides which template (if any) applies — Rust does not do NLP.
+        None
     }
 
     /// Convert a goal's existing steps into sub-goals (ETG-guided).
@@ -676,6 +599,7 @@ const MAX_METHODS_PER_TASK: usize = 8;
 const MAX_COMPOUND_TASKS: usize = 64;
 
 /// Maximum nodes in a partial-order plan.
+#[allow(dead_code)] // Phase 8: used by HTN planner plan depth bound
 const MAX_PLAN_NODES: usize = 32;
 
 /// Maximum conditional branches in a plan.
@@ -1364,7 +1288,10 @@ mod tests {
     }
 
     #[test]
-    fn test_template_decomposition_send_message() {
+    fn test_template_keyword_matching_never_fires() {
+        // Architecture: Rust does not do NLP keyword matching to select templates.
+        // All goals that lack pre-built steps fall through to LlmAssisted,
+        // so the LLM brain can select the appropriate template (or none).
         let mut decomposer = GoalDecomposer::new();
         let goal = make_goal(1, "Send a WhatsApp message to Alice");
 
@@ -1372,16 +1299,10 @@ mod tests {
             .decompose(&goal, 0)
             .expect("decomposition should succeed");
 
-        assert_eq!(result.strategy, DecompositionStrategy::TemplateBased);
-        assert_eq!(result.sub_goals.len(), 4); // open, search, type, send
+        // No keyword matching — falls through to LLM.
+        assert_eq!(result.strategy, DecompositionStrategy::LlmAssisted);
+        assert_eq!(result.sub_goals.len(), 1);
         assert_eq!(result.parent_goal_id, 1);
-        assert!(result.confidence > 0.0);
-
-        // Verify dependency chain.
-        assert!(result.sub_goals[0].depends_on.is_empty());
-        assert_eq!(result.sub_goals[1].depends_on, vec![0]);
-        assert_eq!(result.sub_goals[2].depends_on, vec![1]);
-        assert_eq!(result.sub_goals[3].depends_on, vec![2]);
     }
 
     #[test]

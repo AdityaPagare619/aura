@@ -9,11 +9,15 @@ pub struct CapabilityManifest {
     pub version: String,
     pub author: String,
     pub description: String,
+    /// Bounded at runtime to MAX_MANIFEST_PERMISSIONS entries — enforced at load site.
     pub permissions: Vec<Permission>,
     pub execution_tier: ExecutionTier,
     pub max_memory_mb: u32,
     pub max_cpu_percent: u8,
 }
+
+/// Maximum number of permissions a single [`CapabilityManifest`] may declare.
+pub const MAX_MANIFEST_PERMISSIONS: usize = 32;
 
 /// Ethical gating parameter: determines the sandbox level.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

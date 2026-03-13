@@ -18,7 +18,7 @@ use super::{ArcError, ContextMode, DomainId};
 // ---------------------------------------------------------------------------
 
 /// Hard upper bound on registered cron jobs.
-const MAX_CRON_JOBS: usize = 64;
+const MAX_CRON_JOBS: usize = 128;
 
 // ---------------------------------------------------------------------------
 // CronJobId — typed job identifier
@@ -72,11 +72,14 @@ pub enum CronJobId {
     DeepConsolidation = 30,
     ProactiveTick = 31,
     DreamingTick = 32,
+    /// Life arc health check — calls `LifeArcManager::update_health_all` and
+    /// collects any pending proactive triggers for dispatch.
+    ArcHealthCheck = 33,
 }
 
 impl CronJobId {
-    /// All 33 job identifiers.
-    pub const ALL: [CronJobId; 33] = [
+    /// All 34 job identifiers.
+    pub const ALL: [CronJobId; 34] = [
         CronJobId::MedCheck,
         CronJobId::VitalIngest,
         CronJobId::StepSync,
@@ -110,6 +113,7 @@ impl CronJobId {
         CronJobId::DeepConsolidation,
         CronJobId::ProactiveTick,
         CronJobId::DreamingTick,
+        CronJobId::ArcHealthCheck,
     ];
 }
 
@@ -225,7 +229,7 @@ impl CronScheduler {
         }
     }
 
-    /// Create a scheduler pre-loaded with the default 31 jobs.
+    /// Create a scheduler pre-loaded with the default 34 jobs.
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut sched = Self::new();
@@ -617,6 +621,19 @@ fn default_jobs() -> Vec<CronJob> {
             PowerTier::P3Charging,
             &[ContextMode::Sleeping, ContextMode::DoNotDisturb],
         ),
+        // ── Life Arc health check ──
+        cj(
+            CronJobId::ArcHealthCheck,
+            "arc_health_check",
+            DomainId::PersonalGrowth,
+            // 6-hour interval: frequent enough to surface same-day arc
+            // degradation; rare enough to honour the 24-hour trigger dedup
+            // enforced by each individual life arc.
+            21_600,
+            45,
+            PowerTier::P1IdlePlus,
+            &[ContextMode::Sleeping],
+        ),
     ]
 }
 
@@ -654,13 +671,13 @@ mod tests {
     #[test]
     fn test_default_jobs_count() {
         let jobs = default_jobs();
-        assert_eq!(jobs.len(), 33, "spec requires exactly 33 cron jobs");
+        assert_eq!(jobs.len(), 34, "spec requires exactly 34 cron jobs");
     }
 
     #[test]
     fn test_scheduler_with_defaults() {
         let sched = CronScheduler::with_defaults();
-        assert_eq!(sched.job_count(), 33);
+        assert_eq!(sched.job_count(), 34);
     }
 
     #[test]

@@ -28,9 +28,13 @@ android/local.properties
 Thumbs.db
 
 # ---- Build artifacts & debug logs ----
-*.txt
 nul
 *.log
+/*.txt
+C:*
+
+# ---- Dev-only planning artifacts (not part of shipped code) ----
+checkpoints/
 
 # ---- AURA runtime data ----
 *.db

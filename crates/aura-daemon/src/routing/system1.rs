@@ -49,12 +49,16 @@ pub struct System1Result {
     pub execution_time_ms: u64,
 }
 
+// System1 is a cache-hit fast path for ETG lookups — it does not generate responses
+
 /// Fast path executor — handles events without invoking the Neocortex LLM.
 ///
 /// Capabilities:
 /// - ETG (Experience-Trace Graph) lookup for known action sequences.
-/// - Simple acknowledgment responses for conversation continuations.
 /// - Routine event suppression.
+///
+/// System1 does NOT generate any response text. All user input that does not
+/// hit a cached ETG must flow to the LLM (System2/Neocortex).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct System1 {
     /// Cached ETG nodes (populated by the execution engine at runtime).
@@ -65,20 +69,6 @@ pub struct System1 {
     /// Capacity hard-limited to `MAX_CACHE_ENTRIES`.
     plan_cache: HashMap<String, CachedPlan>,
 }
-
-// ---------------------------------------------------------------------------
-// Simple response patterns
-// ---------------------------------------------------------------------------
-
-const SIMPLE_ACKS: &[(&str, &str)] = &[
-    ("yes", "Got it."),
-    ("no", "Understood."),
-    ("okay", "Alright."),
-    ("sure", "On it."),
-    ("thanks", "You're welcome."),
-    ("go ahead", "Proceeding."),
-    ("continue", "Continuing."),
-];
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -97,16 +87,6 @@ impl System1 {
     #[instrument(skip(self, event), fields(intent = ?event.intent))]
     pub fn execute(&self, event: &ParsedEvent, now_ms: u64) -> System1Result {
         match event.intent {
-            Intent::ConversationContinue => {
-                if let Some(text) = Self::generate_simple_response(&event.content) {
-                    return System1Result {
-                        success: true,
-                        action_plan: None,
-                        response_text: Some(text),
-                        execution_time_ms: 0,
-                    };
-                }
-            }
             Intent::RoutineEvent => {
                 tracing::debug!(content = %event.content, "routine event suppressed by System1");
                 return System1Result {
@@ -279,18 +259,6 @@ impl System1 {
         (exponent.exp() as f32).clamp(0.0, 1.0)
     }
 
-    /// Generate a simple acknowledgment for conversation-continue intents.
-    #[must_use]
-    pub fn generate_simple_response(content: &str) -> Option<String> {
-        let lower = content.trim().to_ascii_lowercase();
-        for &(trigger, response) in SIMPLE_ACKS {
-            if lower == trigger {
-                return Some(response.to_string());
-            }
-        }
-        None
-    }
-
     /// Register ETG nodes and edges (called by execution engine).
     #[instrument(skip(self, nodes, edges))]
     pub fn load_etg(&mut self, nodes: Vec<EtgNode>, edges: Vec<EtgEdge>) {
@@ -331,34 +299,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_ack_yes() {
-        let s1 = System1::new();
-        let event = make_event(Intent::ConversationContinue, "yes");
-        let result = s1.execute(&event, 1_000_000);
-        assert!(result.success);
-        assert_eq!(result.response_text.as_deref(), Some("Got it."));
-    }
-
-    #[test]
-    fn test_simple_ack_thanks() {
-        let s1 = System1::new();
-        let event = make_event(Intent::ConversationContinue, "thanks");
-        let result = s1.execute(&event, 1_000_000);
-        assert!(result.success);
-        assert_eq!(result.response_text.as_deref(), Some("You're welcome."));
-    }
-
-    #[test]
-    fn test_routine_suppression() {
-        let s1 = System1::new();
-        let event = make_event(Intent::RoutineEvent, "screen refreshed");
-        let result = s1.execute(&event, 1_000_000);
-        assert!(result.success);
-        assert!(result.response_text.is_none());
-        assert!(result.action_plan.is_none());
-    }
-
-    #[test]
     fn test_etg_miss_returns_failure() {
         let s1 = System1::new();
         let event = make_event(Intent::ActionRequest, "open whatsapp");
@@ -368,25 +308,14 @@ mod tests {
 
     #[test]
     fn test_unknown_conversation_not_handled() {
+        // System1 only handles RoutineEvent and cached ActionRequest.
+        // ConversationContinue must always fall through to the LLM (System2).
         let s1 = System1::new();
         let event = make_event(Intent::ConversationContinue, "I disagree with that");
         let result = s1.execute(&event, 1_000_000);
         assert!(
             !result.success,
-            "complex continuation not handled by System1"
+            "ConversationContinue must not be handled by System1 — LLM decides"
         );
-    }
-
-    #[test]
-    fn test_generate_simple_response() {
-        assert_eq!(
-            System1::generate_simple_response("okay"),
-            Some("Alright.".to_string())
-        );
-        assert_eq!(
-            System1::generate_simple_response("no"),
-            Some("Understood.".to_string())
-        );
-        assert_eq!(System1::generate_simple_response("complex sentence"), None);
     }
 }

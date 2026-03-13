@@ -1,0 +1,22 @@
+# Normalize line endings
+* text=auto eol=lf
+
+# Force LF for shell scripts
+*.sh text eol=lf
+Makefile text eol=lf
+
+# Force CRLF for Windows-specific files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.apk binary
+*.aab binary
+*.gguf binary
+*.so binary
+Cargo.lock text eol=lf

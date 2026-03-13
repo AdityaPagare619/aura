@@ -30,7 +30,7 @@ use crate::daemon_core::channels::{
 };
 use crate::telegram::commands::TelegramCommand;
 use crate::telegram::queue::{MessageContent, MessageQueue};
-use crate::telegram::voice_handler::{CommunicationContext, CommunicationMode, VoiceHandler, VoiceModePreference};
+use crate::telegram::voice_handler::{CommunicationContext, VoiceHandler, VoiceModePreference};
 use crate::telegram::TelegramConfig;
 
 // ---------------------------------------------------------------------------
@@ -45,6 +45,7 @@ use crate::telegram::TelegramConfig;
 /// AI, memory, and agency commands produce richer results when routed
 /// through the daemon (which has access to the full context window,
 /// memory system, and execution engine).
+#[allow(dead_code)] // Phase 8: used by TelegramBridge routing decision
 fn is_daemon_routed(cmd: &TelegramCommand) -> bool {
     matches!(
         cmd,
@@ -71,33 +72,44 @@ fn is_daemon_routed(cmd: &TelegramCommand) -> bool {
     )
 }
 
-/// Extract the text payload from a daemon-routed command so it can be
-/// sent as a [`UserCommand::Chat`] through the pipeline.
+/// Extract the raw user payload from a daemon-routed command.
+///
+/// # Iron Law compliance (Law #3 — no directive injection)
+///
+/// This function returns ONLY the raw user-provided content.  It must NOT
+/// prepend semantic directive markers such as `[think]`, `[plan]`,
+/// `[remember]`, etc.  Injecting such markers into the text that reaches the
+/// Neocortex would constitute prompt-engineering in Rust — the daemon telling
+/// the LLM how to behave rather than letting the LLM reason from the
+/// `InferenceMode` already present in the `ContextPackage`.
+///
+/// Routing intent is conveyed exclusively through the typed `InferenceMode`
+/// field of the `ContextPackage` and the `UserCommand` variant
+/// (`Chat` vs `TaskRequest`).  The LLM reads both and acts accordingly.
+#[allow(dead_code)] // Phase 8: used by to_user_command for command text extraction
 fn command_to_text(cmd: &TelegramCommand) -> String {
     match cmd {
         TelegramCommand::Ask { question } => question.clone(),
-        TelegramCommand::Think { problem } => format!("[think] {problem}"),
-        TelegramCommand::Plan { goal } => format!("[plan] {goal}"),
-        TelegramCommand::Explain { topic } => format!("[explain] {topic}"),
-        TelegramCommand::Summarize { text } => format!("[summarize] {text}"),
-        TelegramCommand::Translate { text, target_lang } => {
-            format!("[translate:{target_lang}] {text}")
-        }
-        TelegramCommand::Remember { text } => format!("[remember] {text}"),
-        TelegramCommand::Recall { query } => format!("[recall] {query}"),
-        TelegramCommand::Forget { query } => format!("[forget] {query}"),
-        TelegramCommand::Do { instruction } => format!("[do] {instruction}"),
-        TelegramCommand::Open { app } => format!("[open] {app}"),
+        TelegramCommand::Think { problem } => problem.clone(),
+        TelegramCommand::Plan { goal } => goal.clone(),
+        TelegramCommand::Explain { topic } => topic.clone(),
+        TelegramCommand::Summarize { text } => text.clone(),
+        TelegramCommand::Translate { text, target_lang: _ } => text.clone(),
+        TelegramCommand::Remember { text } => text.clone(),
+        TelegramCommand::Recall { query } => query.clone(),
+        TelegramCommand::Forget { query } => query.clone(),
+        TelegramCommand::Do { instruction } => instruction.clone(),
+        TelegramCommand::Open { app } => app.clone(),
         TelegramCommand::Send {
-            app,
-            contact,
+            app: _,
+            contact: _,
             message,
-        } => format!("[send:{app}:{contact}] {message}"),
-        TelegramCommand::Call { contact } => format!("[call] {contact}"),
-        TelegramCommand::Schedule { event, time } => format!("[schedule:{time}] {event}"),
-        TelegramCommand::Screenshot => "[screenshot]".to_string(),
-        TelegramCommand::Navigate { destination } => format!("[navigate] {destination}"),
-        TelegramCommand::Automate { routine } => format!("[automate] {routine}"),
+        } => message.clone(),
+        TelegramCommand::Call { contact } => contact.clone(),
+        TelegramCommand::Schedule { event, time: _ } => event.clone(),
+        TelegramCommand::Screenshot => String::new(),
+        TelegramCommand::Navigate { destination } => destination.clone(),
+        TelegramCommand::Automate { routine } => routine.clone(),
         // Non-routed commands should never reach here, but be safe.
         other => format!("{other:?}"),
     }
@@ -145,6 +157,7 @@ impl TelegramBridge {
 
     /// Convert a parsed Telegram command to a [`UserCommand`] for the
     /// daemon pipeline, tagged with the originating chat ID.
+    #[allow(dead_code)] // Phase 8: called by TelegramBridge message handler
     fn to_user_command(cmd: &TelegramCommand, chat_id: i64) -> UserCommand {
         let text = command_to_text(cmd);
         let source = InputSource::Telegram { chat_id };
@@ -192,6 +205,7 @@ impl TelegramBridge {
 
     /// Deliver a response with smart voice mode selection.
     /// Uses the communication context to decide whether to use voice.
+    #[allow(dead_code)] // Phase 8: called by TelegramBridge response delivery path
     fn deliver_smart_response(
         &self,
         chat_id: i64,
@@ -370,7 +384,7 @@ mod tests {
         let cmd = TelegramCommand::Think {
             problem: "optimization".into(),
         };
-        assert_eq!(command_to_text(&cmd), "[think] optimization");
+        assert_eq!(command_to_text(&cmd), "optimization");
     }
 
     #[test]
@@ -379,7 +393,7 @@ mod tests {
             text: "hello".into(),
             target_lang: "es".into(),
         };
-        assert_eq!(command_to_text(&cmd), "[translate:es] hello");
+        assert_eq!(command_to_text(&cmd), "hello");
     }
 
     #[test]
@@ -389,12 +403,12 @@ mod tests {
             contact: "John".into(),
             message: "Hi there".into(),
         };
-        assert_eq!(command_to_text(&cmd), "[send:whatsapp:John] Hi there");
+        assert_eq!(command_to_text(&cmd), "Hi there");
     }
 
     #[test]
     fn test_command_to_text_screenshot() {
-        assert_eq!(command_to_text(&TelegramCommand::Screenshot), "[screenshot]");
+        assert_eq!(command_to_text(&TelegramCommand::Screenshot), "");
     }
 
     // -- to_user_command tests --

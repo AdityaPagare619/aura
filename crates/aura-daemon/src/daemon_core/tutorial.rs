@@ -20,7 +20,12 @@ use aura_types::errors::OnboardingError;
 /// Maximum number of tutorial modules.
 const MAX_MODULES: usize = 20;
 
+/// Maximum number of steps per tutorial module.
+/// Caps `step_results` at `MAX_MODULES * MAX_STEPS_PER_MODULE = 400` entries.
+const MAX_STEPS_PER_MODULE: usize = 20;
+
 /// Maximum retry attempts for a failed interactive step.
+#[allow(dead_code)] // Phase 8: used by tutorial step retry loop
 const MAX_STEP_RETRIES: u8 = 3;
 
 // ---------------------------------------------------------------------------
@@ -233,12 +238,21 @@ impl TutorialEngine {
             });
         }
 
-        // Record result.
+        // Record result — cap at MAX_MODULES * MAX_STEPS_PER_MODULE entries.
         self.progress.total_time_ms = self
             .progress
             .total_time_ms
             .saturating_add(result.duration_ms);
-        self.progress.step_results.push(result);
+        if self.progress.step_results.len() < MAX_MODULES * MAX_STEPS_PER_MODULE {
+            self.progress.step_results.push(result);
+        } else {
+            warn!(
+                cap = MAX_MODULES * MAX_STEPS_PER_MODULE,
+                "step_results cap reached; discarding oldest entry"
+            );
+            self.progress.step_results.remove(0);
+            self.progress.step_results.push(result);
+        }
         self.progress.updated_at_ms = now_ms;
 
         // Advance to next step.
@@ -262,9 +276,16 @@ impl TutorialEngine {
             );
         } else {
             // Module complete — move to next required module.
-            self.progress
-                .completed_modules
-                .push(current_module_id.clone());
+            // Cap completed_modules at MAX_MODULES to prevent unbounded growth.
+            if self.progress.completed_modules.len() < MAX_MODULES {
+                self.progress.completed_modules.push(current_module_id.clone());
+            } else {
+                warn!(
+                    cap = MAX_MODULES,
+                    module = %current_module_id,
+                    "completed_modules cap reached; entry not recorded"
+                );
+            }
             info!(module = %current_module_id, "tutorial module completed");
 
             let next_module = self

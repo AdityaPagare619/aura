@@ -11,6 +11,10 @@ use aura_types::screen::ScreenTree;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+/// Maximum number of actions retained in the `MockScreenProvider` action log.
+/// Prevents unbounded memory growth during long-running test scenarios.
+const MAX_ACTION_LOG: usize = 1024;
+
 /// The core abstraction for all screen interaction.
 /// Every action AURA performs on the device goes through this trait.
 pub trait ScreenProvider: Send + Sync {
@@ -142,11 +146,17 @@ impl ScreenProvider for MockScreenProvider {
             return Err(ScreenError::ServiceDisconnected);
         }
 
-        // Log the action
-        self.action_log
-            .lock()
-            .map_err(|_| ScreenError::ServiceDisconnected)?
-            .push(action.clone());
+        // Log the action (bounded to MAX_ACTION_LOG; oldest entry evicted on overflow)
+        {
+            let mut log = self
+                .action_log
+                .lock()
+                .map_err(|_| ScreenError::ServiceDisconnected)?;
+            if log.len() >= MAX_ACTION_LOG {
+                log.remove(0); // evict oldest
+            }
+            log.push(action.clone());
+        }
 
         if !self.actions_succeed {
             return Ok(ActionResult {

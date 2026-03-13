@@ -4,6 +4,8 @@
 //! routing, response style, autonomy, and risk tolerance. These modifiers are
 //! consumed by the routing classifier, pipeline contextor, and execution engine.
 //!
+//! OCEAN scores are self-model data — they are NOT injected into LLM prompts.
+//!
 //! # Formulas
 //!
 //! All outputs are clamped to \[0.0, 1.0\]. The OCEAN inputs are assumed to

@@ -90,11 +90,11 @@ impl VoiceBridge {
         }
     }
 
-    /// Speak a response via TTS.
-    async fn speak_response(&mut self, text: &str) -> BridgeResult<()> {
+    /// Speak a response via TTS, using the LLM's mood_hint for voice parameters.
+    async fn speak_response(&mut self, text: &str, mood_hint: Option<f32>) -> BridgeResult<()> {
         let ctx = SpeechContext::default();
         self.engine
-            .speak(text, SpeechPriority::Normal, &ctx)
+            .speak(text, SpeechPriority::Normal, &ctx, mood_hint)
             .await
             .map_err(|e| BridgeError::Upstream(e.to_string()))
     }
@@ -134,7 +134,7 @@ impl InputChannel for VoiceBridge {
                 Ok(response) => {
                     if response.destination == InputSource::Voice {
                         debug!(len = response.text.len(), "speaking daemon response");
-                        if let Err(e) = self.speak_response(&response.text).await {
+                        if let Err(e) = self.speak_response(&response.text, response.mood_hint).await {
                             warn!(error = %e, "TTS delivery failed");
                         }
                     }

@@ -124,9 +124,17 @@ pub enum DialogueOutcome {
 
 // ─── DialogueManager ────────────────────────────────────────────────────────
 
+/// Hard cap on concurrent active dialogues.
+///
+/// In a single-user or small-group deployment this limit is never reached,
+/// but it prevents unbounded HashMap growth in the presence of many chat IDs
+/// or if dialogues are started faster than they complete.
+const MAX_ACTIVE_DIALOGUES: usize = 256;
+
 /// Manages active dialogue flows per chat ID.
 pub struct DialogueManager {
     /// Active dialogues keyed by chat ID (one per chat).
+    /// Bounded to MAX_ACTIVE_DIALOGUES entries — enforced in `start()`.
     active: HashMap<i64, ActiveDialogue>,
     /// Default timeout for new dialogues.
     default_timeout_secs: u64,
@@ -151,6 +159,9 @@ impl DialogueManager {
     /// Start a new dialogue flow. Returns the first prompt.
     ///
     /// If a dialogue is already active for this chat, it is replaced.
+    /// If the active map is at capacity, the oldest timed-out dialogue is
+    /// evicted first; if none are timed out, the oldest by start time is
+    /// evicted to keep the map bounded.
     #[instrument(skip(self, steps), fields(chat_id, kind = ?kind))]
     pub fn start(
         &mut self,
@@ -160,6 +171,27 @@ impl DialogueManager {
     ) -> Option<String> {
         if steps.is_empty() {
             return None;
+        }
+
+        // Enforce bounded capacity when inserting a new chat ID.
+        if !self.active.contains_key(&chat_id) && self.active.len() >= MAX_ACTIVE_DIALOGUES {
+            // Prefer evicting already-timed-out dialogues first.
+            let evict = self
+                .active
+                .iter()
+                .find(|(_, d)| d.is_timed_out())
+                .map(|(&id, _)| id)
+                .or_else(|| {
+                    // Fallback: evict the oldest (smallest started_at).
+                    self.active
+                        .iter()
+                        .min_by_key(|(_, d)| d.started_at)
+                        .map(|(&id, _)| id)
+                });
+            if let Some(id) = evict {
+                warn!(evicted_chat_id = id, "dialogue map full — evicting oldest entry");
+                self.active.remove(&id);
+            }
         }
 
         let dialogue = ActiveDialogue {

@@ -207,6 +207,9 @@ impl PiperTts {
         Ok(())
     }
 
+    // Phase 8 wire point: apply_volume called by TTS output path once
+    // user-configurable volume is exposed through the Android audio focus API.
+    #[allow(dead_code)]
     fn apply_volume(mut samples: Vec<i16>, volume: f32) -> Vec<i16> {
         for s in &mut samples {
             *s = ((*s as f32) * volume).clamp(-32768.0, 32767.0) as i16;

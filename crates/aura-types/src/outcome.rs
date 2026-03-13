@@ -169,36 +169,10 @@ impl ExecutionOutcome {
         matches!(self.user_reaction, UserReaction::ExplicitPositive)
     }
 
-    /// Compute a simple effectiveness score (0.0–1.0) combining
-    /// result, confidence, and user reaction.
-    ///
-    /// Formula:
-    /// ```text
-    /// base = result_weight * 0.5 + confidence * 0.3 + reaction_weight * 0.2
-    /// ```
-    ///
-    /// This is NOT hardcoded intelligence — it's a utility function
-    /// for subscribers that need a single scalar from the outcome.
-    /// The learning engine uses the full outcome struct for Hebbian/Bayesian updates.
-    pub fn effectiveness_score(&self) -> f32 {
-        let result_weight = match self.result {
-            OutcomeResult::Success => 1.0,
-            OutcomeResult::PartialSuccess => 0.6,
-            OutcomeResult::Failure => 0.0,
-            OutcomeResult::UserCancelled => 0.3,
-            OutcomeResult::PolicyBlocked => 0.1,
-            OutcomeResult::Timeout => 0.05,
-        };
-        let reaction_weight = match self.user_reaction {
-            UserReaction::ExplicitPositive => 1.0,
-            UserReaction::FollowUp => 0.7,
-            UserReaction::NoReaction => 0.5,
-            UserReaction::TopicChange => 0.3,
-            UserReaction::Repetition => 0.1,
-            UserReaction::ExplicitNegative => 0.0,
-        };
-        (result_weight * 0.5 + self.confidence * 0.3 + reaction_weight * 0.2).clamp(0.0, 1.0)
-    }
+    // TODO(types): Phase 3 wire-point — effectiveness_score() encoded hardcoded behavioral
+    // weights (result_weight, reaction_weight floats per variant). Scoring logic belongs in
+    // the learning engine crate, not in aura-types. Consumers receive the full ExecutionOutcome
+    // struct and compute their own weighted scores based on their subsystem's policy.
 }
 
 /// The execution result — what happened.
@@ -290,20 +264,6 @@ mod tests {
         );
         assert_eq!(o.confidence, 1.0);
         assert_eq!(o.completed_at_ms, 1100);
-    }
-
-    #[test]
-    fn effectiveness_score_range() {
-        let o = ExecutionOutcome::new(
-            "test".into(),
-            OutcomeResult::Success,
-            100,
-            0.9,
-            RouteKind::System1,
-            1000,
-        );
-        let score = o.effectiveness_score();
-        assert!(score >= 0.0 && score <= 1.0, "score out of range: {}", score);
     }
 
     #[test]

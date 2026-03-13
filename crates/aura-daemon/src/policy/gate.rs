@@ -23,6 +23,10 @@ use super::rules::{load_rules, parse_default_effect, PolicyRule, RuleEffect};
 // RateLimiter
 // ---------------------------------------------------------------------------
 
+/// Maximum number of distinct action keys tracked by the rate limiter.
+/// Prevents unbounded memory growth from unique action strings.
+const MAX_RATE_LIMITER_KEYS: usize = 256;
+
 /// Sliding-window rate limiter for action frequency tracking.
 ///
 /// Tracks timestamps of recent actions keyed by a normalised action
@@ -67,6 +71,23 @@ impl RateLimiter {
     pub fn is_rate_limited(&mut self, action: &str) -> bool {
         let now = Instant::now();
         let key = action.to_ascii_lowercase();
+
+        // Enforce capacity cap before inserting a new key.
+        if !self.history.contains_key(&key) {
+            if self.history.len() >= MAX_RATE_LIMITER_KEYS {
+                // At capacity: evict the oldest key (least-recently-used proxy:
+                // first key in iteration order) and warn.
+                if let Some(evict_key) = self.history.keys().next().cloned() {
+                    self.history.remove(&evict_key);
+                    tracing::warn!(
+                        evicted_key = %evict_key,
+                        capacity = MAX_RATE_LIMITER_KEYS,
+                        "rate limiter at capacity — evicted oldest key"
+                    );
+                }
+            }
+        }
+
         let timestamps = self.history.entry(key).or_default();
 
         // Prune entries outside the window.
@@ -233,7 +254,44 @@ impl PolicyGate {
     }
 
     /// Create an empty PolicyGate that allows everything.
+    ///
+    /// # Security
+    ///
+    /// This method exists **only for tests**.  Production code must use
+    /// [`PolicyGate::deny_by_default`] (or [`PolicyGate::from_config`])
+    /// and explicitly add allow-rules for permitted actions.
+    #[cfg(test)]
     pub fn allow_all() -> Self {
+        Self {
+            rules: Vec::new(),
+            default_effect: RuleEffect::Allow,
+            log_all: false,
+            max_rules_per_event: 100,
+            rate_limiter: RateLimiter::default_limiter(),
+        }
+    }
+
+    /// Create an empty PolicyGate that **denies** unknown actions by default.
+    ///
+    /// This is the secure starting point for production policy construction.
+    /// The caller adds explicit allow/confirm/audit rules on top.  Any action
+    /// that does not match a rule is denied and logged.
+    pub fn deny_by_default() -> Self {
+        Self {
+            rules: Vec::new(),
+            default_effect: RuleEffect::Deny,
+            log_all: true,
+            max_rules_per_event: 100,
+            rate_limiter: RateLimiter::default_limiter(),
+        }
+    }
+
+    /// Create an empty PolicyGate that allows everything by default, intended
+    /// as a builder starting point where hardened rules are added immediately
+    /// after construction (see [`build_hardened_policy_gate`]).
+    ///
+    /// Prefer [`PolicyGate::deny_by_default`] for new code.
+    pub(crate) fn allow_all_builder() -> Self {
         Self {
             rules: Vec::new(),
             default_effect: RuleEffect::Allow,

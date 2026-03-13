@@ -107,50 +107,74 @@ impl ApprovalRequest {
 
 // ─── PolicyGate ─────────────────────────────────────────────────────────────
 
+/// Hard cap on concurrent pending approval requests.
+///
+/// Prevents unbounded memory growth if the LLM generates many actions quickly.
+/// Oldest pending requests are dropped when the cap is reached.
+const MAX_PENDING_REQUESTS: usize = 64;
+
 /// The approval gate that intercepts critical actions.
 pub struct PolicyGate {
     /// Active approval requests keyed by ID.
+    /// Bounded to MAX_PENDING_REQUESTS entries — enforced in `evaluate()`.
     requests: HashMap<ApprovalId, ApprovalRequest>,
     /// Next ID to assign.
     next_id: ApprovalId,
     /// Default TTL for new requests.
     default_ttl_secs: u64,
-    /// Current trust level (0.0 = always ask, 1.0 = full autonomy).
-    trust_level: f32,
 }
 
 impl PolicyGate {
     /// Create a new policy gate.
-    pub fn new(trust_level: f32, default_ttl_secs: u64) -> Self {
+    pub fn new(default_ttl_secs: u64) -> Self {
         Self {
             requests: HashMap::new(),
             next_id: 1,
             default_ttl_secs,
-            trust_level: trust_level.clamp(0.0, 1.0),
         }
     }
 
     /// Evaluate whether an action needs approval.
     ///
+    /// `Low` risk actions are auto-approved (read-only, safe).
+    /// `Medium`, `High`, and `Critical` always require user confirmation —
+    /// the LLM decides what risk level to assign; Rust does not weight-score
+    /// trust to make that routing decision.
+    ///
     /// Returns `None` if auto-approved, or `Some(request)` if user confirmation
     /// is needed.
-    #[instrument(skip(self), fields(risk = ?risk, trust = self.trust_level))]
+    #[instrument(skip(self), fields(risk = ?risk))]
     pub fn evaluate(
         &mut self,
         description: String,
         risk: RiskLevel,
         chat_id: i64,
     ) -> Option<&ApprovalRequest> {
-        // Auto-approve logic based on trust level.
-        let needs_approval = match risk {
-            RiskLevel::Low => false,
-            RiskLevel::Medium => self.trust_level < 0.7,
-            RiskLevel::High => self.trust_level < 0.9,
-            RiskLevel::Critical => true, // Always requires approval.
-        };
-
-        if !needs_approval {
+        // Structural routing only — no weighted scoring.
+        // Low risk is safe (read-only); everything else requires human approval.
+        if risk == RiskLevel::Low {
             return None;
+        }
+
+        // Enforce bounded capacity: evict the oldest resolved request if full.
+        if self.requests.len() >= MAX_PENDING_REQUESTS {
+            // Prefer evicting already-resolved entries first.
+            let evict_id = self
+                .requests
+                .iter()
+                .find(|(_, r)| r.state != ApprovalState::Pending)
+                .map(|(&id, _)| id)
+                .or_else(|| {
+                    // Fallback: evict the oldest pending entry.
+                    self.requests
+                        .iter()
+                        .min_by_key(|(_, r)| r.created_at)
+                        .map(|(&id, _)| id)
+                });
+            if let Some(id) = evict_id {
+                warn!(evicted_id = id, "approval map full — evicting oldest entry");
+                self.requests.remove(&id);
+            }
         }
 
         let id = self.next_id;
@@ -244,16 +268,6 @@ impl PolicyGate {
         }
     }
 
-    /// Set the trust level.
-    pub fn set_trust_level(&mut self, level: f32) {
-        self.trust_level = level.clamp(0.0, 1.0);
-    }
-
-    /// Get the current trust level.
-    pub fn trust_level(&self) -> f32 {
-        self.trust_level
-    }
-
     /// Remove resolved (non-pending) requests older than `max_age_secs`.
     pub fn cleanup(&mut self, max_age_secs: u64) -> usize {
         let now = unix_now();
@@ -269,7 +283,6 @@ impl std::fmt::Debug for PolicyGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PolicyGate")
             .field("requests", &self.requests.len())
-            .field("trust_level", &self.trust_level)
             .finish()
     }
 }
@@ -316,41 +329,41 @@ mod tests {
 
     #[test]
     fn test_low_risk_auto_approved() {
-        let mut gate = PolicyGate::new(0.5, 300);
+        let mut gate = PolicyGate::new(300);
         let result = gate.evaluate("read status".into(), RiskLevel::Low, 42);
         assert!(result.is_none(), "low risk should auto-approve");
     }
 
     #[test]
     fn test_critical_always_needs_approval() {
-        let mut gate = PolicyGate::new(1.0, 300);
+        let mut gate = PolicyGate::new(300);
         let result = gate.evaluate("delete all data".into(), RiskLevel::Critical, 42);
         assert!(result.is_some(), "critical should always need approval");
     }
 
     #[test]
-    fn test_medium_risk_at_high_trust() {
-        let mut gate = PolicyGate::new(0.8, 300);
+    fn test_medium_risk_always_needs_approval() {
+        let mut gate = PolicyGate::new(300);
         let result = gate.evaluate("send message".into(), RiskLevel::Medium, 42);
         assert!(
-            result.is_none(),
-            "medium risk at trust 0.8 should auto-approve"
+            result.is_some(),
+            "medium risk always requires user approval — LLM assigns risk, Rust does not weight-score trust"
         );
     }
 
     #[test]
-    fn test_medium_risk_at_low_trust() {
-        let mut gate = PolicyGate::new(0.3, 300);
-        let result = gate.evaluate("send message".into(), RiskLevel::Medium, 42);
+    fn test_high_risk_always_needs_approval() {
+        let mut gate = PolicyGate::new(300);
+        let result = gate.evaluate("delete file".into(), RiskLevel::High, 42);
         assert!(
             result.is_some(),
-            "medium risk at trust 0.3 should need approval"
+            "high risk always requires user approval"
         );
     }
 
     #[test]
     fn test_approve_flow() {
-        let mut gate = PolicyGate::new(0.0, 300);
+        let mut gate = PolicyGate::new(300);
         let req = gate
             .evaluate("call mom".into(), RiskLevel::Medium, 42)
             .unwrap();
@@ -362,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_reject_flow() {
-        let mut gate = PolicyGate::new(0.0, 300);
+        let mut gate = PolicyGate::new(300);
         let req = gate
             .evaluate("send money".into(), RiskLevel::High, 42)
             .unwrap();
@@ -374,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_double_resolve_fails() {
-        let mut gate = PolicyGate::new(0.0, 300);
+        let mut gate = PolicyGate::new(300);
         let req = gate
             .evaluate("do thing".into(), RiskLevel::Medium, 42)
             .unwrap();
@@ -387,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_not_found() {
-        let mut gate = PolicyGate::new(0.0, 300);
+        let mut gate = PolicyGate::new(300);
         let err = gate.approve(999).unwrap_err();
         assert_eq!(err, ApprovalError::NotFound(999));
     }
@@ -414,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_pending_for_chat() {
-        let mut gate = PolicyGate::new(0.0, 300);
+        let mut gate = PolicyGate::new(300);
         gate.evaluate("action 1".into(), RiskLevel::Medium, 42);
         gate.evaluate("action 2".into(), RiskLevel::High, 42);
         gate.evaluate("action 3".into(), RiskLevel::Medium, 99);

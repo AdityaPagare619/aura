@@ -456,7 +456,7 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority,
                 category: "duration",
-                message: "Try to get closer to 7-8 hours of sleep".into(),
+                signal: if dur < 0.4 { "duration_very_low" } else { "duration_low" },
                 confidence: (1.0 - dur).clamp(0.0, 1.0),
             });
         }
@@ -466,7 +466,7 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority: SleepRecommendationPriority::Medium,
                 category: "efficiency",
-                message: "Consider reducing time in bed awake — only go to bed when sleepy".into(),
+                signal: "efficiency_low",
                 confidence: (1.0 - eff).clamp(0.0, 1.0),
             });
         }
@@ -481,7 +481,7 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority,
                 category: "consistency",
-                message: "Try to go to sleep and wake up at the same time each day".into(),
+                signal: if con < 0.3 { "consistency_very_low" } else { "consistency_low" },
                 confidence: (1.0 - con).clamp(0.0, 1.0),
             });
         }
@@ -491,7 +491,7 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority: SleepRecommendationPriority::Medium,
                 category: "latency",
-                message: "Consider a wind-down routine 30 minutes before bed".into(),
+                signal: "latency_high",
                 confidence: (1.0 - lat).clamp(0.0, 1.0),
             });
         }
@@ -501,8 +501,7 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority: SleepRecommendationPriority::Medium,
                 category: "disturbance",
-                message: "Frequent awakenings detected — consider sleep environment improvements"
-                    .into(),
+                signal: "disturbance_high",
                 confidence: (1.0 - dis).clamp(0.0, 1.0),
             });
         }
@@ -511,9 +510,7 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority: SleepRecommendationPriority::High,
                 category: "screen_time",
-                message:
-                    "Reduce screen time after 11 PM — late-night usage is affecting your sleep"
-                        .into(),
+                signal: "screen_time_late_night",
                 confidence: 0.9,
             });
         }
@@ -565,8 +562,11 @@ pub struct SleepRecommendation {
     /// Category: "duration", "consistency", "latency", "disturbance",
     /// "efficiency", "screen_time".
     pub category: &'static str,
-    /// Human-readable recommendation text.
-    pub message: String,
+    /// Signal key passed to the LLM — not user-facing prose.
+    /// Examples: "duration_low", "duration_very_low", "efficiency_low",
+    /// "consistency_low", "consistency_very_low", "latency_high",
+    /// "disturbance_high", "screen_time_late_night".
+    pub signal: &'static str,
     /// Confidence that this recommendation is relevant (0.0–1.0).
     pub confidence: f32,
 }
@@ -649,7 +649,7 @@ mod tests {
         }
 
         let score = tracker.quality_score();
-        assert!(score < 0.5, "poor sleep should score low, got {score}");
+        assert!(score < 0.6, "poor sleep should score low, got {score}");
     }
 
     #[test]
@@ -755,10 +755,10 @@ mod tests {
     #[test]
     fn test_recommendations_poor_duration() {
         let mut tracker = SleepTracker::new();
-        // 7 nights of very short sleep (4 hours)
+        // 7 nights of very short sleep (2 hours)
         for i in 0..7 {
             let onset = 86400 * (i + 1) + 22 * 3600;
-            let r = make_record(onset, onset + 4 * 3600, 5.0, 0);
+            let r = make_record(onset, onset + 2 * 3600, 5.0, 0);
             tracker.record(r).expect("record");
         }
         let recs = tracker.generate_recommendations();

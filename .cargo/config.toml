@@ -1,52 +1,10 @@
-# =============================================================================
-# AURA v4 — Cargo build configuration
-# =============================================================================
+# Cross-compilation targets for AURA v4
+# Primary target: aarch64-linux-android (Termux on ARM64 devices)
 #
-# ARM64 Android cross-compilation settings for building libaura_core.so.
-# Requires Android NDK r25+ with the aarch64-linux-android toolchain.
+# These are defaults used by `cargo build --target aarch64-linux-android`.
+# The NDK toolchain path must be in PATH, or set CARGO_TARGET_*_LINKER
+# in the environment (CI sets these via workflow env vars).
 
 [target.aarch64-linux-android]
-linker = "aarch64-linux-android33-clang"
-# Use LLD for faster link times (bundled with NDK r25+).
-rustflags = [
-    "-C", "link-arg=-fuse-ld=lld",
-    "-C", "target-feature=+neon",
-]
-
-[target.x86_64-linux-android]
-linker = "x86_64-linux-android33-clang"
-rustflags = [
-    "-C", "link-arg=-fuse-ld=lld",
-]
-
-# Host builds (development / CI on Linux x86_64).
-[target.x86_64-unknown-linux-gnu]
-rustflags = [
-    "-C", "target-cpu=native",
-]
-
-# Host builds (development on macOS ARM64).
-[target.aarch64-apple-darwin]
-rustflags = [
-    "-C", "target-cpu=native",
-]
-
-# Host builds (development on Windows x86_64).
-[target.x86_64-pc-windows-msvc]
-rustflags = [
-    "-C", "target-cpu=native",
-]
-
-# Profile: smaller binary for Android release builds.
-[profile.release]
-opt-level = "s"
-lto = "thin"
-codegen-units = 1
-strip = "symbols"
-panic = "abort"
-
-# Profile: fast builds for development.
-[profile.dev]
-opt-level = 0
-debug = true
-incremental = true
+linker = "aarch64-linux-android21-clang"
+ar = "llvm-ar"

@@ -18,6 +18,7 @@ pub struct ScreenNode {
     pub is_enabled: bool,
     pub is_focused: bool,
     pub is_visible: bool,
+    /// Bounded at runtime to MAX_SCREEN_NODE_DEPTH levels — enforced by the accessibility bridge.
     pub children: Vec<ScreenNode>,
     pub depth: u8,
 }
@@ -193,12 +194,21 @@ impl ScreenTree {
 /// Diff between two screen states — used for post-action verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenDiff {
+    /// Bounded at runtime to MAX_SCREEN_DIFF_NODES entries — enforced by the diff engine.
     pub added_nodes: Vec<String>,
+    /// Bounded at runtime to MAX_SCREEN_DIFF_NODES entries — enforced by the diff engine.
     pub removed_nodes: Vec<String>,
     /// Pairs of (node_id, description_of_change).
+    /// Bounded at runtime to MAX_SCREEN_DIFF_NODES entries — enforced by the diff engine.
     pub changed_nodes: Vec<(String, String)>,
     pub screen_changed: bool,
 }
+
+/// Raw accessibility node as received from the Android JNI bridge before
+/// full semantic processing.  Structurally identical to [`ScreenNode`]; the
+/// alias exists so call-sites in the event pipeline can express intent
+/// (raw, unprocessed tree) without a separate type definition.
+pub type RawA11yNode = ScreenNode;
 
 #[cfg(test)]
 mod tests {

@@ -30,9 +30,13 @@ pub type SignalResult<T> = Result<T, SignalError>;
 pub const RNNOISE_FRAME_SIZE: usize = 480;
 
 /// Our pipeline sample rate.
+// Phase 8 wire point: used by VoiceEngine resampling path on Android target.
+#[allow(dead_code)]
 const PIPELINE_RATE: u32 = 16_000;
 
 /// RNNoise native sample rate.
+// Phase 8 wire point: used by VoiceEngine resampling path on Android target.
+#[allow(dead_code)]
 const RNNOISE_RATE: u32 = 48_000;
 
 /// Resample factor (48000 / 16000 = 3).
@@ -61,6 +65,10 @@ mod rnnoise_ffi {
 // RNNoise Denoiser
 // ---------------------------------------------------------------------------
 
+// Phase 8 wire point: upsample_buf and output_buf are used exclusively
+// in the Android cfg-gated RNNoise path; on non-Android targets they are
+// unreachable dead storage. Annotate the struct to suppress the warning.
+#[allow(dead_code)]
 pub struct RnnoiseDenoiser {
     #[cfg(target_os = "android")]
     state: *mut std::ffi::c_void,
@@ -136,6 +144,8 @@ impl RnnoiseDenoiser {
     }
 
     /// Simple linear-interpolation upsample by integer factor.
+    // Phase 8 wire point: called by RNNoise denoising path on Android target.
+    #[allow(dead_code)]
     fn upsample(input: &[f32], output: &mut [f32], factor: usize) {
         let in_len = input.len();
         for i in 0..in_len {
@@ -152,6 +162,8 @@ impl RnnoiseDenoiser {
     }
 
     /// Downsample by integer factor (simple decimation).
+    // Phase 8 wire point: called by RNNoise denoising path on Android target.
+    #[allow(dead_code)]
     fn downsample(input: &[f32], output: &mut [f32], factor: usize) {
         for (i, out_sample) in output.iter_mut().enumerate() {
             *out_sample = input[i * factor];

@@ -387,9 +387,15 @@ impl CalibrationEngine {
     }
 
     /// Estimate baseline response latency based on device profile.
+    ///
+    /// Returns a flat tier value — no weighted arithmetic.
+    /// The neocortex interprets these tiers and adjusts its own behaviour;
+    /// the daemon does NOT make model-behaviour decisions here.
     fn estimate_baseline_latency(&self, device: &DeviceProfile) -> u64 {
-        // Rough heuristic based on RAM and CPU benchmark.
-        let base = if device.available_ram_mb >= 8192 {
+        // Flat latency tiers by available RAM only.
+        // CPU benchmark is forwarded as raw data in CalibrationResult;
+        // the LLM decides what operational changes to make from it.
+        if device.available_ram_mb >= 8192 {
             200
         } else if device.available_ram_mb >= 4096 {
             500
@@ -397,81 +403,7 @@ impl CalibrationEngine {
             1000
         } else {
             2000
-        };
-
-        // Adjust for benchmark if available.
-        if device.cpu_benchmark_score > 50_000 {
-            base * 80 / 100 // 20% faster
-        } else if device.cpu_benchmark_score > 0 && device.cpu_benchmark_score < 10_000 {
-            base * 150 / 100 // 50% slower
-        } else {
-            base
         }
-    }
-}
-
-/// Categorize an app package name into an `AppCategory`.
-pub fn categorize_package(package: &str) -> AppCategory {
-    let pkg = package.to_lowercase();
-
-    if pkg.contains("messaging")
-        || pkg.contains("whatsapp")
-        || pkg.contains("telegram")
-        || pkg.contains("signal")
-        || pkg.contains("sms")
-        || pkg.contains("dialer")
-        || pkg.contains("phone")
-    {
-        AppCategory::Communication
-    } else if pkg.contains("instagram")
-        || pkg.contains("twitter")
-        || pkg.contains("facebook")
-        || pkg.contains("reddit")
-        || pkg.contains("tiktok")
-        || pkg.contains("snapchat")
-    {
-        AppCategory::Social
-    } else if pkg.contains("calendar")
-        || pkg.contains("docs")
-        || pkg.contains("sheets")
-        || pkg.contains("office")
-        || pkg.contains("notes")
-        || pkg.contains("todo")
-    {
-        AppCategory::Productivity
-    } else if pkg.contains("youtube")
-        || pkg.contains("netflix")
-        || pkg.contains("spotify")
-        || pkg.contains("music")
-        || pkg.contains("game")
-        || pkg.contains("video")
-    {
-        AppCategory::Entertainment
-    } else if pkg.contains("bank")
-        || pkg.contains("pay")
-        || pkg.contains("wallet")
-        || pkg.contains("finance")
-    {
-        AppCategory::Finance
-    } else if pkg.contains("health") || pkg.contains("fit") || pkg.contains("medical") {
-        AppCategory::Health
-    } else if pkg.contains("learn") || pkg.contains("edu") || pkg.contains("course") {
-        AppCategory::Education
-    } else if pkg.contains("maps") || pkg.contains("navigation") || pkg.contains("waze") {
-        AppCategory::Navigation
-    } else if pkg.contains("shop") || pkg.contains("amazon") || pkg.contains("store") {
-        AppCategory::Shopping
-    } else if pkg.contains("settings") || pkg.contains("systemui") || pkg.contains("launcher") {
-        AppCategory::System
-    } else if pkg.contains("calculator")
-        || pkg.contains("clock")
-        || pkg.contains("weather")
-        || pkg.contains("camera")
-        || pkg.contains("file")
-    {
-        AppCategory::Utility
-    } else {
-        AppCategory::Other
     }
 }
 
@@ -614,43 +546,6 @@ mod tests {
     }
 
     #[test]
-    fn test_categorize_package() {
-        assert_eq!(
-            categorize_package("com.whatsapp"),
-            AppCategory::Communication
-        );
-        assert_eq!(
-            categorize_package("com.instagram.android"),
-            AppCategory::Social
-        );
-        assert_eq!(
-            categorize_package("com.google.android.calendar"),
-            AppCategory::Productivity
-        );
-        assert_eq!(
-            categorize_package("com.google.android.youtube"),
-            AppCategory::Entertainment
-        );
-        assert_eq!(
-            categorize_package("com.example.banking"),
-            AppCategory::Finance
-        );
-        assert_eq!(
-            categorize_package("com.google.android.apps.maps"),
-            AppCategory::Navigation
-        );
-        assert_eq!(
-            categorize_package("com.amazon.shopping"),
-            AppCategory::Shopping
-        );
-        assert_eq!(
-            categorize_package("com.android.settings"),
-            AppCategory::System
-        );
-        assert_eq!(categorize_package("com.random.app"), AppCategory::Other);
-    }
-
-    #[test]
     fn test_has_sufficient_storage() {
         let low = DeviceProfile {
             available_storage_mb: 100,
@@ -686,6 +581,7 @@ mod tests {
     fn test_estimate_baseline_latency() {
         let engine = CalibrationEngine::new(false);
 
+        // Higher RAM → lower (faster) latency tier.
         let fast = DeviceProfile {
             available_ram_mb: 8192,
             cpu_benchmark_score: 100_000,
@@ -697,7 +593,11 @@ mod tests {
             ..Default::default()
         };
 
+        // Flat RAM-tier lookup: 8192 MB → 200 ms, 1024 MB → 2000 ms.
         assert!(engine.estimate_baseline_latency(&fast) < engine.estimate_baseline_latency(&slow));
+        // CPU benchmark score is forwarded as raw data; it does NOT adjust latency here.
+        assert_eq!(engine.estimate_baseline_latency(&fast), 200);
+        assert_eq!(engine.estimate_baseline_latency(&slow), 2000);
     }
 
     #[test]

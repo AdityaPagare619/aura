@@ -15,6 +15,14 @@
 use crate::persistence::integrity::VerificationReport;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum number of safe-mode reasons retained.
+/// Prevents unbounded Vec growth if activate_from_report is called repeatedly.
+const MAX_SAFE_MODE_REASONS: usize = 32;
+
+// ---------------------------------------------------------------------------
 // SafeModeState
 // ---------------------------------------------------------------------------
 
@@ -61,9 +69,12 @@ impl SafeModeState {
             self.activated_at_ms = now;
         }
 
-        // Collect critical issue messages.
+        // Collect critical issue messages — capped at MAX_SAFE_MODE_REASONS.
         for issue in &report.issues {
             if issue.severity == crate::persistence::integrity::VerificationSeverity::Critical {
+                if self.reasons.len() >= MAX_SAFE_MODE_REASONS {
+                    break;
+                }
                 let reason = format!("[{}] {}", issue.subsystem, issue.message);
                 if !self.reasons.contains(&reason) {
                     self.reasons.push(reason);
@@ -126,6 +137,29 @@ impl SafeModeState {
     /// Mark the user as notified (call after Telegram send succeeds).
     pub fn mark_notified(&mut self) {
         self.user_notified = true;
+    }
+
+    /// Activate safe mode with a plain string reason (no VerificationReport needed).
+    ///
+    /// Used by the health monitor to enter safe mode under critical memory pressure
+    /// without going through the integrity verifier path.
+    pub fn activate_manual(&mut self, reason: impl Into<String>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        self.active = true;
+        if self.activated_at_ms == 0 {
+            self.activated_at_ms = now;
+        }
+
+        let r = reason.into();
+        if self.reasons.len() < MAX_SAFE_MODE_REASONS && !self.reasons.contains(&r) {
+            self.reasons.push(r.clone());
+        }
+
+        tracing::warn!(reason = %r, "SAFE MODE ACTIVATED (manual) — critical resource pressure");
     }
 
     /// Check whether an action should be blocked in safe mode.

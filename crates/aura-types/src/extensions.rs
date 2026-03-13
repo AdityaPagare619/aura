@@ -42,6 +42,7 @@ pub trait Lens: Extension {
 pub struct Recipe {
     pub manifest: CapabilityManifest,
     pub trigger_pattern: String,
+    /// Bounded at runtime to MAX_RECIPE_STEPS entries — enforced by the recipe loader.
     pub steps: Vec<RecipeStep>,
 }
 

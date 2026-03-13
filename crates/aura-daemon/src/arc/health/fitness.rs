@@ -347,14 +347,14 @@ impl FitnessTracker {
             if ratio < 0.5 {
                 recs.push(FitnessRecommendation {
                     category: "steps",
-                    message: "You're behind on your step goal — try a short walk".into(),
+                    signal: "steps_low",
                     priority: 1,
                     confidence: (1.0 - ratio).clamp(0.0, 1.0),
                 });
             } else if ratio < 0.8 {
                 recs.push(FitnessRecommendation {
                     category: "steps",
-                    message: "Almost at your step goal — a brief walk could get you there".into(),
+                    signal: "steps_near_goal",
                     priority: 2,
                     confidence: (0.8 - ratio).clamp(0.0, 1.0) * 2.0,
                 });
@@ -366,15 +366,14 @@ impl FitnessTracker {
         if active_mins < 75 {
             recs.push(FitnessRecommendation {
                 category: "activity",
-                message: "Try to get at least 150 minutes of activity per week".into(),
+                signal: "activity_very_low",
                 priority: 1,
                 confidence: (1.0 - active_mins as f32 / 150.0).clamp(0.0, 1.0),
             });
         } else if active_mins < 150 {
             recs.push(FitnessRecommendation {
                 category: "activity",
-                message: "You're close to the WHO-recommended 150 minutes per week — keep going!"
-                    .into(),
+                signal: "activity_near_goal",
                 priority: 2,
                 confidence: (1.0 - active_mins as f32 / 150.0).clamp(0.0, 1.0),
             });
@@ -385,14 +384,14 @@ impl FitnessTracker {
         if workout_count == 0 {
             recs.push(FitnessRecommendation {
                 category: "workout",
-                message: "No workouts recorded this week — even a 20-minute session helps".into(),
+                signal: "workout_none",
                 priority: 1,
                 confidence: 0.9,
             });
         } else if workout_count < 3 {
             recs.push(FitnessRecommendation {
                 category: "workout",
-                message: "Try to fit in one more workout session this week".into(),
+                signal: "workout_low",
                 priority: 3,
                 confidence: 0.5,
             });
@@ -402,7 +401,7 @@ impl FitnessTracker {
         if self.sedentary_check(now).is_some() {
             recs.push(FitnessRecommendation {
                 category: "sedentary",
-                message: "You've been sitting for over 2 hours — time for a movement break".into(),
+                signal: "sedentary_alert",
                 priority: 1,
                 confidence: 0.85,
             });
@@ -423,8 +422,10 @@ impl FitnessTracker {
 pub struct FitnessRecommendation {
     /// Category: "steps", "activity", "workout", "sedentary".
     pub category: &'static str,
-    /// Human-readable recommendation text.
-    pub message: String,
+    /// Signal code identifying the specific condition (passed to LLM for message composition).
+    /// Examples: "steps_low", "steps_near_goal", "activity_very_low", "activity_near_goal",
+    /// "workout_none", "workout_low", "sedentary_alert".
+    pub signal: &'static str,
     /// Priority: 1 = high, 2 = medium, 3 = low.
     pub priority: u8,
     /// Confidence that this recommendation is relevant (0.0–1.0).

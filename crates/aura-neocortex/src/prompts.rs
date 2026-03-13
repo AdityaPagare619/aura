@@ -102,6 +102,23 @@ pub fn mode_config(mode: InferenceMode) -> ModeConfig {
     }
 }
 
+/// Return a `ModeConfig` tuned for Layer 4 reflection (safety/hallucination check).
+///
+/// Highly deterministic — the Brainstem model must answer PASS or REJECT,
+/// not generate creative text.  Short max_tokens keeps latency minimal.
+pub fn reflection_config() -> ModeConfig {
+    ModeConfig {
+        temperature: 0.1,
+        top_p: 0.9,
+        top_k: 10,
+        repeat_penalty: 1.0,
+        max_tokens: 50,
+        context_budget: 600,
+        stop_sequences: &["PASS", "REJECT"],
+        mirostat_tau: None,
+    }
+}
+
 /// Return a `ModeConfig` tuned for Best-of-N sampling (Layer 5).
 ///
 /// Each sample index gets a different Mirostat tau value for diversity:
@@ -180,6 +197,7 @@ impl FewShotExample {
     }
 
     /// Estimate token count.
+    #[allow(dead_code)] // Phase 8: used by token budget pre-check in inference router
     pub fn estimate_tokens(&self) -> u32 {
         let chars = self.task_description.len() + self.model_output.len() + 30;
         (chars as u32).div_ceil(4)
@@ -216,6 +234,15 @@ pub struct PromptSlots {
     pub valence: String,
     pub arousal: String,
     pub trust_level: String,
+    /// Compact JSON identity block: OCEAN + VAD + relationship_stage + archetype.
+    /// Raw numbers — the LLM reasons about these naturally. `None` if unavailable.
+    pub identity_block: Option<String>,
+    /// Human-readable mood context string from `mood_context_string()`.
+    /// Example: "Mood: positive valence, high energy, assertive stance. Emotion: Joy."
+    pub mood_description: String,
+    /// Rendered user state signals (time of day, battery, location type, etc.).
+    /// Empty string if no state signals are available.
+    pub user_state_context: String,
 
     // ── Teacher stack extensions (optional) ──
     /// Compact tool descriptions to inject into the prompt (Layer 0).
@@ -458,15 +485,27 @@ Produce the completed script now, following the template structure above."
 }
 
 /// Personality section for Conversational mode.
+///
+/// # Architecture note — raw values, no directives
+///
+/// This function receives raw OCEAN scores, VAD values, and trust level from
+/// `PromptSlots` and embeds them verbatim in the LLM system prompt. The LLM
+/// (brain) interprets the numbers and decides how they shape behavior.
+///
+/// This is the architecture-compliant path. The daemon (body) NEVER
+/// pre-interprets personality values into directive strings before this point.
+/// The legacy `generate_personality_context()` / `build_personality_context()`
+/// pipeline that produced directive strings was removed from the inference path
+/// in Phase 4 (Theater AGI elimination).
 fn personality_section(slots: &PromptSlots) -> String {
-    format!(
+    let mut out = format!(
         "\
 PERSONALITY TRAITS (OCEAN model):
-- Openness: {} -- curious and willing to explore
-- Conscientiousness: {} -- reliable and thorough
-- Extraversion: {} -- balanced between quiet helpfulness and proactive engagement
-- Agreeableness: {} -- kind but honest, will respectfully disagree
-- Neuroticism: {} -- calm and composed, unfazed by errors
+- Openness: {}
+- Conscientiousness: {}
+- Extraversion: {}
+- Agreeableness: {}
+- Neuroticism: {}
 
 CURRENT STATE:
 - Mood: valence={}, arousal={}
@@ -479,7 +518,25 @@ CURRENT STATE:
         slots.valence,
         slots.arousal,
         slots.trust_level
-    )
+    );
+
+    if !slots.mood_description.is_empty() {
+        out.push('\n');
+        out.push_str("- ");
+        out.push_str(&slots.mood_description);
+    }
+
+    if let Some(ref ib) = slots.identity_block {
+        out.push_str("\n- Identity: ");
+        out.push_str(ib);
+    }
+
+    if !slots.user_state_context.is_empty() {
+        out.push('\n');
+        out.push_str(&slots.user_state_context);
+    }
+
+    out
 }
 
 /// Context block — common across all modes, adapted per mode.
@@ -553,10 +610,8 @@ pub fn build_prompt(mode: InferenceMode, slots: &PromptSlots) -> (String, ModeCo
     // 1. Identity
     sections.push(identity_section(mode).to_string());
 
-    // 2. Personality (Conversational only)
-    if mode == InferenceMode::Conversational {
-        sections.push(personality_section(slots));
-    }
+    // 2. Personality (all modes)
+    sections.push(personality_section(slots));
 
     // 3. Rules
     sections.push(rules_section(mode).to_string());
@@ -744,6 +799,7 @@ would do. Try less obvious but potentially more efficient routes."
 /// This is the "System 1" fast path — single-pass, no iterative reasoning.
 ///
 /// Returns `(system_prompt, ModeConfig)`.
+#[allow(dead_code)] // Phase 9: Dynamic Grounding System prompt builder — wired in DGS inference mode
 #[tracing::instrument(level = "debug", skip(slots))]
 pub fn build_dgs_prompt(mode: InferenceMode, slots: &PromptSlots) -> (String, ModeConfig) {
     let template = match &slots.dgs_template {
@@ -842,6 +898,7 @@ Produce the verdict now.",
 /// Two calls produce two perspectives that the Brainstem then diffs.
 ///
 /// See AURA-V4-NEOCORTEX-DEEP-DIVE §6.5.
+#[allow(dead_code)] // Phase 9: Self-Contrast multi-perspective inference mode
 #[tracing::instrument(level = "debug", skip(slots))]
 pub fn build_self_contrast_prompt(
     mode: InferenceMode,
@@ -870,6 +927,7 @@ Prefer cautious approaches over efficient ones."
 }
 
 /// Perspective for Self-Contrast multi-perspective reflection.
+#[allow(dead_code)] // Phase 9: variants used by build_self_contrast_prompt
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelfContrastPerspective {
     /// Focus on accomplishing the user's goal efficiently.
@@ -881,6 +939,7 @@ pub enum SelfContrastPerspective {
 /// Build a contrast diff prompt for the Brainstem to compare two perspectives.
 ///
 /// The Brainstem receives both outputs and produces a diff/conflict list.
+#[allow(dead_code)] // Phase 9: used by Self-Contrast inference second pass
 #[tracing::instrument(level = "debug", skip(user_goal_output, safety_output))]
 pub fn build_contrast_diff_prompt(
     goal_summary: &str,
@@ -930,6 +989,7 @@ Produce the diff now.",
 ///
 /// Takes a base prompt and wraps it so the model is forced to reason
 /// step-by-step before producing its answer.
+#[allow(dead_code)] // Phase 9: used by CoT inference mode wrapper
 #[tracing::instrument(level = "debug", skip(base_prompt))]
 pub fn build_cot_prompt(base_prompt: &str) -> String {
     format!(
@@ -946,6 +1006,7 @@ Begin your step-by-step reasoning now.",
 ///
 /// Wraps the original prompt with context about why the previous attempt
 /// failed, asking the model to try a different approach.
+#[allow(dead_code)] // Phase 9: used by inference retry path on low-confidence output
 #[tracing::instrument(level = "debug", skip(original_prompt, previous_output))]
 pub fn build_retry_prompt(
     original_prompt: &str,
@@ -1003,6 +1064,7 @@ pub fn default_grammar_for_mode(mode: InferenceMode) -> GrammarKind {
 ///
 /// Used by the `TokenTracker` to pre-check whether the prompt fits
 /// within the budget before assembling.
+#[allow(dead_code)] // Phase 8: used by TokenTracker pre-assembly budget check
 pub fn estimate_slots_tokens(slots: &PromptSlots) -> u32 {
     let mut total = 0u32;
     total += estimate_tokens(&slots.goal);
@@ -1038,6 +1100,7 @@ pub fn estimate_slots_tokens(slots: &PromptSlots) -> u32 {
 /// Check whether a prompt would fit in the given token budget.
 ///
 /// Returns the estimated overage (positive = over budget, negative = under).
+#[allow(dead_code)] // Phase 8: used by prompt assembly budget guard
 pub fn check_budget(slots: &PromptSlots, mode: InferenceMode) -> i32 {
     let estimated = estimate_slots_tokens(slots) as i32;
     let budget = mode_config(mode).context_budget as i32;

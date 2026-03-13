@@ -320,27 +320,15 @@ impl AnomalyDetector {
     }
 
     /// Check if user text contains an emergency stop phrase.
-    pub fn check_user_stop_phrase(text: &str) -> Option<EmergencyReason> {
-        let lower = text.to_ascii_lowercase();
-        let stop_phrases = [
-            "stop",
-            "halt",
-            "emergency",
-            "emergency stop",
-            "kill",
-            "abort",
-            "stop everything",
-            "halt aura",
-        ];
-
-        for phrase in &stop_phrases {
-            if lower.contains(phrase) {
-                return Some(EmergencyReason::UserRequested {
-                    trigger_phrase: phrase.to_string(),
-                });
-            }
-        }
-
+    ///
+    /// # SAFETY
+    /// This fn must never trigger on natural language — only on explicit typed signals.
+    /// TODO: wire explicit EmergencyStop IPC type instead of NLP scan.
+    #[allow(unused_variables)]
+    pub fn check_user_stop_phrase(_text: &str) -> Option<EmergencyReason> {
+        // LLM=brain, Rust=body — NLP intent inference belongs in the LLM layer.
+        // Rust must not scan freetext for stop phrases; it can only react to
+        // explicit structured signals (e.g. a dedicated EmergencyStop IPC message).
         None
     }
 
@@ -990,12 +978,17 @@ mod tests {
     }
 
     #[test]
-    fn test_user_stop_phrase_detection() {
-        assert!(AnomalyDetector::check_user_stop_phrase("please stop").is_some());
-        assert!(AnomalyDetector::check_user_stop_phrase("HALT AURA").is_some());
-        assert!(AnomalyDetector::check_user_stop_phrase("emergency!").is_some());
-        assert!(AnomalyDetector::check_user_stop_phrase("abort now").is_some());
+    fn test_user_stop_phrase_never_triggers_on_freetext() {
+        // LLM=brain, Rust=body — check_user_stop_phrase is a safe stub that always
+        // returns None. Emergency stop must only be triggered via explicit typed IPC
+        // signals, never by NLP substring matching on freetext.
+        assert!(AnomalyDetector::check_user_stop_phrase("please stop").is_none());
+        assert!(AnomalyDetector::check_user_stop_phrase("HALT AURA").is_none());
+        assert!(AnomalyDetector::check_user_stop_phrase("emergency!").is_none());
+        assert!(AnomalyDetector::check_user_stop_phrase("abort now").is_none());
         assert!(AnomalyDetector::check_user_stop_phrase("continue working").is_none());
+        // Also confirm "don't kill that process" does NOT trigger — S0-1 fix.
+        assert!(AnomalyDetector::check_user_stop_phrase("don't kill that process").is_none());
     }
 
     #[test]
@@ -1070,11 +1063,13 @@ mod tests {
     }
 
     #[test]
-    fn test_process_user_input_triggers_emergency() {
+    fn test_process_user_input_never_triggers_emergency() {
+        // check_user_stop_phrase is a safe stub — process_user_input must never
+        // trigger an emergency from freetext. Explicit typed IPC is the only trigger.
         let mut es = EmergencyStop::new();
         let result = es.process_user_input("please stop everything");
-        assert!(result.is_some());
-        assert!(es.is_emergency());
+        assert!(result.is_none());
+        assert!(!es.is_emergency());
     }
 
     #[test]

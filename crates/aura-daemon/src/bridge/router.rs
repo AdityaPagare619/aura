@@ -276,6 +276,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Voice,
                 text: "hello voice".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");
@@ -301,6 +302,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Telegram { chat_id: 42 },
                 text: "hi telegram".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");
@@ -328,6 +330,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Voice,
                 text: "for voice".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");
@@ -336,6 +339,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Telegram { chat_id: 1 },
                 text: "for telegram".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");
@@ -378,6 +382,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Telegram { chat_id: 99 },
                 text: "nobody home".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");
@@ -387,6 +392,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Voice,
                 text: "still working".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");
@@ -441,6 +447,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Voice,
                 text: "you there?".into(),
+                mood_hint: None,
             })
             .await
             .expect("send should succeed (router is alive)");
@@ -454,6 +461,7 @@ mod tests {
             .send(DaemonResponse {
                 destination: InputSource::Voice,
                 text: "still there?".into(),
+                mood_hint: None,
             })
             .await
             .expect("send");

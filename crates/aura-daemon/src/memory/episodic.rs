@@ -14,7 +14,7 @@
 //!
 //! Uses HNSW approximate nearest neighbor index for sub-linear query time.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -43,6 +43,7 @@ const PATTERN_SEPARATION_THRESHOLD: f32 = 0.9;
 const PATTERN_SEPARATION_NOISE: f32 = 0.05;
 
 /// Maximum episodes to scan for pattern separation (performance guard).
+#[allow(dead_code)] // Phase 8: used by pattern separation fallback scan limit
 const PATTERN_SEPARATION_SCAN_LIMIT: usize = 100;
 
 /// ef parameter for HNSW search (controls recall vs speed tradeoff).
@@ -50,6 +51,59 @@ const HNSW_EF_SEARCH: usize = 50;
 
 /// Maximum number of HNSW candidates to retrieve.
 const HNSW_SEARCH_LIMIT: usize = 100;
+
+/// Maximum buffered retrieval feedback events before oldest are dropped.
+/// Drained during consolidation; kept small to avoid unbounded allocation.
+const FEEDBACK_BUFFER_CAPACITY: usize = 100;
+
+// ---------------------------------------------------------------------------
+// RetrievalFeedbackBuffer — runtime-only, not persisted in checkpoint
+// ---------------------------------------------------------------------------
+
+/// A single retrieval event recorded for consolidation weight adjustment.
+///
+/// `stored_ms` is the episode's original `timestamp_ms`.
+/// `retrieved_ms` is the wall-clock time of the retrieval.
+#[derive(Debug, Clone)]
+pub struct RetrievalEvent {
+    pub stored_ms: u64,
+    pub retrieved_ms: u64,
+}
+
+/// Bounded ring-buffer of retrieval events. Runtime-only — never serialized.
+///
+/// Filled on every successful query/find_similar call. Drained during
+/// `cron_handle_dreaming` to drive `ConsolidationWeights::adjust_from_outcome`.
+#[derive(Debug)]
+pub struct RetrievalFeedbackBuffer {
+    events: VecDeque<RetrievalEvent>,
+}
+
+impl RetrievalFeedbackBuffer {
+    pub fn new() -> Self {
+        Self {
+            events: VecDeque::with_capacity(FEEDBACK_BUFFER_CAPACITY),
+        }
+    }
+
+    /// Push a retrieval event. If at capacity, drops the oldest event.
+    pub fn push(&mut self, event: RetrievalEvent) {
+        if self.events.len() >= FEEDBACK_BUFFER_CAPACITY {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+
+    /// Drain all buffered events for processing during consolidation.
+    pub fn drain(&mut self) -> Vec<RetrievalEvent> {
+        self.events.drain(..).collect()
+    }
+
+    /// Number of pending events.
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // HnswState — HNSW index + bidirectional ID maps for episodic memory
@@ -95,6 +149,7 @@ impl HnswState {
         Ok(mapped)
     }
 
+    #[allow(dead_code)] // Phase 8: used by HNSW index maintenance (tombstone cleanup)
     fn remove(&mut self, sqlite_id: u64) -> Result<(), MemError> {
         if let Some(node_id) = self.sqlite_to_node.remove(&sqlite_id) {
             self.node_to_sqlite.remove(&node_id);
@@ -117,6 +172,9 @@ impl HnswState {
 pub struct EpisodicMemory {
     conn: Arc<Mutex<Connection>>,
     hnsw: Arc<std::sync::Mutex<HnswState>>,
+    /// Bounded ring-buffer of retrieval events. Drained during consolidation
+    /// to drive `ConsolidationWeights::adjust_from_outcome`. Never persisted.
+    pub feedback: Arc<std::sync::Mutex<RetrievalFeedbackBuffer>>,
 }
 
 impl EpisodicMemory {
@@ -140,6 +198,7 @@ impl EpisodicMemory {
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
             hnsw: Arc::new(std::sync::Mutex::new(HnswState::new())),
+            feedback: Arc::new(std::sync::Mutex::new(RetrievalFeedbackBuffer::new())),
         };
         // Run migrations synchronously at startup
         store.migrate_sync()?;
@@ -159,6 +218,7 @@ impl EpisodicMemory {
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
             hnsw: Arc::new(std::sync::Mutex::new(HnswState::new())),
+            feedback: Arc::new(std::sync::Mutex::new(RetrievalFeedbackBuffer::new())),
         };
         store.migrate_sync()?;
         Ok(store)
@@ -304,6 +364,22 @@ impl EpisodicMemory {
         .await
         .map_err(|e| MemError::QueryFailed(format!("spawn_blocking failed: {}", e)))??;
 
+        // Record retrieval feedback for each result. Used during consolidation
+        // to drive ConsolidationWeights::adjust_from_outcome. Non-fatal on
+        // lock contention — feedback is best-effort.
+        if !results.is_empty() {
+            if let Ok(mut buf) = self.feedback.lock() {
+                for r in &results {
+                    buf.push(RetrievalEvent {
+                        stored_ms: r.timestamp_ms,
+                        retrieved_ms: now_ms,
+                    });
+                }
+            } else {
+                tracing::warn!("episodic feedback buffer lock poisoned — skipping feedback recording");
+            }
+        }
+
         Ok(results)
     }
 
@@ -431,12 +507,32 @@ impl EpisodicMemory {
         let hnsw = self.hnsw.clone();
         let content = content.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        let results = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             find_similar_sync(&conn, &hnsw, &content, min_similarity, limit)
         })
         .await
-        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))??;
+
+        // Record retrieval feedback for consolidation weight adjustment. Non-fatal.
+        if !results.is_empty() {
+            let retrieved_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if let Ok(mut buf) = self.feedback.lock() {
+                for ep in &results {
+                    buf.push(RetrievalEvent {
+                        stored_ms: ep.timestamp_ms,
+                        retrieved_ms,
+                    });
+                }
+            } else {
+                tracing::warn!("episodic feedback buffer lock poisoned — skipping find_similar feedback");
+            }
+        }
+
+        Ok(results)
     }
 
     /// Get the N most recent full episodes.
@@ -699,6 +795,7 @@ fn query_episodes_hnsw(
 }
 
 /// Legacy O(n) query - kept for fallback and specific use cases.
+#[allow(dead_code)] // Phase 8: fallback when HNSW index not yet built for an episode set
 fn query_episodes_sync(
     conn: &Connection,
     query_text: &str,

@@ -1,4 +1,5 @@
 use aura_types::identity::{DispositionState, EmotionLabel, MoodVAD, OceanTraits};
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -66,12 +67,12 @@ impl MoodEvent {
             }
             // Stress lowers valence and raises arousal proportionally.
             MoodEvent::VoiceStressDetected { level } => {
-                let l = level.clamp(&0.0, &1.0);
+                let l = level.clamp(0.0, 1.0);
                 Some((-0.10 * l, 0.15 * l))
             }
             // Fatigue lowers both valence and arousal proportionally.
             MoodEvent::VoiceFatigueDetected { level } => {
-                let l = level.clamp(&0.0, &1.0);
+                let l = level.clamp(0.0, 1.0);
                 Some((-0.05 * l, -0.10 * l))
             }
         }
@@ -208,12 +209,14 @@ impl AffectiveEngine {
         let a = self.state.mood.arousal;
         let d = self.state.mood.dominance;
 
+        // Ordering matters: most-extreme branch first to avoid dead-code.
+        // v < -0.3 (strongly negative) must precede v < -0.1 (mildly negative).
         let valence_str = if v > 0.3 {
             "positive"
         } else if v < -0.3 {
-            "low"
+            "negative"
         } else if v < -0.1 {
-            "slightly low"
+            "slightly negative"
         } else {
             "neutral"
         };
@@ -244,27 +247,11 @@ impl AffectiveEngine {
         )
     }
 
-    /// Compute an urgency modifier from arousal.
+    /// Returns a human-readable mood context string for LLM prompt injection.
     ///
-    /// Returns a value in \[0.8, 1.2\] that can multiply response latency
-    /// targets or token budgets.
-    ///
-    /// - High arousal → urgency modifier > 1.0 (more urgent, prioritize speed)
-    /// - Low arousal  → urgency modifier < 1.0 (take more time, be thorough)
-    pub fn urgency_modifier(&self) -> f32 {
-        // Map arousal [-1, 1] to [0.8, 1.2]
-        let modifier = 1.0 + self.state.mood.arousal * 0.2;
-        modifier.clamp(0.8, 1.2)
-    }
-
-    /// Compute a tone modifier from valence.
-    ///
-    /// Returns a value in \[-1.0, 1.0\]:
-    /// - Positive → warmer, more encouraging tone
-    /// - Negative → more cautious, empathetic tone
-    /// - Zero → neutral
-    pub fn tone_modifier(&self) -> f32 {
-        self.state.mood.valence.clamp(-1.0, 1.0)
+    /// Alias for [`mood_context_string`] — preferred name for LLM pipeline wiring.
+    pub fn to_llm_context(&self) -> String {
+        self.mood_context_string()
     }
 
     /// Classify a `MoodVAD` into a discrete `EmotionLabel`.
@@ -306,141 +293,7 @@ impl Default for AffectiveEngine {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Mood Modifier — unified snapshot for pipeline consumers
-// ---------------------------------------------------------------------------
-
-/// Unified mood influence snapshot for pipeline consumers.
-///
-/// Combines urgency, tone, patience, empathy, and creativity boosts
-/// derived from the current VAD state into a single struct that other
-/// subsystems can query without knowing about VAD internals.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MoodModifier {
-    /// Urgency factor in \[0.8, 1.2\].  > 1.0 = more urgent.
-    pub urgency: f32,
-    /// Tone factor in \[-1.0, 1.0\].  Positive = warmer.
-    pub tone: f32,
-    /// Patience factor in \[0.0, 1.0\].  Inverse of arousal.
-    pub patience: f32,
-    /// Empathy boost in \[0.0, 1.0\].  Higher when valence is negative.
-    pub empathy_boost: f32,
-    /// Creativity boost in \[0.0, 1.0\].  Higher when arousal is moderate
-    /// and valence is positive.
-    pub creativity_boost: f32,
-}
-
-/// Response style modifiers derived from affective state.
-///
-/// These drive adaptive response behavior in the daemon:
-/// - `shorten_factor`: Multiply response target length (0.5-1.0)
-/// - `emoji_boost`: Emoji frequency modifier (0.0-0.5)
-/// - `empathy_level`: Empathy injection level (0.0-1.0)
-/// - `warmth_level`: Warmth/positive tone level (0.0-1.0)
-/// - `directness_level`: Direct vs. verbose (0.0-1.0)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ResponseStyleModifier {
-    /// Response length multiplier. < 1.0 = shorten response.
-    pub shorten_factor: f32,
-    /// Emoji usage boost. > 0.0 = add more emojis.
-    pub emoji_boost: f32,
-    /// Empathy injection level. Higher for distressed users.
-    pub empathy_level: f32,
-    /// Warmth/positive tone level.
-    pub warmth_level: f32,
-    /// Directness vs. verbose. Higher = more direct.
-    pub directness_level: f32,
-}
-
-impl Default for ResponseStyleModifier {
-    fn default() -> Self {
-        Self {
-            shorten_factor: 1.0,
-            emoji_boost: 0.0,
-            empathy_level: 0.0,
-            warmth_level: 0.5,
-            directness_level: 0.2,
-        }
-    }
-}
-
 impl AffectiveEngine {
-    /// Build a [`MoodModifier`] snapshot from the current VAD state.
-    ///
-    /// Formulas:
-    /// - `urgency`:        see [`urgency_modifier`]
-    /// - `tone`:           see [`tone_modifier`]
-    /// - `patience`:       `(1.0 - arousal) / 2.0`, clamped \[0, 1\]
-    /// - `empathy_boost`:  `(-valence).max(0) * 0.8`, clamped \[0, 1\]
-    /// - `creativity_boost`: `gaussian(arousal, μ=0.3, σ=0.4) * valence_pos`
-    pub fn get_mood_modifier(&self) -> MoodModifier {
-        let v = self.state.mood.valence;
-        let a = self.state.mood.arousal;
-
-        let patience = ((1.0 - a) / 2.0).clamp(0.0, 1.0);
-        let empathy_boost = ((-v).max(0.0) * 0.8).clamp(0.0, 1.0);
-
-        // Creativity peaks at moderate arousal (~0.3) and positive valence.
-        let arousal_gauss = (-(a - 0.3_f32).powi(2) / (2.0 * 0.4_f32.powi(2))).exp();
-        let valence_pos = v.max(0.0);
-        let creativity_boost = (arousal_gauss * valence_pos).clamp(0.0, 1.0);
-
-        MoodModifier {
-            urgency: self.urgency_modifier(),
-            tone: self.tone_modifier(),
-            patience,
-            empathy_boost,
-            creativity_boost,
-        }
-    }
-
-    /// Compute response style modifiers based on current affective state.
-    ///
-    /// This drives adaptive response behavior:
-    /// - High stress/arousal → shorter, more direct responses
-    /// - Positive valence + moderate arousal → warmer, emoji-enhanced
-    /// - Negative valence (fear/sadness) → more empathetic responses
-    pub fn response_style_modifier(&self) -> ResponseStyleModifier {
-        let v = self.state.mood.valence;
-        let a = self.state.mood.arousal;
-        let d = self.state.mood.dominance;
-        let emotion = &self.state.emotion;
-
-        let should_shorten = a > 0.6 || v < -0.3;
-        let shorten_factor = if should_shorten {
-            (1.0 - (a.max(0.0) * 0.3)).clamp(0.5, 1.0)
-        } else {
-            1.0
-        };
-
-        let should_add_emoji = v > 0.3 && a > 0.1 && a < 0.6;
-        let emoji_boost = if should_add_emoji { v * 0.5 } else { 0.0 };
-
-        let empathy_level =
-            if v < -0.2 || matches!(emotion, EmotionLabel::Fear | EmotionLabel::Sadness) {
-                ((-v).max(0.0) * 0.8).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-
-        let warmth_level = (v.max(0.0) * 0.6 + (1.0 - d) * 0.2).clamp(0.0, 1.0);
-
-        let directness_level = if a > 0.4 {
-            (a * 0.5).clamp(0.0, 1.0)
-        } else {
-            0.2
-        };
-
-        ResponseStyleModifier {
-            shorten_factor,
-            emoji_boost,
-            empathy_level,
-            warmth_level,
-            directness_level,
-        }
-    }
-
-    /// Process a mood event with personality-influenced volatility.
     ///
     /// The OCEAN traits modulate how strongly the event affects mood:
     /// - High **Neuroticism** → larger mood swings (volatility × 1.0–1.5)
@@ -596,7 +449,120 @@ impl AffectiveEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Stress Accumulator
+// MoodModifier — structured modifiers derived from current affective state
+// ---------------------------------------------------------------------------
+
+/// Structured prompt modifiers derived from the current affective state.
+///
+/// Used by the LLM pipeline to adjust response tone, length, and empathy.
+#[derive(Debug, Clone)]
+pub struct MoodModifier {
+    /// Urgency multiplier in \[0.8, 1.2\]. > 1.0 means faster/more urgent.
+    pub urgency: f32,
+    /// Tone offset in \[-1.0, 1.0\]. Positive = warmer, negative = cooler.
+    pub tone: f32,
+    /// Patience level in \[0.0, 1.0\]. Lower = less tolerant of long exchanges.
+    pub patience: f32,
+    /// Empathy boost in \[0.0, 1.0\]. Higher = more empathetic responses.
+    pub empathy_boost: f32,
+    /// Creativity boost in \[0.0, 1.0\]. Higher = more creative/exploratory.
+    pub creativity_boost: f32,
+}
+
+/// Response style modifiers for adjusting LLM output format.
+#[derive(Debug, Clone)]
+pub struct ResponseStyleModifier {
+    /// Factor to shorten response length (< 1.0 = shorter, 1.0 = normal).
+    pub shorten_factor: f32,
+    /// Emoji frequency boost in \[0.0, 1.0\].
+    pub emoji_boost: f32,
+    /// Empathy injection level in \[0.0, 1.0\].
+    pub empathy_level: f32,
+    /// Warmth level in \[0.0, 1.0\].
+    pub warmth_level: f32,
+    /// Directness level in \[0.0, 1.0\].
+    pub directness_level: f32,
+}
+
+impl AffectiveEngine {
+    // -- Response modifier methods (Team 2 wiring) --------------------------
+
+    /// Returns urgency modifier in \[0.8, 1.2\] based on current arousal.
+    ///
+    /// Formula: `(1.0 + arousal * 0.4).clamp(0.8, 1.2)`.
+    /// Neutral arousal (0.0) → 1.0; high arousal → approaches 1.2.
+    pub fn urgency_modifier(&self) -> f32 {
+        (1.0 + self.state.mood.arousal * 0.4).clamp(0.8, 1.2)
+    }
+
+    /// Returns tone modifier equal to current valence in \[-1.0, 1.0\].
+    ///
+    /// Positive valence → warmer tone. Negative valence → cooler/measured tone.
+    pub fn tone_modifier(&self) -> f32 {
+        self.state.mood.valence
+    }
+
+    /// Returns a [`MoodModifier`] summarising all affective prompt modifiers.
+    pub fn get_mood_modifier(&self) -> MoodModifier {
+        let v = self.state.mood.valence;
+        let a = self.state.mood.arousal;
+
+        // Patience decreases as arousal rises above neutral.
+        let patience = (1.0 - a.max(0.0) * 0.6).clamp(0.0, 1.0);
+
+        // Empathy increases when valence is negative.
+        let empathy_boost = (-v).max(0.0).clamp(0.0, 1.0);
+
+        // Creativity peaks when both valence and arousal are positive.
+        let creativity_boost = (v.max(0.0) * a.max(0.0)).clamp(0.0, 1.0);
+
+        MoodModifier {
+            urgency: self.urgency_modifier(),
+            tone: self.tone_modifier(),
+            patience,
+            empathy_boost,
+            creativity_boost,
+        }
+    }
+
+    /// Returns a [`ResponseStyleModifier`] for adjusting LLM response format.
+    pub fn response_style_modifier(&self) -> ResponseStyleModifier {
+        let v = self.state.mood.valence;
+        let a = self.state.mood.arousal;
+        let d = self.state.mood.dominance;
+
+        // Shorten when aroused or when mood is negative.
+        let shorten_factor =
+            (1.0 - (a.max(0.0) + (-v).max(0.0)) * 0.2).clamp(0.5, 1.0);
+
+        // Emojis only when both valence AND arousal are positive.
+        let emoji_boost = (v.max(0.0) * a.max(0.0) * 2.0).clamp(0.0, 1.0);
+
+        // Empathy: emotion-driven + negative-valence component.
+        let emotion_boost = match self.state.emotion {
+            EmotionLabel::Fear | EmotionLabel::Sadness | EmotionLabel::Anger => 0.4,
+            _ => 0.0,
+        };
+        let empathy_level = ((-v).max(0.0) * 0.5 + emotion_boost).clamp(0.0, 1.0);
+
+        // Warmth: high positive valence + collaborative stance.
+        let warmth_level = (v * 0.6 + (1.0 - d) * 0.2).clamp(0.0, 1.0);
+
+        // Directness: driven by arousal.
+        let directness_level = a.max(0.0).clamp(0.0, 1.0);
+
+        ResponseStyleModifier {
+            shorten_factor,
+            emoji_boost,
+            empathy_level,
+            warmth_level,
+            directness_level,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stress Accumulator (continued AffectiveEngine impl above)
 // ---------------------------------------------------------------------------
 
 /// Stress half-life in milliseconds (10 minutes).

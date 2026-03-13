@@ -1,70 +1,34 @@
 # ============================================================
 # AURA v4 — CI Pipeline
 # Runs on every push and PR to main
+# All jobs run in parallel — fast feedback, no serialization
 # ============================================================
 
-name: AURA CI
+name: CI
 
 on:
   push:
-    branches: [main, develop, 'feature/**']
+    branches: ["**"]
   pull_request:
     branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
   # --------------------------------------------------------
-  # Job 1: Check compilation (fast feedback)
+  # Job 1: cargo check — fast compilation gate
   # --------------------------------------------------------
   check:
-    name: Cargo Check
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-03-01
-          components: rustfmt, clippy
+          submodules: recursive
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config
-
-      - name: Cargo check (all crates)
-        run: cargo check --workspace --all-targets
-
-  # --------------------------------------------------------
-  # Job 2: Run tests
-  # --------------------------------------------------------
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-03-01
-          components: rustfmt, clippy
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -72,40 +36,64 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
 
-      - name: Run unit tests
-        run: cargo test --workspace -- --nocapture
+      # stub feature skips llama.cpp compilation on Linux CI hosts (no NDK available)
+      - run: cargo check --workspace --features stub
+
+  # --------------------------------------------------------
+  # Job 2: cargo test (aura-daemon only — host-compatible)
+  # --------------------------------------------------------
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
+
+      # aura-llama-sys uses stub mode on non-Android hosts (llama_stub cfg)
+      # so testing the full workspace is safe; llama.cpp submodule not needed
+      - run: cargo test -p aura-daemon
         env:
           RUST_LOG: debug
 
-      - name: Run integration tests
-        run: cargo test --workspace --test '*' -- --nocapture
-        continue-on-error: true  # Integration tests may need device context
-
   # --------------------------------------------------------
-  # Job 3: Lint (clippy + fmt)
+  # Job 3: clippy — warnings as errors
   # --------------------------------------------------------
-  lint:
-    name: Lint & Format
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
-    needs: check
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-03-01
-          components: rustfmt, clippy
+          submodules: recursive
+
+      - name: Install Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -113,36 +101,30 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
 
-      - name: Clippy (all warnings as errors)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-        continue-on-error: true  # Allow clippy to report without blocking initially
-
-      - name: Rustfmt check
-        run: cargo fmt --all -- --check
-        continue-on-error: true  # Allow fmt to report without blocking initially
+      # stub feature skips llama.cpp compilation on Linux CI hosts (no NDK available)
+      - run: cargo clippy --workspace --features stub -- -D warnings
 
   # --------------------------------------------------------
-  # Job 4: Security audit
+  # Job 4: rustfmt — enforce consistent formatting
   # --------------------------------------------------------
-  audit:
-    name: Security Audit
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
+      - name: Install Rust stable + rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
-      - name: Run audit
-        run: cargo audit
-        continue-on-error: true  # Advisory — don't block on known issues
+      - run: cargo fmt --check

@@ -1,7 +1,8 @@
-//! aura-llama-sys: FFI bindings to llama.cpp
+//! aura-llama-sys: FFI bindings to llama.cpp and GGUF metadata parser.
 //!
 //! This crate provides the interface between AURA's Rust inference engine and
-//! the llama.cpp C library.
+//! the llama.cpp C library, plus a pure-Rust GGUF header parser that reads
+//! model capabilities without loading weights.
 //!
 //! # Architecture
 //!
@@ -17,6 +18,9 @@
 //! All FFI calls go through the `LlamaBackend` trait. On Android, the `FfiBackend`
 //! implementation uses raw pointers obtained from `libloading`. On desktop, the
 //! `StubBackend` implementation uses safe Rust only.
+
+pub mod gguf_meta;
+pub use gguf_meta::{parse_from_reader, parse_gguf_meta, GgufError, GgufMeta};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1000,6 +1004,41 @@ impl LlamaBackend for StubBackend {
     }
 }
 
+/// Position type for the batch API — matches llama.cpp's `llama_pos` (i32).
+pub type LlamaPos = i32;
+
+/// Sequence ID type — matches llama.cpp's `llama_seq_id` (i32).
+pub type LlamaSeqId = i32;
+
+/// Batch of tokens for the modern llama.cpp batch API.
+///
+/// Corresponds to `struct llama_batch` in llama.cpp (post-0.x batch API).
+/// Pass to `llama_decode` instead of the old (tokens, n_tokens, n_past) signature.
+#[repr(C)]
+pub struct LlamaBatch {
+    /// Number of tokens in this batch.
+    pub n_tokens: i32,
+    /// Token IDs (size: n_tokens). NULL if using embeddings.
+    pub token: *mut LlamaToken,
+    /// Embeddings (size: n_tokens * n_embd). NULL if using token IDs.
+    pub embd: *mut f32,
+    /// Token positions (size: n_tokens).
+    pub pos: *mut LlamaPos,
+    /// Number of sequence IDs per token (size: n_tokens).
+    pub n_seq_id: *mut i32,
+    /// Sequence IDs for each token (size: n_tokens, each entry is a pointer).
+    pub seq_id: *mut *mut LlamaSeqId,
+    /// Which tokens to compute logits for (size: n_tokens). 1 = yes, 0 = no.
+    pub logits: *mut i8,
+    // --- Convenience fields (used when all tokens share the same pos/seq_id) ---
+    /// Starting position when not using per-token `pos`.
+    pub all_pos_0: LlamaPos,
+    /// Position stride when not using per-token `pos`.
+    pub all_pos_1: LlamaPos,
+    /// Sequence ID when not using per-token `seq_id`.
+    pub all_seq_id: LlamaSeqId,
+}
+
 #[cfg(target_os = "android")]
 extern "C" {
     fn llama_load_model_from_file(path: *const std::ffi::c_char, params: LlamaModelParams) -> *mut LlamaModel;
@@ -1019,12 +1058,22 @@ extern "C" {
         buf: *mut std::ffi::c_char,
         length: i32,
     ) -> i32;
-    fn llama_decode(
-        ctx: *mut LlamaContext,
-        batch: *const LlamaToken,
+    /// Modern batch API: construct a simple single-sequence batch from a token slice.
+    ///
+    /// Replaces the old `llama_decode(ctx, tokens, n_tokens, n_past)` call.
+    /// Use: `let batch = llama_batch_get_one(tokens_ptr, n_tokens, pos_0, seq_id);`
+    ///      `llama_decode(ctx, batch);`
+    fn llama_batch_get_one(
+        tokens: *mut LlamaToken,
         n_tokens: i32,
-        n_past: i32,
-    ) -> i32;
+        pos_0: LlamaPos,
+        seq_id: LlamaSeqId,
+    ) -> LlamaBatch;
+    /// Evaluate a batch of tokens.
+    ///
+    /// Modern signature: takes a `LlamaBatch` (batch API), not raw token pointer.
+    /// Returns 0 on success, non-zero on error.
+    fn llama_decode(ctx: *mut LlamaContext, batch: LlamaBatch) -> i32;
     fn llama_get_logits(ctx: *mut LlamaContext) -> *mut f32;
     fn llama_n_vocab(model: *mut LlamaModel) -> i32;
     fn llama_token_eos(model: *mut LlamaModel) -> LlamaToken;
@@ -1340,13 +1389,17 @@ impl LlamaBackend for FfiBackend {
         let mut n_past_guard = self.n_past.lock().unwrap_or_else(|e| e.into_inner());
         let past = *n_past_guard;
 
+        // Modern batch API: use llama_batch_get_one to construct the batch,
+        // then pass it to llama_decode. The old 4-argument llama_decode
+        // (ctx, tokens_ptr, n_tokens, n_past) no longer exists in modern llama.cpp.
         let result = unsafe {
-            llama_decode(
-                ctx,
-                tokens.as_ptr(),
+            let batch = llama_batch_get_one(
+                tokens.as_ptr() as *mut LlamaToken,
                 tokens.len() as i32,
-                past, // advance position for multi-turn context
-            )
+                past, // pos_0: starting position for multi-turn context
+                0,    // seq_id: single sequence
+            );
+            llama_decode(ctx, batch)
         };
 
         if result != 0 {

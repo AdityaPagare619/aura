@@ -103,6 +103,7 @@ pub struct TutorialModule {
 
 /// Persistent progress tracking for the tutorial system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct TutorialProgress {
     /// Module ID of the current module (empty = not started).
     pub current_module: String,
@@ -120,19 +121,6 @@ pub struct TutorialProgress {
     pub updated_at_ms: u64,
 }
 
-impl Default for TutorialProgress {
-    fn default() -> Self {
-        Self {
-            current_module: String::new(),
-            current_step_index: 0,
-            completed_modules: Vec::new(),
-            step_results: Vec::new(),
-            total_time_ms: 0,
-            all_complete: false,
-            updated_at_ms: 0,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // TutorialEngine

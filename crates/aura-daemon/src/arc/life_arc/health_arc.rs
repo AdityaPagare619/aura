@@ -314,13 +314,13 @@ impl HealthArc {
             0.5 // No sleep data
         } else {
             let h = self.avg_sleep_hours_7d;
-            if h >= 7.0 && h <= 9.0 {
+            if (7.0..=9.0).contains(&h) {
                 1.0
-            } else if h >= 6.0 && h < 7.0 {
+            } else if (6.0..7.0).contains(&h) {
                 0.7
             } else if h > 9.0 && h <= 10.0 {
                 0.8 // Slightly over is less concerning than under
-            } else if h >= 5.0 && h < 6.0 {
+            } else if (5.0..6.0).contains(&h) {
                 0.4
             } else {
                 0.2 // Severe under/over-sleep

@@ -1506,7 +1506,7 @@ pub async fn run(mut state: DaemonState) {
             use rand::RngCore;
             let mut key = [0u8; 32];
             aes_gcm::aead::OsRng.fill_bytes(&mut key);
-            match std::fs::write(&vault_key_path, &key) {
+            match std::fs::write(&vault_key_path, key) {
                 Ok(()) => {
                     // Restrict permissions to owner-read-only on Unix-like targets.
                     #[cfg(unix)]
@@ -3454,7 +3454,7 @@ async fn handle_user_command(
                                     attempt_count: subs.consecutive_task_failures,
                                     time_elapsed_ms: 0,
                                     last_error: failure_reason.to_owned(),
-                                    category: failure_category.clone(),
+                                    category: failure_category,
                                     environment_state: env_snapshot.clone(),
                                 };
 
@@ -3778,23 +3778,23 @@ async fn handle_user_command(
                                 } => (
                                     OutcomeResult::Success,
                                     *final_confidence,
-                                    *iterations_used as u32,
+                                    (*iterations_used),
                                 ),
                                 react::TaskOutcome::Failed {
                                     iterations_used, ..
-                                } => (OutcomeResult::Failure, 0.0, *iterations_used as u32),
+                                } => (OutcomeResult::Failure, 0.0, (*iterations_used)),
                                 react::TaskOutcome::Cancelled {
                                     iterations_completed,
                                     ..
                                 } => (
                                     OutcomeResult::UserCancelled,
                                     0.0,
-                                    *iterations_completed as u32,
+                                    (*iterations_completed),
                                 ),
                                 react::TaskOutcome::CycleAborted {
                                     iterations_completed,
                                     ..
-                                } => (OutcomeResult::Failure, 0.0, *iterations_completed as u32),
+                                } => (OutcomeResult::Failure, 0.0, (*iterations_completed)),
                             };
                             let task_duration = match &outcome {
                                 react::TaskOutcome::Success { total_ms, .. }
@@ -4754,23 +4754,23 @@ async fn handle_ipc_inbound(
                                 } => (
                                     OutcomeResult::Success,
                                     *final_confidence,
-                                    *iterations_used as u32,
+                                    (*iterations_used),
                                 ),
                                 react::TaskOutcome::Failed {
                                     iterations_used, ..
-                                } => (OutcomeResult::Failure, 0.0, *iterations_used as u32),
+                                } => (OutcomeResult::Failure, 0.0, (*iterations_used)),
                                 react::TaskOutcome::Cancelled {
                                     iterations_completed,
                                     ..
                                 } => (
                                     OutcomeResult::UserCancelled,
                                     0.0,
-                                    *iterations_completed as u32,
+                                    (*iterations_completed),
                                 ),
                                 react::TaskOutcome::CycleAborted {
                                     iterations_completed,
                                     ..
-                                } => (OutcomeResult::Failure, 0.0, *iterations_completed as u32),
+                                } => (OutcomeResult::Failure, 0.0, (*iterations_completed)),
                             };
                             let plan_duration = match &outcome {
                                 react::TaskOutcome::Success { total_ms, .. }

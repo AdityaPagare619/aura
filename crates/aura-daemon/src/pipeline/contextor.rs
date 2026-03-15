@@ -720,7 +720,7 @@ impl Contextor {
         let mood = affective.current_state();
         let relationship = relationships.get_relationship("primary");
         let stage = relationship
-            .map(|r| r.stage.clone())
+            .map(|r| r.stage)
             .unwrap_or(aura_types::identity::RelationshipStage::Stranger);
         let archetype = personality.archetype();
 

@@ -42,25 +42,24 @@ const PROFILE_SCHEMA_VERSION: u32 = 1;
 
 /// Privacy level controlling how much data AURA retains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum PrivacyLevel {
     /// Minimal data retention — only what's needed for core function.
     Minimal,
     /// Standard — retain interaction patterns, preferences, no raw messages.
+    #[default]
     Standard,
     /// Full — retain everything for maximum personalisation.
     Full,
 }
 
-impl Default for PrivacyLevel {
-    fn default() -> Self {
-        Self::Standard
-    }
-}
 
 /// Notification preference for proactive suggestions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum NotificationPreference {
     /// All proactive notifications enabled.
+    #[default]
     All,
     /// Only important notifications.
     ImportantOnly,
@@ -68,28 +67,20 @@ pub enum NotificationPreference {
     None,
 }
 
-impl Default for NotificationPreference {
-    fn default() -> Self {
-        Self::All
-    }
-}
 
 /// Communication style preference as expressed by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CommunicationStyle {
     /// Brief, to-the-point responses.
     Concise,
     /// Balanced responses.
+    #[default]
     Balanced,
     /// Detailed, thorough responses.
     Detailed,
 }
 
-impl Default for CommunicationStyle {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
 
 /// A recurring daily pattern detected or stated by the user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

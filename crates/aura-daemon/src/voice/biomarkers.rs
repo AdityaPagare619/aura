@@ -322,7 +322,7 @@ impl BiomarkerExtractor {
                     let period = (i - last) as f32;
                     // Filter to human voice range
                     let freq = self.sample_rate as f32 / period;
-                    if freq >= F0_MIN_HZ && freq <= F0_MAX_HZ {
+                    if (F0_MIN_HZ..=F0_MAX_HZ).contains(&freq) {
                         periods.push(period);
                     }
                 }

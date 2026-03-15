@@ -370,7 +370,7 @@ impl TelegramCommand {
             // Security
             "/pin" => {
                 let sub: Vec<&str> = args_str.splitn(2, ' ').collect();
-                match sub.first().map(|s| *s) {
+                match sub.first().copied() {
                     Some("set") => Self::Pin {
                         action: PinAction::Set(sub.get(1).unwrap_or(&"").to_string()),
                     },

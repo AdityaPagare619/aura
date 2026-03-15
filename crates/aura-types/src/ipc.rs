@@ -223,19 +223,14 @@ pub enum UserState {
 }
 
 /// Time of day bucket derived from wall-clock hour.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TimeOfDay {
     EarlyMorning, // 04–08
-    Morning,      // 08–12
-    Afternoon,    // 12–17
-    Evening,      // 17–21
-    Night,        // 21–04
-}
-
-impl Default for TimeOfDay {
-    fn default() -> Self {
-        TimeOfDay::Morning
-    }
+    #[default]
+    Morning, // 08–12
+    Afternoon, // 12–17
+    Evening,   // 17–21
+    Night,     // 21–04
 }
 
 /// Device thermal load.

@@ -30,16 +30,13 @@ pub const ARCHIVE_IMPORTANCE_THRESHOLD: f32 = 0.3;
 
 /// Compression algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum CompressionAlgo {
+    #[default]
     Lz4,
     Zstd,
 }
 
-impl Default for CompressionAlgo {
-    fn default() -> Self {
-        CompressionAlgo::Lz4
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Compression interface

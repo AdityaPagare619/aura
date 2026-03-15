@@ -194,11 +194,7 @@ impl AntiBot {
 
         // 4. Enforce minimum time since last action
         let elapsed_since_last = now_ms.saturating_sub(self.last_action_ms);
-        let delay = if elapsed_since_last < jittered {
-            jittered - elapsed_since_last
-        } else {
-            0
-        };
+        let delay = jittered.saturating_sub(elapsed_since_last);
 
         Ok(delay)
     }

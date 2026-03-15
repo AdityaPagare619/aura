@@ -328,7 +328,7 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         resp.result
-            .ok_or_else(|| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
     }
 
     /// Edit an existing message.
@@ -378,7 +378,7 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         resp.result
-            .ok_or_else(|| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
     }
 
     /// Send an OGG/Opus voice message.
@@ -405,7 +405,7 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         resp.result
-            .ok_or_else(|| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
     }
 
     /// Download a file from Telegram by file_id.

@@ -453,8 +453,7 @@ impl OnboardingEngine {
 
         self.state.calibration_answers = answers
             .iter()
-            .cloned()
-            .take(MAX_CALIBRATION_ANSWERS)
+            .take(MAX_CALIBRATION_ANSWERS).cloned()
             .collect();
 
         // Compute OCEAN adjustments — mechanical linear mapping of slider

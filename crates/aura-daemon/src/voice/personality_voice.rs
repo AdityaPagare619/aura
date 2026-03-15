@@ -111,8 +111,10 @@ impl MoodState {
 
 /// Situational context that affects voice.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum SpeechContext {
     /// Normal conversation.
+    #[default]
     Casual,
     /// Reading a notification.
     Notification,
@@ -126,11 +128,6 @@ pub enum SpeechContext {
     PhoneCall,
 }
 
-impl Default for SpeechContext {
-    fn default() -> Self {
-        Self::Casual
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Mapping function

@@ -621,8 +621,8 @@ impl PowerManager {
             0.0
         };
 
-        let throttle = energy_throttle as f32;
-        throttle
+        
+        energy_throttle as f32
     }
 
     /// Get the full [`TierPolicy`] for the current tier.

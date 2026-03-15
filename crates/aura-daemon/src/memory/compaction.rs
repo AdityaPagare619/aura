@@ -30,7 +30,7 @@ impl ContextCompactor {
         max_recent_to_keep: usize,
     ) -> Vec<usize> {
         let mut temporal: Vec<_> = slots.to_vec();
-        temporal.sort_by(|a, b| a.1.timestamp_ms.cmp(&b.1.timestamp_ms));
+        temporal.sort_by_key(|a| a.1.timestamp_ms);
 
         let candidates_count = temporal.len().saturating_sub(max_recent_to_keep);
         if candidates_count < 3 {

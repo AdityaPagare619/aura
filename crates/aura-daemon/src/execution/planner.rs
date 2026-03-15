@@ -840,18 +840,15 @@ impl EnhancedPlanner {
         }
 
         // Candidate 2: Base planner (ETG → Template → LLM cascade).
-        match self.base.plan(goal, etg, current_screen, target_screen) {
-            Ok(plan) => {
-                let score = self.score_plan(&plan);
-                let resources = self.estimate_resources(&plan);
-                candidates.push(ScoredPlan {
-                    plan,
-                    score,
-                    resources,
-                    source_description: "base cascade (ETG/Template/LLM)".to_string(),
-                });
-            },
-            Err(_) => {},
+        if let Ok(plan) = self.base.plan(goal, etg, current_screen, target_screen) {
+            let score = self.score_plan(&plan);
+            let resources = self.estimate_resources(&plan);
+            candidates.push(ScoredPlan {
+                plan,
+                score,
+                resources,
+                source_description: "base cascade (ETG/Template/LLM)".to_string(),
+            });
         }
 
         // Candidate 3+: If we have templates, try variations with modified confidence.

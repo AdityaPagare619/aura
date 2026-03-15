@@ -393,7 +393,7 @@ impl WriteAheadJournal {
 
             // Sanity: length must be at least ENTRY_MIN_BODY and at most 65536 + 9.
             let body_len = length as usize;
-            if body_len < ENTRY_MIN_BODY || body_len > 65536 + ENTRY_MIN_BODY {
+            if !(ENTRY_MIN_BODY..=65536 + ENTRY_MIN_BODY).contains(&body_len) {
                 tracing::warn!(
                     offset,
                     length,

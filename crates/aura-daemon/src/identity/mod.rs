@@ -89,7 +89,7 @@ impl IdentityEngine {
         let relationship = self.relationships.get_relationship(user_id);
 
         let stage = relationship
-            .map(|r| r.stage.clone())
+            .map(|r| r.stage)
             .unwrap_or(aura_types::identity::RelationshipStage::Stranger);
 
         let trust = relationship.map(|r| r.trust).unwrap_or(0.0);
@@ -424,7 +424,7 @@ impl IdentityEngine {
             false
         } else {
             let sentences: Vec<&str> = user_input
-                .split(|c: char| c == '.' || c == '!' || c == '?')
+                .split(['.', '!', '?'])
                 .filter(|s| !s.trim().is_empty())
                 .collect();
             let question_count = user_input.chars().filter(|&c| c == '?').count();

@@ -26,19 +26,12 @@ const MAX_ETG_CACHE_TEMPLATES: usize = 256;
 /// In production, this is backed by the semantic/episodic memory databases.
 /// We define it here to prove mathematically that Day-1 templates are mutable seeds,
 /// not rigid, hardcoded logic trapped in the binary.
+#[derive(Default)]
 pub struct EtgCache {
     pub templates: HashMap<String, ActionPlan>,
     pub eviction_count: u32,
 }
 
-impl Default for EtgCache {
-    fn default() -> Self {
-        Self {
-            templates: HashMap::new(),
-            eviction_count: 0,
-        }
-    }
-}
 
 impl EtgCache {
     pub fn new() -> Self {

@@ -74,29 +74,23 @@ const TECHNICAL_PATTERNS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum VoiceModePreference {
     Always,
+    #[default]
     Smart,
     Never,
 }
 
-impl Default for VoiceModePreference {
-    fn default() -> Self {
-        Self::Smart
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CommunicationMode {
     Voice,
+    #[default]
     Text,
 }
 
-impl Default for CommunicationMode {
-    fn default() -> Self {
-        Self::Text
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct CommunicationContext {

@@ -223,11 +223,9 @@ impl WorkingMemory {
         // Find the oldest timestamp for recency normalization
         let mut min_ts = u64::MAX;
         let mut max_ts = 0u64;
-        for slot_opt in &self.slots {
-            if let Some(slot) = slot_opt {
-                min_ts = min_ts.min(slot.timestamp_ms);
-                max_ts = max_ts.max(slot.timestamp_ms);
-            }
+        for slot in self.slots.iter().flatten() {
+            min_ts = min_ts.min(slot.timestamp_ms);
+            max_ts = max_ts.max(slot.timestamp_ms);
         }
         let time_range = if max_ts > min_ts {
             (max_ts - min_ts) as f64

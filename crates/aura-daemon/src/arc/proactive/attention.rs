@@ -126,7 +126,7 @@ impl ForestGuardian {
                 intervention_kind: InterventionKind::ContextThrashing,
                 rapid_switch_count: Some(*count),
                 lock_in_duration_secs: None,
-                relationship_stage: relationship.clone(),
+                relationship_stage: *relationship,
                 // Raw trait values passed as-is — the LLM reads them in its
                 // system prompt and adjusts tone. Rust does NOT branch on them.
                 neuroticism: aura_traits.neuroticism,
@@ -136,7 +136,7 @@ impl ForestGuardian {
                 intervention_kind: InterventionKind::AttentionLockIn,
                 rapid_switch_count: None,
                 lock_in_duration_secs: Some(duration.as_secs()),
-                relationship_stage: relationship.clone(),
+                relationship_stage: *relationship,
                 neuroticism: aura_traits.neuroticism,
                 conscientiousness: aura_traits.conscientiousness,
             }),

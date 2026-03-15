@@ -313,7 +313,7 @@ fn short_class(class_name: &str) -> String {
         .to_string()
 }
 
-fn find_deepest_at_coords<'a>(node: &'a ScreenNode, x: i32, y: i32) -> Option<&'a ScreenNode> {
+fn find_deepest_at_coords(node: &ScreenNode, x: i32, y: i32) -> Option<&ScreenNode> {
     if !node.bounds.contains(x, y) {
         return None;
     }

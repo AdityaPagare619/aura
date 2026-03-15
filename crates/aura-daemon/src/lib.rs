@@ -10,6 +10,19 @@
 //! (`daemon_core::main_loop::run`) `select!`s over all channels and a periodic
 //! checkpoint timer.
 
+// Workspace-wide clippy configuration for aura-daemon.
+// These are intentional style choices for this codebase:
+#![allow(clippy::too_many_arguments)] // Complex internal APIs need many params
+#![allow(clippy::new_without_default)] // Many types have non-trivial constructors
+#![allow(clippy::if_same_then_else)] // Used for clarity in branching logic
+#![allow(clippy::wrong_self_convention)] // from_* methods with self are intentional
+#![allow(clippy::field_reassign_with_default)] // Struct builder pattern is intentional
+#![allow(clippy::manual_clamp)] // Some clamp patterns are clearer without .clamp()
+#![allow(clippy::ptr_arg)] // Some &String/&Vec params are needed for trait compat
+#![allow(clippy::len_without_is_empty)] // Feedback buffers don't need is_empty
+#![allow(clippy::manual_strip)] // Some strip patterns are clearer inline
+#![allow(clippy::needless_range_loop)] // Index loops are clearer for DSP/math code
+
 pub mod arc;
 pub mod bridge;
 pub mod daemon_core;

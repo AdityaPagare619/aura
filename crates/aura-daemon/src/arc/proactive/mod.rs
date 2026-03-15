@@ -427,8 +427,7 @@ impl ProactiveEngine {
                 power,
                 PowerTier::P0Always | PowerTier::P1IdlePlus | PowerTier::P2Normal
             )
-        {
-            if self.morning.should_trigger(hour, day) && self.spend_initiative(0.15) {
+            && self.morning.should_trigger(hour, day) && self.spend_initiative(0.15) {
                 match self.morning.generate(day) {
                     Ok(sections) => {
                         if !sections.is_empty() {
@@ -441,7 +440,6 @@ impl ProactiveEngine {
                     },
                 }
             }
-        }
 
         // --- Suggestions ---
         if !skip_suggestions

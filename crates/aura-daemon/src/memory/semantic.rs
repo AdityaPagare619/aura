@@ -83,6 +83,12 @@ pub struct RetrievalFeedbackBuffer {
     events: VecDeque<RetrievalEvent>,
 }
 
+impl Default for RetrievalFeedbackBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RetrievalFeedbackBuffer {
     pub fn new() -> Self {
         Self {

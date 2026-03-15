@@ -442,7 +442,6 @@ impl EntityExtractor {
         // understand who the user means rather than passing the raw input to the
         // model. Wire point: re-enable only if contacts are needed as typed
         // structured parameters for tool dispatch (not intent classification).
-        return;
     }
 
     // -- App fuzzy matching --------------------------------------------------
@@ -456,7 +455,6 @@ impl EntityExtractor {
         // App name fuzzy matching (NLU in Rust) is deliberately stubbed. App
         // resolution is deferred to the LLM. Wire point: re-enable only if app
         // names are required as typed structural parameters for tool dispatch.
-        return;
     }
 }
 
@@ -524,11 +522,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     }
 
     // Early exit if length difference alone exceeds threshold.
-    let len_diff = if a_len > b_len {
-        a_len - b_len
-    } else {
-        b_len - a_len
-    };
+    let len_diff = a_len.abs_diff(b_len);
     if len_diff > 3 {
         return len_diff;
     }

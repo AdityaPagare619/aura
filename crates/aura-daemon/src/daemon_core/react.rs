@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    daemon_core::token_budget::{BudgetStatus, TokenBudgetManager},
+    daemon_core::token_budget::TokenBudgetManager,
     execution::executor::{ExecutionOutcome, Executor},
     ipc::NeocortexClient,
     policy::{audit::AuditLog, gate::PolicyGate, rules::RuleEffect},
@@ -1283,7 +1283,7 @@ impl ReactEngine {
                 .unwrap_or_else(|| "unknown".to_string());
 
             let (react_done, react_tokens) = send_react_step_ipc(
-                &session
+                session
                     .iterations
                     .last()
                     .map(|i| i.action.tool_name.as_str())

@@ -158,9 +158,7 @@ impl RateLimiter {
             .count() as u32;
         if recent_count >= self.max_per_minute {
             let oldest_in_minute = timestamps
-                .iter()
-                .filter(|t| now.duration_since(**t).as_secs() < 60)
-                .next()
+                .iter().find(|t| now.duration_since(**t).as_secs() < 60)
                 .copied()
                 .unwrap_or(now);
             let retry_after =
@@ -190,6 +188,12 @@ impl RateLimiter {
 pub struct PinStore {
     hash: Option<[u8; 32]>,
     salt: [u8; 16],
+}
+
+impl Default for PinStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PinStore {

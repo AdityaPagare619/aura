@@ -729,7 +729,7 @@ impl IntelligentRetry {
         let breaker = self
             .breakers
             .entry(operation.to_owned())
-            .or_insert_with(CircuitBreaker::new);
+            .or_default();
         breaker.allow_request(now_ms)
     }
 
@@ -774,7 +774,7 @@ impl IntelligentRetry {
         let breaker = self
             .breakers
             .entry(operation.to_owned())
-            .or_insert_with(CircuitBreaker::new);
+            .or_default();
         breaker.record_failure(now_ms);
 
         // Determine strategy

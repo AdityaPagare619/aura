@@ -205,11 +205,14 @@ confirm() {
     local prompt="$1"
     local default="${2:-y}"
     local answer
+    # Read from /dev/tty explicitly to avoid conflicts with exec/tee/pipe
+    # redirections that may capture stdin. This ensures interactive prompts
+    # work correctly even when stdout is piped through tee for logging.
     if [ "$default" = "y" ]; then
-        read -r -p "$(echo -e "${YELLOW}  ?${RESET} $prompt [Y/n]: ")" answer
+        read -r -p "$(echo -e "${YELLOW}  ?${RESET} $prompt [Y/n]: ")" answer < /dev/tty
         answer="${answer:-y}"
     else
-        read -r -p "$(echo -e "${YELLOW}  ?${RESET} $prompt [y/N]: ")" answer
+        read -r -p "$(echo -e "${YELLOW}  ?${RESET} $prompt [y/N]: ")" answer < /dev/tty
         answer="${answer:-n}"
     fi
     [[ "$answer" =~ ^[Yy]$ ]]
@@ -320,7 +323,24 @@ phase_preflight() {
             log_info "Run 'termux-setup-storage' and grant permission, then re-run this installer."
             if confirm "Grant storage access now?"; then
                 run termux-setup-storage || warn "Could not auto-grant. Please do it manually."
-                sleep 2
+                # Poll for storage directory with timeout — Android can take up to
+                # 30 seconds to create the symlinks after granting permission.
+                local _wait_elapsed=0
+                local _wait_timeout=30
+                while [ ! -d "$HOME_DIR/storage" ] && [ $_wait_elapsed -lt $_wait_timeout ]; do
+                    printf "\r  Waiting for storage symlinks… (%d/%ds)" "$_wait_elapsed" "$_wait_timeout"
+                    sleep 1
+                    _wait_elapsed=$((_wait_elapsed + 1))
+                done
+                echo ""
+                if [ -d "$HOME_DIR/storage" ]; then
+                    log_step "Storage access granted"
+                else
+                    warn "Storage directory not created after ${_wait_timeout}s."
+                    log_info "AURA can still install without storage access, but some features"
+                    log_info "(file sharing, photo analysis) may be limited."
+                    log_info "You can grant access later with: termux-setup-storage"
+                fi
             fi
         else
             log_step "Storage access granted"
@@ -459,7 +479,7 @@ phase_hardware_and_model() {
 
     if [ "$OPT_DRY_RUN" != "1" ]; then
         local choice
-        read -r -p "$(echo -e "${YELLOW}  ?${RESET} Press Enter to confirm ${OPT_MODEL}, or type 1/2/3/4 to change: ")" choice
+        read -r -p "$(echo -e "${YELLOW}  ?${RESET} Press Enter to confirm ${OPT_MODEL}, or type 1/2/3/4 to change: ")" choice < /dev/tty
         case "$choice" in
             1) OPT_MODEL="qwen3-1.5b" ;;
             2) OPT_MODEL="qwen3-4b"   ;;
@@ -511,7 +531,7 @@ phase_telegram_wizard() {
     # Token input + validation loop
     local token=""
     while true; do
-        read -r -p "$(echo -e "${YELLOW}  ?${RESET} Paste your Telegram bot token: ")" token
+        read -r -p "$(echo -e "${YELLOW}  ?${RESET} Paste your Telegram bot token: ")" token < /dev/tty
         token="${token//[[:space:]]/}"   # strip whitespace
 
         # Format: digits:35-char alphanum
@@ -553,7 +573,7 @@ phase_telegram_wizard() {
 
     local owner_id=""
     while true; do
-        read -r -p "$(echo -e "${YELLOW}  ?${RESET} Enter your Telegram User ID (numbers only): ")" owner_id
+        read -r -p "$(echo -e "${YELLOW}  ?${RESET} Enter your Telegram User ID (numbers only): ")" owner_id < /dev/tty
         owner_id="${owner_id//[[:space:]]/}"
         if [[ "$owner_id" =~ ^[0-9]{5,12}$ ]]; then
             break
@@ -596,7 +616,7 @@ phase_vault_setup() {
     echo -e "${DIM}  AURA will use your name to personalize responses.${RESET}"
     echo ""
 
-    read -r -p "$(echo -e "${YELLOW}  ?${RESET} Your name (how AURA addresses you) [User]: ")" user_input
+    read -r -p "$(echo -e "${YELLOW}  ?${RESET} Your name (how AURA addresses you) [User]: ")" user_input < /dev/tty
     COLLECTED_USER_NAME="${user_input:-User}"
 
     echo ""
@@ -608,13 +628,13 @@ phase_vault_setup() {
 
     local pin1 pin2
     while true; do
-        read -r -s -p "$(echo -e "${YELLOW}  ?${RESET} Set vault PIN (min 4 chars): ")" pin1
+        read -r -s -p "$(echo -e "${YELLOW}  ?${RESET} Set vault PIN (min 4 chars): ")" pin1 < /dev/tty
         echo ""
         if [ ${#pin1} -lt 4 ]; then
             warn "PIN must be at least 4 characters. Try again."
             continue
         fi
-        read -r -s -p "$(echo -e "${YELLOW}  ?${RESET} Confirm vault PIN: ")" pin2
+        read -r -s -p "$(echo -e "${YELLOW}  ?${RESET} Confirm vault PIN: ")" pin2 < /dev/tty
         echo ""
         if [ "$pin1" = "$pin2" ]; then
             break
@@ -745,8 +765,21 @@ phase_source() {
     fi
 
     log_info "Initializing git submodules (llama.cpp)..."
-    run git -C "$AURA_HOME" submodule update --init --recursive
-    log_step "Submodules initialized"
+    run git -C "$AURA_HOME" submodule update --init --recursive --depth 1
+    # Verify submodule was populated
+    if [ -d "$AURA_HOME/crates/aura-llama-sys/llama.cpp" ] && \
+       [ "$(ls -A "$AURA_HOME/crates/aura-llama-sys/llama.cpp" 2>/dev/null | grep -cv '.gitkeep')" -gt 0 ]; then
+        log_step "Submodules initialized"
+    else
+        warn "llama.cpp submodule may not have initialized correctly."
+        log_info "Attempting full submodule fetch..."
+        run git -C "$AURA_HOME" submodule update --init --recursive --force
+        if [ ! -f "$AURA_HOME/crates/aura-llama-sys/llama.cpp/CMakeLists.txt" ]; then
+            die "Failed to initialize llama.cpp submodule." \
+                "Try: cd $AURA_HOME && git submodule update --init --recursive"
+        fi
+        log_step "Submodules initialized (full fetch)"
+    fi
 }
 
 # =============================================================================
@@ -1399,8 +1432,7 @@ setup_bashrc_autostart() {
 
 ${marker} (managed by install.sh — do not remove this line)
 if ! pgrep -x aura-daemon > /dev/null 2>&1; then
-    "${AURA_BIN}" --config "${AURA_CONFIG_FILE}" &>/dev/null &
-    disown
+    nohup "${AURA_BIN}" --config "${AURA_CONFIG_FILE}" > /dev/null 2>&1 &
 fi
 BASHRC_EOF
     else

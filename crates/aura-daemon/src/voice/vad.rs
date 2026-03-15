@@ -221,8 +221,8 @@ impl VoiceActivityDetector {
     fn energy_vad(&self, samples: &[i16]) -> f32 {
         let rms = Self::compute_rms(samples);
         // Map RMS to [0, 1]: silence ~0-200, speech ~500-10000
-        let normalized = (rms / 3000.0).min(1.0);
-        normalized
+        
+        (rms / 3000.0).min(1.0)
     }
 
     /// Compute RMS energy of an i16 sample buffer.

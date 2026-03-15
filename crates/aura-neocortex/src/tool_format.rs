@@ -132,7 +132,7 @@ pub fn parse_dsl_step(value: &serde_json::Value) -> Result<DslStep, AuraError> {
                 "DSL step: missing action field".into(),
             ))
         })
-        .and_then(|v| parse_action_type(v))?;
+        .and_then(parse_action_type)?;
 
     let target = obj
         .get("target")

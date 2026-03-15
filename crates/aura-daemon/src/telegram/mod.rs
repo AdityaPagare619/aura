@@ -52,7 +52,7 @@ use self::{
     dashboard::DashboardSnapshot,
     dialogue::DialogueManager,
     handlers::{HandlerContext, HandlerResponse},
-    polling::{HttpBackend, NonTextContent, StubHttpBackend, TelegramPoller, TelegramUpdate},
+    polling::{HttpBackend, StubHttpBackend, TelegramPoller, TelegramUpdate},
     queue::{MessageContent, MessageQueue},
     security::SecurityGate,
 };

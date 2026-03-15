@@ -147,7 +147,7 @@ impl IntegrityVerifier {
 
         // Check bounds: all traits must be in [0.1, 0.9].
         let check_bound = |name: &str, val: f32, issues: &mut Vec<VerificationIssue>| {
-            if val < 0.0 || val > 1.0 {
+            if !(0.0..=1.0).contains(&val) {
                 push_issue(
                     issues,
                     VerificationIssue {
@@ -158,7 +158,7 @@ impl IntegrityVerifier {
                         ),
                     },
                 );
-            } else if val < 0.1 || val > 0.9 {
+            } else if !(0.1..=0.9).contains(&val) {
                 push_issue(
                     issues,
                     VerificationIssue {

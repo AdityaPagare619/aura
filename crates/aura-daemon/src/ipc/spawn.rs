@@ -195,8 +195,7 @@ impl NeocortexProcess {
                 warn!(pid, "graceful shutdown timed out — killing");
                 if let Err(e) = child.kill().await {
                     error!(pid, error = %e, "failed to kill neocortex");
-                    return Err(IpcError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(IpcError::Io(std::io::Error::other(
                         format!("kill failed: {e}"),
                     )));
                 }

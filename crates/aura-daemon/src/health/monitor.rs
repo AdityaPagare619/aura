@@ -217,8 +217,10 @@ impl<T> BoundedVec<T> {
 /// | Critical | THERMAL_STATUS_CRITICAL       | Immediate throttling needed   |
 /// | Shutdown | THERMAL_STATUS_SHUTDOWN       | Emergency — device may halt   |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ThermalState {
     /// No thermal concern — device is cool.
+    #[default]
     Normal,
     /// Device is warm — noticeable but not concerning.
     Warm,
@@ -259,11 +261,6 @@ impl fmt::Display for ThermalState {
     }
 }
 
-impl Default for ThermalState {
-    fn default() -> Self {
-        ThermalState::Normal
-    }
-}
 
 // ─── HealthStatus ───────────────────────────────────────────────────────────
 
@@ -272,8 +269,10 @@ impl Default for ThermalState {
 /// Derived from the combination of all health signals — error rate, thermal
 /// state, neocortex liveness, resource pressure, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum HealthStatus {
     /// All systems nominal.
+    #[default]
     Healthy,
     /// Something is off but the daemon can still function.
     /// The `String` describes the degradation reason.
@@ -313,11 +312,6 @@ impl fmt::Display for HealthStatus {
     }
 }
 
-impl Default for HealthStatus {
-    fn default() -> Self {
-        HealthStatus::Healthy
-    }
-}
 
 // ─── HealthReport ───────────────────────────────────────────────────────────
 
@@ -1309,15 +1303,14 @@ pub async fn run_heartbeat_loop(
             {
                 break;
             }
-        } else if battery_pct < BATTERY_LOW_PCT {
-            if tx
+        } else if battery_pct < BATTERY_LOW_PCT
+            && tx
                 .send(DaemonEvent::BatteryLow { pct: battery_pct })
                 .await
                 .is_err()
             {
                 break;
             }
-        }
 
         // ── Memory pressure ─────────────────────────────────────────────────
         if memory_mb >= MEMORY_CRITICAL_MB {
@@ -1333,8 +1326,8 @@ pub async fn run_heartbeat_loop(
             {
                 break;
             }
-        } else if memory_mb >= MEMORY_WARN_MB {
-            if tx
+        } else if memory_mb >= MEMORY_WARN_MB
+            && tx
                 .send(DaemonEvent::MemoryPressure {
                     critical: false,
                     current_bytes: memory_bytes,
@@ -1345,7 +1338,6 @@ pub async fn run_heartbeat_loop(
             {
                 break;
             }
-        }
 
         // ── Thermal critical ────────────────────────────────────────────────
         if let Some(temp) = thermal_celsius {

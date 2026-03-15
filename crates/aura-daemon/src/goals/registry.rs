@@ -730,8 +730,8 @@ impl GoalRegistry {
                 // Accept HH:MM or H:MM patterns.
                 let parts: Vec<&str> = value.split(':').collect();
                 if parts.len() == 2
-                    && parts[0].parse::<u32>().map_or(false, |h| h < 24)
-                    && parts[1].parse::<u32>().map_or(false, |m| m < 60)
+                    && parts[0].parse::<u32>().is_ok_and(|h| h < 24)
+                    && parts[1].parse::<u32>().is_ok_and(|m| m < 60)
                 {
                     None
                 } else {

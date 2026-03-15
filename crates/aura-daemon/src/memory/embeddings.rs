@@ -94,7 +94,7 @@ static STOP_WORDS: &[&str] = &[
 ];
 
 fn is_stop_word(word: &str) -> bool {
-    STOP_WORDS.iter().any(|&sw| sw == word)
+    STOP_WORDS.contains(&word)
 }
 
 // ---------------------------------------------------------------------------

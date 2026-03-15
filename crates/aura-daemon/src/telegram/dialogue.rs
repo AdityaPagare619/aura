@@ -155,7 +155,7 @@ impl DialogueManager {
     pub fn has_active(&self, chat_id: i64) -> bool {
         self.active
             .get(&chat_id)
-            .map_or(false, |d| !d.is_timed_out() && !d.is_complete())
+            .is_some_and(|d| !d.is_timed_out() && !d.is_complete())
     }
 
     /// Start a new dialogue flow. Returns the first prompt.

@@ -531,7 +531,7 @@ fn try_class_index<'a>(
 
 /// Coordinate-based targeting with snap-to-nearest.
 /// Finds the deepest node containing the given coordinates.
-fn try_coordinates<'a>(tree: &'a ScreenTree, x: i32, y: i32) -> Option<&'a ScreenNode> {
+fn try_coordinates(tree: &ScreenTree, x: i32, y: i32) -> Option<&ScreenNode> {
     trace!(x, y, "L6: trying coordinates");
     tree.find_at_coordinates(x, y)
 }
@@ -814,16 +814,13 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                 }
             },
             // Volatile attributes — skip in structural mode
-            "bounds" | "index" | "focused" | "checked" | "scrollable" => {
-                if exact {
+            "bounds" | "index" | "focused" | "checked" | "scrollable"
+                if exact => {
                     // For exact mode, we'd need to parse bounds etc.
                     // For now, skip volatile attrs even in exact mode
                     // as they change between captures
                     true
-                } else {
-                    true // structural: always skip volatile
-                }
-            },
+                },
             _ => true, // Unknown attributes: don't reject
         };
 

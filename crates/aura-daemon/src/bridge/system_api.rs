@@ -1351,7 +1351,7 @@ impl SystemBridge {
                     message: if confirmed {
                         format!("Wi-Fi {action}")
                     } else {
-                        format!("Wi-Fi intent dispatched but state unconfirmed")
+                        "Wi-Fi intent dispatched but state unconfirmed".to_string()
                     },
                 })
             },
@@ -1365,7 +1365,7 @@ impl SystemBridge {
                     message: if dispatched {
                         format!("Wi-Fi {action} via accessibility")
                     } else {
-                        format!("Failed to toggle Wi-Fi")
+                        "Failed to toggle Wi-Fi".to_string()
                     },
                 })
             },

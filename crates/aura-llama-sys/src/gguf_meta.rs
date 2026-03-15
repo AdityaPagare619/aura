@@ -173,11 +173,7 @@ impl GgufMeta {
         // Total: 2 × emb² + 2 × emb × kv_dim
         let head_count_kv = self.attention_head_count_kv.unwrap_or(8) as u64;
         let head_count_q = self.attention_head_count.unwrap_or(32) as u64;
-        let head_dim = if head_count_q > 0 {
-            emb / head_count_q
-        } else {
-            64
-        };
+        let head_dim = emb.checked_div(head_count_q).unwrap_or(64);
         let kv_dim = head_count_kv * head_dim;
         let attn_params: u64 = 2 * emb * emb + 2 * emb * kv_dim;
         let ffn_params: u64 = 3 * emb * ffn;
@@ -197,7 +193,7 @@ impl GgufMeta {
         let mb = (total_bytes / (1024 * 1024)) as u32;
 
         // Clamp to a reasonable range (models don't shrink below ~200 MB or exceed 48 GB)
-        mb.max(200).min(49152)
+        mb.clamp(200, 49152)
     }
 
     /// Fallback RAM estimate when architecture dims are not present.
@@ -369,7 +365,7 @@ pub fn parse_from_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMeta, Ggu
     }
 
     let version = read_u32_le(reader)?;
-    if version < 2 || version > 3 {
+    if !(2..=3).contains(&version) {
         return Err(GgufError::UnsupportedVersion(version));
     }
 

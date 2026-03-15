@@ -66,6 +66,7 @@ impl std::error::Error for LoaderError {}
 #[derive(Debug)]
 struct ExtensionEntry {
     sandbox: ExtensionSandbox,
+    #[allow(dead_code)] // Will be used for extension lifecycle management
     registered_at: Instant,
 }
 
@@ -94,9 +95,16 @@ pub struct CapabilityLoader {
     abilities: Arc<RwLock<HashMap<String, Arc<dyn Ability>>>>,
     skills: Arc<RwLock<HashMap<String, Arc<dyn Skill>>>>,
     lenses: Arc<RwLock<HashMap<String, Arc<dyn Lens>>>>,
+    #[allow(dead_code)] // Will be used for recipe execution engine
     recipes: Arc<RwLock<HashMap<String, Recipe>>>,
     /// Sandbox entries keyed by extension ID.
     sandboxes: Arc<RwLock<HashMap<String, ExtensionEntry>>>,
+}
+
+impl Default for CapabilityLoader {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CapabilityLoader {

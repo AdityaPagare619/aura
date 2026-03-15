@@ -84,6 +84,12 @@ pub struct RetrievalFeedbackBuffer {
     events: VecDeque<RetrievalEvent>,
 }
 
+impl Default for RetrievalFeedbackBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RetrievalFeedbackBuffer {
     pub fn new() -> Self {
         Self {
@@ -652,6 +658,7 @@ impl EpisodicMemory {
 // Synchronous helpers (run inside spawn_blocking)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // Used by spawn_blocking paths in async context
 fn store_episode_sync(
     conn: &Connection,
     hnsw_state: &mut HnswState,

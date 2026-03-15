@@ -219,7 +219,7 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
     {
         use tokio::net::UnixStream;
 
-        let path = format!("/tmp/aura_ipc_v4.sock");
+        let path = "/tmp/aura_ipc_v4.sock".to_string();
 
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&path))
             .await

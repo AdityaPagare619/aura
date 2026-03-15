@@ -703,7 +703,7 @@ impl BoundaryReasoner {
             if let Some(response) = entry.user_response {
                 let stats = action_stats
                     .entry(entry.action.clone())
-                    .or_insert_with(ActionLearningStats::default);
+                    .or_default();
                 stats.total += 1;
                 if response {
                     stats.allowed += 1;

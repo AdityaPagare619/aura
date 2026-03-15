@@ -462,13 +462,9 @@ pub struct ExportManifest {
 /// for encryption-tier assignment — no confidence scoring, no routing.
 /// The LLM reasons about user intent; this only asks "what tier encrypts this?"
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct DataClassifier {}
 
-impl Default for DataClassifier {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 impl DataClassifier {
     /// Create a new classifier with default confidence threshold.
@@ -563,7 +559,7 @@ impl DataClassifier {
             sum += val;
             double = !double;
         }
-        sum % 10 == 0 && sum > 0
+        sum.is_multiple_of(10) && sum > 0
     }
 
     /// Aadhaar number: exactly 12 digits (possibly with spaces).

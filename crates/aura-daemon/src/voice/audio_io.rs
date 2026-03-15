@@ -246,7 +246,7 @@ impl AudioIo {
         if self
             .input
             .as_ref()
-            .map_or(false, |i| i.running.load(Ordering::Relaxed))
+            .is_some_and(|i| i.running.load(Ordering::Relaxed))
         {
             return Err(AudioError::StreamAlreadyRunning);
         }
@@ -289,7 +289,7 @@ impl AudioIo {
     pub fn is_capturing(&self) -> bool {
         self.input
             .as_ref()
-            .map_or(false, |i| i.running.load(Ordering::Relaxed))
+            .is_some_and(|i| i.running.load(Ordering::Relaxed))
     }
 
     // -- Playback -------------------------------------------------------
@@ -299,7 +299,7 @@ impl AudioIo {
         if self
             .output
             .as_ref()
-            .map_or(false, |o| o.running.load(Ordering::Relaxed))
+            .is_some_and(|o| o.running.load(Ordering::Relaxed))
         {
             return Err(AudioError::StreamAlreadyRunning);
         }
@@ -345,7 +345,7 @@ impl AudioIo {
     pub fn is_playing(&self) -> bool {
         self.output
             .as_ref()
-            .map_or(false, |o| o.running.load(Ordering::Relaxed))
+            .is_some_and(|o| o.running.load(Ordering::Relaxed))
     }
 
     /// Returns number of pending playback samples.

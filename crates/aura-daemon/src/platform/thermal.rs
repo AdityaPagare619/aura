@@ -407,9 +407,9 @@ impl ThermalPidController {
         // Map PID output to throttle factor:
         // pid_output <= 0 → no throttle (1.0) — we're below setpoint
         // pid_output >= 1 → full throttle (0.0) — we're way above
-        let throttle = (1.0 - pid_output).clamp(0.0, 1.0);
+        
 
-        throttle
+        (1.0 - pid_output).clamp(0.0, 1.0)
     }
 
     /// Reset the PID state (e.g., after a long idle period).

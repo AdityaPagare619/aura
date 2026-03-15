@@ -18,12 +18,13 @@ use super::IpcError;
 
 // ─── Platform-specific stream type ──────────────────────────────────────────
 
-/// On Unix, re-export `tokio::net::UnixStream`.
-/// On non-Unix (Windows), fall back to `tokio::net::TcpStream`.
-#[cfg(unix)]
+/// On Android, use `tokio::net::UnixStream` (abstract Unix domain socket).
+/// On all other platforms (Linux host, macOS, Windows), fall back to
+/// `tokio::net::TcpStream`, matching the TCP path in [`connect_stream`].
+#[cfg(target_os = "android")]
 pub type IpcStream = tokio::net::UnixStream;
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "android"))]
 pub type IpcStream = tokio::net::TcpStream;
 
 // ─── Constants ──────────────────────────────────────────────────────────────

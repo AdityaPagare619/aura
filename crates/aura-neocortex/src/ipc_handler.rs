@@ -1126,6 +1126,9 @@ mod tests {
             token_budget: 4096,
             identity_block: None,
             mood_description: String::new(),
+            identity_tendencies: None,
+            user_preferences: None,
+            self_knowledge: None,
         };
 
         let failure = aura_types::ipc::FailureContext {

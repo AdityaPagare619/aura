@@ -4,6 +4,9 @@
 #
 # Flow:
 #   CI checks → Android build → GitHub Release with artifacts
+#
+# TOOLCHAIN: Must match rust-toolchain.toml (nightly-2026-03-01)
+# SECURITY:  All third-party actions pinned to commit SHA
 # ============================================================
 
 name: Release
@@ -13,9 +16,15 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   NDK_VERSION: r26b
+  # Official SHA256 for android-ndk-r26b-linux.zip (source: Google / conan-center-index)
+  NDK_SHA256: "ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632"
   API_LEVEL: "21"
   TARGET: aarch64-linux-android
 
@@ -27,39 +36,48 @@ jobs:
     name: CI Gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable + components
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          submodules: recursive
+
+      - name: Install Rust (nightly-2026-03-01) + components
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2026-03-01
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
 
-      - name: Check
-        run: cargo check --workspace
+      - name: Check (workspace)
+        run: cargo check --workspace --features stub
 
-      - name: Test
-        run: cargo test -p aura-daemon
+      - name: Test (workspace)
+        run: cargo test --workspace --features stub
         env:
           RUST_LOG: debug
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --features stub -- -D warnings
 
       - name: Format
         run: cargo fmt --check
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Security audit
+        run: cargo audit
 
   # --------------------------------------------------------
   # Job 2: Android cross-compilation (depends on CI gate)
@@ -71,31 +89,57 @@ jobs:
 
     steps:
       - name: Checkout (with submodules)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - name: Install Rust stable + Android target
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly-2026-03-01) + Android target
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
+          toolchain: nightly-2026-03-01
           targets: aarch64-linux-android
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: android-release-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: android-release-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: android-release-cargo-
 
-      - name: Download Android NDK r26b
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux-${{ env.NDK_SHA256 }}
+
+      - name: Download and verify Android NDK r26b
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
           NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "Downloading NDK from: $NDK_URL"
           curl -fsSL "$NDK_URL" -o ndk.zip
+
+          echo "Verifying NDK SHA256 checksum..."
+          ACTUAL_SHA256=$(sha256sum ndk.zip | cut -d' ' -f1)
+          if [ "$ACTUAL_SHA256" != "$NDK_SHA256" ]; then
+            echo "FATAL: NDK checksum mismatch!"
+            echo "Expected: $NDK_SHA256"
+            echo "Actual:   $ACTUAL_SHA256"
+            echo "This could indicate a supply-chain attack or corrupted download."
+            rm -f ndk.zip
+            exit 1
+          fi
+          echo "NDK checksum verified: $ACTUAL_SHA256"
+
           unzip -q ndk.zip -d $HOME
-          echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          rm -f ndk.zip
+
+      - name: Set NDK environment
+        run: echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
       - name: Configure cross-compilation env
         run: |
@@ -117,26 +161,44 @@ jobs:
             exit 1
           fi
 
-      - name: Build aura-daemon (release)
-        run: cargo build --release -p aura-daemon --target aarch64-linux-android
+      - name: Build aura-daemon and aura-neocortex (release)
+        run: cargo build --release -p aura-daemon -p aura-neocortex --target aarch64-linux-android
 
-      - name: Strip binary
+      - name: Strip binaries
         run: |
-          "$TOOLCHAIN/llvm-strip" target/aarch64-linux-android/release/aura-daemon
+          for BIN in aura-daemon aura-neocortex; do
+            "$TOOLCHAIN/llvm-strip" "target/aarch64-linux-android/release/$BIN"
+          done
 
       # Rename binary to include version tag for the release artifact
-      - name: Prepare release artifact
+      - name: Prepare release artifacts
         run: |
           TAG="${{ github.ref_name }}"
-          cp target/aarch64-linux-android/release/aura-daemon \
-             "aura-daemon-${TAG}-aarch64-linux-android"
-          echo "BINARY_NAME=aura-daemon-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
+          for BIN in aura-daemon aura-neocortex; do
+            cp "target/aarch64-linux-android/release/$BIN" \
+               "${BIN}-${TAG}-aarch64-linux-android"
+          done
+          echo "DAEMON_NAME=aura-daemon-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
+          echo "NEOCORTEX_NAME=aura-neocortex-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
 
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+      # Generate SHA256 checksum sidecar for binary verification
+      - name: Generate binary checksums
+        run: |
+          for BIN in "$DAEMON_NAME" "$NEOCORTEX_NAME"; do
+            sha256sum "$BIN" > "${BIN}.sha256"
+            echo "SHA256 for $BIN:"
+            cat "${BIN}.sha256"
+          done
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-binary
-          path: ${{ env.BINARY_NAME }}
+          name: release-binaries
+          path: |
+            aura-daemon-*-aarch64-linux-android
+            aura-daemon-*-aarch64-linux-android.sha256
+            aura-neocortex-*-aarch64-linux-android
+            aura-neocortex-*-aarch64-linux-android.sha256
           retention-days: 1
           if-no-files-found: error
 
@@ -152,14 +214,14 @@ jobs:
 
     steps:
       - name: Checkout (for release notes generation)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0  # full history needed for git log
 
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: release-binary
+          name: release-binaries
 
       - name: Generate release notes from git log
         run: |
@@ -181,6 +243,13 @@ jobs:
             git log $RANGE --pretty=format:"- %s (%h)" --no-merges
             echo ""
             echo ""
+            echo "## Verification"
+            echo ""
+            echo "Verify binary integrity with the included \`.sha256\` file:"
+            echo '```sh'
+            echo "sha256sum -c aura-daemon-${TAG}-aarch64-linux-android.sha256"
+            echo '```'
+            echo ""
             echo "## Installation"
             echo ""
             echo '```sh'
@@ -194,7 +263,7 @@ jobs:
           cat release_notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
           tag_name: ${{ github.ref_name }}
           name: AURA v4 ${{ github.ref_name }}
@@ -203,5 +272,8 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}  # e.g. v0.1.0-beta is pre-release
           files: |
             aura-daemon-*-aarch64-linux-android
+            aura-daemon-*-aarch64-linux-android.sha256
+            aura-neocortex-*-aarch64-linux-android
+            aura-neocortex-*-aarch64-linux-android.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

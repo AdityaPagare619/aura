@@ -81,18 +81,18 @@ is updated continuously from observable signals.
 
 ### 2.1 Domain Table
 
-| # | Domain | What It Tracks | Key Signals |
-|---|--------|---------------|-------------|
-| 1 | **Health** | Physical wellbeing | Exercise app usage, sleep app data, step count signals |
-| 2 | **Finance** | Financial health | Banking app frequency, budget app interactions |
-| 3 | **Relationships** | Social connection | Message frequency, call patterns, contact diversity |
-| 4 | **Career** | Work engagement | Work app usage time, task completion patterns |
-| 5 | **Learning** | Knowledge growth | Educational app usage, reading time, note-taking |
-| 6 | **Creativity** | Creative expression | Creative app usage, content creation frequency |
-| 7 | **Mindfulness** | Mental peace | Meditation app usage, screen-free periods |
-| 8 | **Environment** | Physical space | Smart home interactions (if accessible), habits |
-| 9 | **Social** | Community engagement | Social app breadth, community interaction quality |
-| 10 | **Leisure** | Rest and recreation | Entertainment balance, hobby app usage |
+| # | Domain | What It Tracks | Key Signals | Default Weight |
+|---|--------|---------------|-------------|----------------|
+| 0 | **Health** | Physical wellbeing | Exercise app usage, sleep app data, step count signals | 1.0 |
+| 1 | **Social** | Social connection | Message frequency, call patterns, contact diversity | 0.8 |
+| 2 | **Productivity** | Work engagement | Work app usage time, task completion patterns | 0.7 |
+| 3 | **Finance** | Financial health | Banking app frequency, budget app interactions | 0.6 |
+| 4 | **Lifestyle** | Daily living quality | Routine consistency, daily habit patterns | 0.5 |
+| 5 | **Entertainment** | Rest and recreation | Entertainment balance, hobby app usage | 0.2 |
+| 6 | **Learning** | Knowledge growth | Educational app usage, reading time, note-taking | 0.4 |
+| 7 | **Communication** | Communication patterns | Communication app usage, response patterns | 0.3 |
+| 8 | **Environment** | Physical space | Smart home interactions (if accessible), habits | 0.2 |
+| 9 | **PersonalGrowth** | Self-improvement | Meditation app usage, skill-building, reflection | 0.4 |
 
 ### 2.2 Domain Score Computation
 
@@ -144,14 +144,14 @@ injected into the `ContextPackage` and shapes how the LLM interprets the user's 
 
 | Mode | Trigger Conditions | LLM Behavior Hint |
 |------|-------------------|------------------|
-| `WorkFocused` | Work apps active, business hours, low notification engagement | Prioritize efficiency; minimize interruption |
-| `Relaxing` | Entertainment apps, evening time, low task urgency | Warmer tone; leisure suggestions acceptable |
-| `SociallyActive` | High message throughput, communication apps dominant | Social context awareness; relationship sensitivity |
-| `HealthFocused` | Exercise/wellness apps active, health domain score rising | Reinforce healthy behaviors |
-| `Learning` | Educational apps, reading apps, note-taking active | Support focus; knowledge connections |
-| `StressedOrBusy` | Rapid app switching, high notification density, stress signals | Minimal interruption; offer simplification |
-| `Transitioning` | Travel apps, maps, unfamiliar location patterns | Contextual location awareness |
-| `Resting` | Screen-off periods, alarm apps, no significant activity | No proactive triggers; low-power monitoring |
+| `Default` | Standard operating conditions; no special context detected | Normal interaction mode |
+| `DoNotDisturb` | User-enabled DND mode, minimal notification engagement | Suppress proactive triggers; minimal interruption |
+| `Sleeping` | Screen-off periods, alarm apps, late-night/early-morning | No proactive triggers; low-power monitoring |
+| `Active` | Active app usage, high engagement signals | Full interaction support; responsive mode |
+| `Driving` | Maps/navigation active, motion sensors, driving context | Safety-appropriate only; minimal distraction |
+| `Custom1` | User-defined context mode 1 | User-configured behavior |
+| `Custom2` | User-defined context mode 2 | User-configured behavior |
+| `Custom3` | User-defined context mode 3 | User-configured behavior |
 
 ### 3.2 Mode Transition Logic
 

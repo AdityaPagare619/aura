@@ -1,7 +1,31 @@
+//! Smart Extension Discovery (E5)
+//!
+//! Two responsibilities:
+//!
+//! 1. **Gap/Routine Signals** — Observe user needs and emit structured signals
+//!    for the LLM to reason about (suggesting new extensions or automations).
+//!
+//! 2. **Capability Reporting** — Report what extensions are loaded, what
+//!    permissions they hold, and their sandbox status.
+//!
+//! Rust NEVER generates suggestion text or makes content-based decisions.
+//! All signals are structured data for the LLM.
+
+use aura_types::manifest::ExecutionTier;
+
+use super::loader::ExtensionSummary;
+use super::sandbox::SandboxState;
+
 /// Smart Extension Discovery (E5)
+///
 /// Rather than a traditional "App Store", AURA observes user needs
-/// and suggests Abilities or Skills proactively.
+/// and suggests Abilities or Skills proactively. Also provides
+/// capability introspection for transparency.
 pub struct ExtensionDiscovery;
+
+// ---------------------------------------------------------------------------
+// Signals (for LLM consumption)
+// ---------------------------------------------------------------------------
 
 /// Structured signal describing a capability gap.
 ///
@@ -27,10 +51,51 @@ pub struct RoutineSignal {
     pub steps: Vec<String>,
 }
 
+/// Structured report of all loaded extensions and their capabilities.
+///
+/// Emitted for the LLM to reason about what AURA can currently do,
+/// and for the user to inspect via transparency features.
+#[derive(Debug, Clone)]
+pub struct CapabilityReport {
+    /// Total number of registered extensions.
+    pub total_extensions: usize,
+    /// Number of active (healthy) extensions.
+    pub active_extensions: usize,
+    /// Number of suspended or disabled extensions.
+    pub degraded_extensions: usize,
+    /// Per-extension summaries.
+    pub extensions: Vec<ExtensionCapability>,
+}
+
+/// Capability summary for a single extension.
+#[derive(Debug, Clone)]
+pub struct ExtensionCapability {
+    /// Extension identifier.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Current sandbox state.
+    pub state: SandboxState,
+    /// Execution tier.
+    pub tier: ExecutionTier,
+    /// Number of granted permissions.
+    pub permission_count: usize,
+    /// Total permission checks performed.
+    pub total_checks: u64,
+    /// Total permission denials.
+    pub total_denials: u64,
+    /// Health indicator: denial rate (denials / checks).
+    pub denial_rate: f64,
+}
+
 impl ExtensionDiscovery {
     pub fn new() -> Self {
         Self
     }
+
+    // -----------------------------------------------------------------------
+    // Gap & Routine Signals (existing functionality, preserved)
+    // -----------------------------------------------------------------------
 
     /// Called when the ETG or prediction engine identifies a repeated failure
     /// or a missing capability in a specific domain.
@@ -71,5 +136,80 @@ impl ExtensionDiscovery {
             routine_name: routine_name.to_string(),
             steps: steps.iter().map(|s| s.to_string()).collect(),
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Capability Reporting (new functionality)
+    // -----------------------------------------------------------------------
+
+    /// Build a capability report from extension summaries.
+    ///
+    /// Called by the daemon to provide the LLM and user with visibility
+    /// into what extensions are loaded and their health status.
+    pub fn build_capability_report(
+        &self,
+        summaries: &[ExtensionSummary],
+    ) -> CapabilityReport {
+        let mut extensions = Vec::with_capacity(summaries.len());
+        let mut active = 0;
+        let mut degraded = 0;
+
+        for summary in summaries {
+            let denial_rate = if summary.total_checks > 0 {
+                summary.total_denials as f64 / summary.total_checks as f64
+            } else {
+                0.0
+            };
+
+            match summary.state {
+                SandboxState::Active => active += 1,
+                SandboxState::Suspended | SandboxState::Disabled => degraded += 1,
+                _ => {}
+            }
+
+            extensions.push(ExtensionCapability {
+                id: summary.id.clone(),
+                name: summary.name.clone(),
+                state: summary.state,
+                tier: summary.tier,
+                permission_count: summary.permission_count,
+                total_checks: summary.total_checks,
+                total_denials: summary.total_denials,
+                denial_rate,
+            });
+        }
+
+        CapabilityReport {
+            total_extensions: summaries.len(),
+            active_extensions: active,
+            degraded_extensions: degraded,
+            extensions,
+        }
+    }
+
+    /// Check if any extensions have high denial rates (possible misconfiguration
+    /// or attempted abuse).
+    ///
+    /// Returns extension IDs with denial rates above the threshold.
+    /// The LLM decides what to do with this information.
+    pub fn find_high_denial_extensions(
+        &self,
+        summaries: &[ExtensionSummary],
+        threshold: f64,
+    ) -> Vec<String> {
+        summaries
+            .iter()
+            .filter(|s| {
+                s.total_checks > 5 // Minimum sample size.
+                    && (s.total_denials as f64 / s.total_checks as f64) > threshold
+            })
+            .map(|s| s.id.clone())
+            .collect()
+    }
+}
+
+impl Default for ExtensionDiscovery {
+    fn default() -> Self {
+        Self::new()
     }
 }

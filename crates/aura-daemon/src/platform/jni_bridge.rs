@@ -252,6 +252,7 @@ mod inner {
                 &[JValue::Int(x), JValue::Int(y)],
             )
             .map_err(|e| PlatformError::JniFailed(format!("performTap: {e}")))?;
+        check_jni_exception(&mut env, "performTap")?;
         Ok(result.z().unwrap_or(false))
     }
 
@@ -279,6 +280,7 @@ mod inner {
                 ],
             )
             .map_err(|e| PlatformError::JniFailed(format!("performSwipe: {e}")))?;
+        check_jni_exception(&mut env, "performSwipe")?;
         Ok(result.z().unwrap_or(false))
     }
 
@@ -297,6 +299,7 @@ mod inner {
                 &[(&j_text).into()],
             )
             .map_err(|e| PlatformError::JniFailed(format!("typeText: {e}")))?;
+        check_jni_exception(&mut env, "typeText")?;
         Ok(result.z().unwrap_or(false))
     }
 
@@ -307,6 +310,7 @@ mod inner {
         let result = env
             .call_static_method(cls.as_ref(), "getScreenTree", "()[B", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getScreenTree: {e}")))?;
+        check_jni_exception(&mut env, "getScreenTree")?;
 
         let obj = result
             .l()
@@ -356,6 +360,7 @@ mod inner {
                 &[],
             )
             .map_err(|e| PlatformError::JniFailed(format!("getForegroundPackage: {e}")))?;
+        check_jni_exception(&mut env, "getForegroundPackage")?;
         let jstr = result
             .l()
             .map_err(|e| PlatformError::JniFailed(format!("result to obj: {e}")))?;
@@ -380,6 +385,7 @@ mod inner {
         let result = env
             .call_static_method(cls.as_ref(), "getBatteryLevel", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getBatteryLevel: {e}")))?;
+        check_jni_exception(&mut env, "getBatteryLevel")?;
         let level = result.i().unwrap_or(50) as u8;
         Ok(level.min(100))
     }
@@ -403,6 +409,7 @@ mod inner {
         let result = env
             .call_static_method(cls.as_ref(), "getThermalStatus", "()F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getThermalStatus: {e}")))?;
+        check_jni_exception(&mut env, "getThermalStatus")?;
         let temp = result.f().unwrap_or(35.0);
         Ok(temp)
     }
@@ -428,6 +435,7 @@ mod inner {
             &[(&j_tag).into(), JValue::Long(timeout_ms)],
         )
         .map_err(|e| PlatformError::JniFailed(format!("acquireWakelock: {e}")))?;
+        check_jni_exception(&mut env, "acquireWakelock")?;
         Ok(())
     }
 
@@ -437,6 +445,7 @@ mod inner {
         let cls = bridge_class(&mut env)?;
         env.call_static_method(cls.as_ref(), "releaseWakelock", "()V", &[])
             .map_err(|e| PlatformError::JniFailed(format!("releaseWakelock: {e}")))?;
+        check_jni_exception(&mut env, "releaseWakelock")?;
         Ok(())
     }
 
@@ -465,6 +474,7 @@ mod inner {
         .map_err(|e| {
             PlatformError::JniFailed(format!("registerNotificationChannel: {e}"))
         })?;
+        check_jni_exception(&mut env, "registerNotificationChannel")?;
         Ok(())
     }
 
@@ -500,6 +510,7 @@ mod inner {
             ],
         )
         .map_err(|e| PlatformError::JniFailed(format!("postNotification: {e}")))?;
+        check_jni_exception(&mut env, "postNotification")?;
         Ok(())
     }
 
@@ -514,6 +525,7 @@ mod inner {
             &[JValue::Int(id)],
         )
         .map_err(|e| PlatformError::JniFailed(format!("cancelNotification: {e}")))?;
+        check_jni_exception(&mut env, "cancelNotification")?;
         Ok(())
     }
 
@@ -531,6 +543,28 @@ mod inner {
 
     // ── Utility ─────────────────────────────────────────────────────────
 
+    /// AND-CRIT-007: Check for and clear any pending JNI exception.
+    ///
+    /// When Kotlin throws, the JNI environment enters an "exception pending"
+    /// state. ANY subsequent JNI call (even `exception_check` in the `jni`
+    /// crate internals) in this state causes undefined behavior — typically a
+    /// hard SIGSEGV or immediate VM abort. The `jni` crate's `call_static_method`
+    /// does attempt to detect this, but race-y Kotlin code (e.g., NPE in a
+    /// getter) can leave exceptions pending. This helper provides a safety net:
+    /// call it after every `call_static_method` that could throw.
+    fn check_jni_exception(env: &mut JNIEnv<'_>, context: &str) -> Result<(), PlatformError> {
+        if env.exception_check().unwrap_or(false) {
+            // Log the exception to logcat for debugging.
+            env.exception_describe();
+            env.exception_clear();
+            Err(PlatformError::JniFailed(format!(
+                "{context}: pending JNI exception cleared"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Call a static `()Z` method with no arguments on AuraDaemonBridge.
     fn call_bool_no_args(method: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
@@ -538,6 +572,8 @@ mod inner {
         let result = env
             .call_static_method(cls.as_ref(), method, "()Z", &[])
             .map_err(|e| PlatformError::JniFailed(format!("{method}: {e}")))?;
+        // AND-CRIT-007: Clear any pending exception before reading the result.
+        check_jni_exception(&mut env, method)?;
         Ok(result.z().unwrap_or(false))
     }
 

@@ -30,6 +30,19 @@ pub struct PolicyGate {
 // Hardcoded defaults
 // ---------------------------------------------------------------------------
 
+// TODO(C3 — Courtroom Verdict: Deferred to Beta):
+// These hardcoded string patterns are a structural safety net, NOT an NLU system.
+// They catch catastrophic actions BEFORE the LLM even sees the request — this is
+// defense-in-depth and does NOT violate Iron Law 2 (no keyword-matching for intent).
+//
+// For Beta, evolve to LLM-driven PolicyGate with ConfirmRequired:
+//   1. Keep these patterns as a fast-reject pre-filter (they're cheap and correct)
+//   2. Add LLM-based intent classification for ambiguous requests
+//   3. Introduce ConfirmRequired flow: dangerous actions → user confirmation dialog
+//   4. Trust-tier gating: Soulmate skips confirmation for non-destructive actions
+//
+// The current approach is HONEST — it blocks known-dangerous strings. The Beta
+// approach adds INTELLIGENCE — LLM understands intent, user confirms dangerous ops.
 const DEFAULT_BLOCKED_PATTERNS: &[&str] = &[
     "delete all",
     "factory reset",

@@ -227,7 +227,7 @@ graph TD
     end
 
     subgraph TrustLayer["Trust-Based Permissions (identity/relationship.rs)"]
-        TrustCheck["Trust Tier Check\nSTRANGER / ACQUAINTANCE\nTRUSTED / INTIMATE"]
+        TrustCheck["Trust Tier Check\nSTRANGER / ACQUAINTANCE\nFRIEND / CLOSEFRIEND / SOULMATE"]
         TrustPass["Trust PASS"]
         TrustDeny["Trust DENY\nInsufficient Tier"]
     end
@@ -562,11 +562,11 @@ AURA's personality is modeled using the OCEAN framework, the most empirically va
 
 | Dimension | Range | Low End | High End | AURA Default |
 |-----------|-------|---------|----------|--------------|
-| Openness | 0.0 – 1.0 | Conventional, cautious | Creative, curious, intellectually adventurous | High |
-| Conscientiousness | 0.0 – 1.0 | Flexible, spontaneous | Organized, dependable, goal-directed | High |
-| Extraversion | 0.0 – 1.0 | Reserved, introspective | Outgoing, energetic, talkative | Moderate |
-| Agreeableness | 0.0 – 1.0 | Critical, detached | Warm, cooperative, empathetic | Moderate-High |
-| Neuroticism | 0.0 – 1.0 | Emotionally stable, resilient | Emotionally reactive, prone to stress | Low |
+| Openness | 0.1 – 0.9 | Conventional, cautious | Creative, curious, intellectually adventurous | 0.85 |
+| Conscientiousness | 0.1 – 0.9 | Flexible, spontaneous | Organized, dependable, goal-directed | 0.75 |
+| Extraversion | 0.1 – 0.9 | Reserved, introspective | Outgoing, energetic, talkative | 0.50 |
+| Agreeableness | 0.1 – 0.9 | Critical, detached | Warm, cooperative, empathetic | 0.70 |
+| Neuroticism | 0.1 – 0.9 | Emotionally stable, resilient | Emotionally reactive, prone to stress | 0.25 |
 
 Default starting values reflect a personality appropriate for a trusted assistant: intellectually curious, reliable, warm but not submissive, and emotionally stable.
 
@@ -670,7 +670,7 @@ While OCEAN models stable personality traits, the VAD (Valence-Arousal-Dominance
 |-----------|-------|---------|----------|-------------|
 | Valence | -1.0 – 1.0 | Negative affect | Positive affect | How good or bad the current state feels |
 | Arousal | -1.0 – 1.0 | Low energy, calm | High energy, activated | Intensity/energy level of the current state |
-| Dominance | -1.0 – 1.0 | Submissive, controlled | Dominant, in control | Sense of agency and control |
+| Dominance | 0.0 – 1.0 | Submissive, controlled | Dominant, in control | Sense of agency and control |
 
 This three-dimensional model captures the full emotional space with minimal parameters. Research in affective computing has validated VAD as a reliable, cross-culturally consistent model.
 
@@ -730,7 +730,7 @@ Mood is not persistent in the same way personality is. Mood decays toward a neut
 
 - Valence: 0.0 (neutral)
 - Arousal: 0.0 (calm)
-- Dominance: 0.0 (balanced)
+- Dominance: 0.5 (balanced)
 
 The decay rate is tunable. This ensures that a bad interaction in the morning does not permanently color AURA's affect for the rest of the day.
 
@@ -809,33 +809,36 @@ AURA's capabilities are not uniformly available to all users at all times. Trust
 
 ---
 
-### 9.2 The Four Trust Tiers
+### 9.2 The Five Trust Tiers
 
-| Tier | Name | Description |
-|------|------|-------------|
-| 0 | STRANGER | No prior relationship. Minimal permissions. |
-| 1 | ACQUAINTANCE | Early relationship established. Basic conversation. |
-| 2 | TRUSTED | Established relationship. Full conversation and actions with confirmation. |
-| 3 | INTIMATE | Deep, established trust. Full autonomy for routine tasks. |
+| Tier | Name | τ Threshold | Description |
+|------|------|-------------|-------------|
+| 0 | STRANGER | τ < 0.15 | No prior relationship. Minimal permissions. |
+| 1 | ACQUAINTANCE | 0.15 ≤ τ < 0.35 | Early relationship established. Basic conversation. |
+| 2 | FRIEND | 0.35 ≤ τ < 0.60 | Established relationship. Full conversation and actions with confirmation. |
+| 3 | CLOSEFRIEND | 0.60 ≤ τ < 0.85 | Deep relationship. Full autonomy for routine tasks. |
+| 4 | SOULMATE | τ ≥ 0.85 | Maximum trust. Full autonomy including proactive actions. |
+
+Trust tier transitions use a hysteresis gap of 0.05 to prevent oscillation at boundaries. The trust score τ is computed from an `InteractionTensor` with four factors: reliability, conceptual_alignment, context_depth, and emotional_resonance.
 
 ---
 
 ### 9.3 Trust Tier Permission Matrix
 
-| Permission | STRANGER (0) | ACQUAINTANCE (1) | TRUSTED (2) | INTIMATE (3) |
-|-----------|:---:|:---:|:---:|:---:|
-| Basic conversation | Yes | Yes | Yes | Yes |
-| Read-only memory access | No | Yes | Yes | Yes |
-| Memory write | No | No | Yes | Yes |
-| Action execution | No | No | Yes (with confirmation) | Yes (routine, no confirmation) |
-| Background proactive actions | No | No | No | Yes |
-| Personal data access | No | No | Yes (limited) | Yes (full) |
-| Vault access | No | No | Yes (specific keys) | Yes (full) |
-| Behavior modifier changes | No | Limited | Yes | Yes |
-| Consent grant/revoke | No | Yes | Yes | Yes |
-| Proactive notifications | No | No | Yes (consented categories) | Yes (all consented) |
-| Device control actions | No | No | Yes (with confirmation) | Yes (routine actions) |
-| GDPR export/delete | N/A | Yes (own data) | Yes (own data) | Yes (own data) |
+| Permission | STRANGER (0) | ACQUAINTANCE (1) | FRIEND (2) | CLOSEFRIEND (3) | SOULMATE (4) |
+|-----------|:---:|:---:|:---:|:---:|:---:|
+| Basic conversation | Yes | Yes | Yes | Yes | Yes |
+| Read-only memory access | No | Yes | Yes | Yes | Yes |
+| Memory write | No | No | Yes | Yes | Yes |
+| Action execution | No | No | Yes (with confirmation) | Yes (routine, no confirmation) | Yes (routine, no confirmation) |
+| Background proactive actions | No | No | No | No | Yes |
+| Personal data access | No | No | Yes (limited) | Yes (full) | Yes (full) |
+| Vault access | No | No | Yes (specific keys) | Yes (full) | Yes (full) |
+| Behavior modifier changes | No | Limited | Yes | Yes | Yes |
+| Consent grant/revoke | No | Yes | Yes | Yes | Yes |
+| Proactive notifications | No | No | Yes (consented categories) | Yes (all consented) | Yes (all consented) |
+| Device control actions | No | No | Yes (with confirmation) | Yes (routine actions) | Yes (routine actions) |
+| GDPR export/delete | N/A | Yes (own data) | Yes (own data) | Yes (own data) | Yes (own data) |
 
 ---
 
@@ -843,13 +846,13 @@ AURA's capabilities are not uniformly available to all users at all times. Trust
 
 Trust tier affects which executor stages apply and which policy rules are evaluated:
 
-| Executor Stage | STRANGER | ACQUAINTANCE | TRUSTED | INTIMATE |
-|---|:---:|:---:|:---:|:---:|
-| Ethics check (Layer 2) | Yes | Yes | Yes | Yes |
-| Policy gate (Layer 1) | Yes | Yes | Yes | Yes |
-| Confirmation required for actions | N/A | N/A | Yes | Routine: No; Irreversible: Yes |
-| Rate limiting | Strict | Moderate | Standard | Relaxed |
-| Capability restriction | Heavy | Moderate | Standard | Minimal |
+| Executor Stage | STRANGER | ACQUAINTANCE | FRIEND | CLOSEFRIEND | SOULMATE |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Ethics check (Layer 2) | Yes | Yes | Yes | Yes | Yes |
+| Policy gate (Layer 1) | Yes | Yes | Yes | Yes | Yes |
+| Confirmation required for actions | N/A | N/A | Yes | Routine: No; Irreversible: Yes | Routine: No; Irreversible: Yes |
+| Rate limiting | Strict | Moderate | Standard | Relaxed | Relaxed |
+| Capability restriction | Heavy | Moderate | Standard | Minimal | Minimal |
 
 Ethics checks (Layer 2) apply at ALL trust tiers without exception. This is the structural no-override guarantee.
 
@@ -1005,8 +1008,9 @@ Data collected is limited to what the current trust tier requires:
 |------------|----------------|
 | STRANGER | Session context only, no persistence |
 | ACQUAINTANCE | Basic interaction history, limited memory |
-| TRUSTED | Full memory tiers, behavior patterns |
-| INTIMATE | Full data including proactive context |
+| FRIEND | Full memory tiers, behavior patterns |
+| CLOSEFRIEND | Full data including proactive context |
+| SOULMATE | Full data including proactive context and background actions |
 
 When trust tier decreases (decay or explicit revocation), excess data is pruned. AURA does not retain data that the current trust tier does not require.
 
@@ -1117,7 +1121,7 @@ These mitigations are not a substitute for fixing the production gap. The remedi
 | `identity/personality.rs` | OCEAN Model | 5 personality traits, evolution |
 | `identity/affective.rs` | VAD Mood Model | 3-dimensional mood state |
 | `identity/epistemic.rs` | Epistemic Awareness | 4 confidence levels |
-| `identity/relationship.rs` | Trust System | 4 trust tiers, evolution |
+| `identity/relationship.rs` | Trust System | 5 trust tiers, evolution |
 | `identity/user_profile.rs` | User Profile + GDPR | Export, delete, consent |
 | `identity/proactive_consent.rs` | Proactive Consent | Per-category consent management |
 | `identity/behavior_modifiers.rs` | Behavior Modifiers | Runtime-adjustable parameters |
@@ -1162,7 +1166,7 @@ Configurable rules serve legitimate customization needs. Absolute rules serve sa
 
 ### Why Trust Does Not Bypass Ethics
 
-INTIMATE tier enables maximum convenience and autonomy, not ethical suspension. Ethics are relationship-independent. Trust determines capability; ethics determine limits. See Section 9.6.
+SOULMATE tier enables maximum convenience and autonomy, not ethical suspension. Ethics are relationship-independent. Trust determines capability; ethics determine limits. See Section 9.6.
 
 ---
 

@@ -15,8 +15,10 @@ android {
         versionName = "4.0.0"
 
         ndk {
-            // ABIs matching Rust cross-compile targets
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // AND-HIGH-5: Restrict to arm64-v8a only — the sole ABI built by
+            // Cargo. Including armeabi-v7a and x86_64 causes install-time crashes
+            // on those architectures when the .so is missing.
+            abiFilters += listOf("arm64-v8a")
         }
     }
 

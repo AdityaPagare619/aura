@@ -951,7 +951,7 @@ mod tests {
     fn test_register_and_retrieve_capability() {
         let mut reg = GoalRegistry::new();
         let cap = make_capability("send_msg", "Send Message", 0.8);
-        assert!(reg.register_capability(cap).is_ok());
+        reg.register_capability(cap).expect("register_capability should accept valid capability");
         assert_eq!(reg.capability_count(), 1);
 
         let found = reg.get_capability("send_msg");
@@ -1124,7 +1124,7 @@ mod tests {
             success_rate: 0.0,
             learned: false,
         };
-        assert!(reg.register_template(t).is_ok());
+        reg.register_template(t).expect("register_template should accept valid template");
         assert_eq!(reg.template_count(), 1);
     }
 
@@ -1328,7 +1328,7 @@ mod tests {
             }],
             vec!["app_control".into()],
         );
-        assert!(result.is_ok());
+        result.expect("learn_template_from_completion should succeed");
         assert_eq!(reg.template_count(), 1);
 
         // Learned template should be matchable.

@@ -102,6 +102,10 @@ pub struct WakeWordDetector {
     mock_trigger: Option<usize>,
 }
 
+// SAFETY: WakeWordDetector is Send because the raw `*mut c_void` kws_state
+// (present only on Android) is only accessed through &mut self methods. The
+// sherpa-onnx KWS library is single-threaded per-instance; exclusive &mut
+// access ensures no concurrent aliasing when the detector moves between threads.
 unsafe impl Send for WakeWordDetector {}
 
 impl WakeWordDetector {

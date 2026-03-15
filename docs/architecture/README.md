@@ -128,6 +128,7 @@ graph TB
 | [ADR-004](../adr/ADR-004-safety-borders.md) | Two-Layer Safety Borders | Accepted |
 | [ADR-005](../adr/ADR-005-accessibility-first.md) | Accessibility-First UI with L0-L7 Selector Cascade | Accepted |
 | [ADR-006](../adr/ADR-006-bio-inspired-learning.md) | Bio-Inspired Learning (Hebbian + Consolidation) | Accepted |
+| [ADR-007](../adr/ADR-007-deny-by-default-policy-gate.md) | Deny-by-Default Policy Gate | Accepted |
 
 ---
 
@@ -165,7 +166,7 @@ graph TB
 ### "I want to contribute code"
 1. [AURA-V4-CONTRIBUTING-AND-DEV-SETUP.md](AURA-V4-CONTRIBUTING-AND-DEV-SETUP.md) — dev setup + PR process
 2. [AURA-V4-GROUND-TRUTH-ARCHITECTURE.md](../AURA-V4-GROUND-TRUTH-ARCHITECTURE.md) — canonical module map
-3. All six ADRs — understand the _why_ before changing anything
+3. All seven ADRs — understand the _why_ before changing anything
 4. [AURA-V4-PRODUCTION-STATUS.md](AURA-V4-PRODUCTION-STATUS.md) — see what needs work
 
 ---
@@ -209,8 +210,7 @@ aura-v4/crates/
 │       ├── screen/      # Accessibility layer, selector cascade L0-L7
 │       └── platform/    # JNI bridge, power, thermal, notifications, sensors
 ├── aura-neocortex/      # LLM process: inference, context, grammar, prompts
-├── aura-llama-sys/      # llama.cpp FFI bindings (❌ needs update)
-└── aura-gguf/           # GGUF metadata parser (✅ production quality)
+├── aura-llama-sys/      # llama.cpp FFI bindings + GGUF metadata parser (❌ FFI needs update)
 ```
 
 ---

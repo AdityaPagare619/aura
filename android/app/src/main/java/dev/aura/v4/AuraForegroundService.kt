@@ -4,8 +4,11 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,19 +35,37 @@ class AuraForegroundService : Service() {
         private const val TAG = "AuraForegroundSvc"
         private const val NOTIFICATION_ID = 1
         private const val WAKELOCK_TAG = "aura:daemon"
-        private const val WAKELOCK_TIMEOUT_MS = 10L * 60 * 1000 // 10 min, renewed
+        // AND-CRIT-004: WakeLock timeout with renewal. The Handler renews the
+        // lock every 9 minutes so it never expires while the daemon is running.
+        // Using a finite timeout (not indefinite) is Android best practice —
+        // it ensures the lock auto-releases if the renewal mechanism itself dies.
+        private const val WAKELOCK_TIMEOUT_MS = 10L * 60 * 1000 // 10 min
+        private const val WAKELOCK_RENEW_INTERVAL_MS = 9L * 60 * 1000 // 9 min
     }
 
     private var daemonThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val isRunning = AtomicBoolean(false)
+    // AND-CRIT-004: Handler for periodic WakeLock renewal.
+    private val renewHandler = Handler(Looper.getMainLooper())
 
     // ── Service Lifecycle ───────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate")
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // AND-CRIT-001: On API 34+ (Android 14), startForeground() MUST include
+        // the foregroundServiceType bitmask. Without this, the system throws
+        // MissingForegroundServiceTypeException and kills the service.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         acquireWakeLock()
     }
 
@@ -65,11 +86,26 @@ class AuraForegroundService : Service() {
         Log.i(TAG, "onDestroy — shutting down daemon")
         isRunning.set(false)
 
-        // Signal the Rust side to stop.
+        // AND-CRIT-004: Stop WakeLock renewal before releasing.
+        renewHandler.removeCallbacksAndMessages(null)
+
+        // AND-HIGH-6: nativeShutdown() may block on Rust-side channel drain.
+        // Dispatching to a background thread prevents ANR if onDestroy() is
+        // called on the main thread (which it always is).
+        val shutdownThread = Thread({
+            try {
+                AuraDaemonBridge.nativeShutdown()
+            } catch (e: Throwable) {
+                Log.e(TAG, "nativeShutdown threw: ${e.message}")
+            }
+        }, "aura-shutdown")
+        shutdownThread.start()
+
+        // Wait for nativeShutdown to complete (bounded).
         try {
-            AuraDaemonBridge.nativeShutdown()
-        } catch (e: Throwable) {
-            Log.e(TAG, "nativeShutdown threw: ${e.message}")
+            shutdownThread.join(2_000)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
 
         // Wait for the daemon thread to exit (with a generous timeout).
@@ -157,6 +193,22 @@ class AuraForegroundService : Service() {
             acquire(WAKELOCK_TIMEOUT_MS)
         }
         Log.d(TAG, "WakeLock acquired (timeout=${WAKELOCK_TIMEOUT_MS}ms)")
+
+        // AND-CRIT-004: Schedule periodic renewal. The lock has a 10-min timeout;
+        // we renew every 9 min so it never expires while the service is alive.
+        // If the service dies, the Handler is GC'd and the lock auto-expires —
+        // this is the safe-by-design pattern recommended by Android docs.
+        renewHandler.postDelayed(object : Runnable {
+            override fun run() {
+                wakeLock?.let { wl ->
+                    if (wl.isHeld) {
+                        wl.acquire(WAKELOCK_TIMEOUT_MS)
+                        Log.d(TAG, "WakeLock renewed (timeout=${WAKELOCK_TIMEOUT_MS}ms)")
+                    }
+                }
+                renewHandler.postDelayed(this, WAKELOCK_RENEW_INTERVAL_MS)
+            }
+        }, WAKELOCK_RENEW_INTERVAL_MS)
     }
 
     private fun releaseWakeLock() {

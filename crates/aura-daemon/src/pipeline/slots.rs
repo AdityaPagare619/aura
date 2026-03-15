@@ -309,7 +309,7 @@ fn generate_clarification(tool: &ToolSchema, missing: &[String]) -> String {
         }
     } else {
         let names: Vec<&str> = missing.iter().map(|s| s.as_str()).collect();
-        let last = names.last().unwrap();
+        let last = names.last().expect("names is non-empty: inside else branch where missing.len() > 1");
         if names.len() == 2 {
             format!("I need the {} and the {}.", names[0], last)
         } else {

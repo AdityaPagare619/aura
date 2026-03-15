@@ -15,7 +15,10 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -47,6 +50,18 @@ class AuraAccessibilityService : AccessibilityService() {
 
         /** Gesture dispatch timeout in milliseconds. */
         private const val GESTURE_TIMEOUT_MS = 5_000L
+
+        /**
+         * GAP-HIGH-007: Dedicated background thread for `waitForElement` polling.
+         *
+         * Prevents ANR by ensuring `Thread.sleep` never runs on the calling
+         * thread (which may be the main thread, a binder thread, or a JNI
+         * native thread). The daemon flag ensures the thread doesn't prevent
+         * process exit.
+         */
+        private val waitExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "AuraWaitForElement").apply { isDaemon = true }
+        }
     }
 
     /** The package name of the foreground application, updated on window changes. */
@@ -477,46 +492,65 @@ class AuraAccessibilityService : AccessibilityService() {
 
     @Suppress("UNUSED_PARAMETER")
     private fun waitForElement(selectorJson: JSONObject, timeoutMs: Long): Boolean {
-        // Simple polling implementation — check tree every 500ms.
-        val deadline = System.currentTimeMillis() + timeoutMs
-        val selectorType = selectorJson.keys().let { if (it.hasNext()) it.next() else null }
-            ?: return false
+        // GAP-HIGH-007: Offload the blocking poll to a dedicated background
+        // thread to avoid ANR when the caller is the main thread, binder
+        // thread, or JNI native thread.  The inner callable responds to
+        // interruption (Thread.sleep throws InterruptedException when the
+        // future is cancelled).
+        val service = this
+        val future = waitExecutor.submit(Callable<Boolean> {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            val selectorType = selectorJson.keys().let { if (it.hasNext()) it.next() else null }
+                ?: return@Callable false
 
-        while (System.currentTimeMillis() < deadline) {
-            val root = try {
-                rootInActiveWindow
-            } catch (_: Exception) {
-                null
-            } ?: run {
-                Thread.sleep(500)
-                continue
-            }
-
-            val found = try {
-                when (selectorType) {
-                    "Text" -> {
-                        val text = selectorJson.getString("Text")
-                        findNodeByText(root, text) != null
-                    }
-                    "ResourceId" -> {
-                        val id = selectorJson.getString("ResourceId")
-                        findNodeByResourceId(root, id) != null
-                    }
-                    "ContentDescription" -> {
-                        val desc = selectorJson.getString("ContentDescription")
-                        findNodeByContentDesc(root, desc) != null
-                    }
-                    else -> false
+            while (System.currentTimeMillis() < deadline) {
+                val root = try {
+                    service.rootInActiveWindow
+                } catch (_: Exception) {
+                    null
+                } ?: run {
+                    Thread.sleep(200)
+                    return@run null
                 }
-            } finally {
-                root.recycle()
+
+                if (root == null) continue
+
+                val found = try {
+                    when (selectorType) {
+                        "Text" -> {
+                            val text = selectorJson.getString("Text")
+                            // AND-CRIT-006: The found node must be recycled — we only
+                            // need a boolean "present?" check, not the node itself.
+                            findNodeByText(root, text)?.also { it.recycle() } != null
+                        }
+                        "ResourceId" -> {
+                            val id = selectorJson.getString("ResourceId")
+                            findNodeByResourceId(root, id)?.also { it.recycle() } != null
+                        }
+                        "ContentDescription" -> {
+                            val desc = selectorJson.getString("ContentDescription")
+                            findNodeByContentDesc(root, desc)?.also { it.recycle() } != null
+                        }
+                        else -> false
+                    }
+                } finally {
+                    root.recycle()
+                }
+
+                if (found) return@Callable true
+                Thread.sleep(200)
             }
 
-            if (found) return true
-            Thread.sleep(500)
-        }
+            false
+        })
 
-        return false
+        return try {
+            // Hard timeout = requested timeout + 1s grace for thread scheduling.
+            future.get(timeoutMs + 1_000, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            future.cancel(true)
+            false
+        }
     }
 
     // ── Helper: Gesture dispatch with synchronous waiting ───────────────
@@ -563,28 +597,57 @@ class AuraAccessibilityService : AccessibilityService() {
 
     // ── Helper: Node Searching ──────────────────────────────────────────
 
+    /**
+     * AND-CRIT-006: The previous implementation called
+     * rootInActiveWindow?.findFocus() without recycling the intermediate
+     * root node. findFocus() returns a NEW node — the root is a separate
+     * allocation that must be recycled independently.
+     */
     private fun findFocusedNode(): AccessibilityNodeInfo? {
         return try {
-            rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            val root = rootInActiveWindow ?: return null
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            // Recycle the root unless it IS the focused node (same object).
+            if (focused !== root) {
+                root.recycle()
+            }
+            focused
         } catch (_: Exception) {
             null
         }
     }
 
+    /**
+     * AND-CRIT-006: findAccessibilityNodeInfosByText() returns a LIST of new
+     * node allocations. Taking only firstOrNull() and discarding the rest
+     * leaks every non-first node. We must recycle all nodes we don't return.
+     */
     private fun findNodeByText(
         root: AccessibilityNodeInfo,
         text: String
     ): AccessibilityNodeInfo? {
-        val nodes = root.findAccessibilityNodeInfosByText(text)
-        return nodes?.firstOrNull()
+        val nodes = root.findAccessibilityNodeInfosByText(text) ?: return null
+        val result = nodes.firstOrNull()
+        // Recycle every node except the one we're returning.
+        for (i in 1 until nodes.size) {
+            nodes[i].recycle()
+        }
+        return result
     }
 
+    /**
+     * AND-CRIT-006: Same leak pattern as findNodeByText — recycle the extras.
+     */
     private fun findNodeByResourceId(
         root: AccessibilityNodeInfo,
         resourceId: String
     ): AccessibilityNodeInfo? {
-        val nodes = root.findAccessibilityNodeInfosByViewId(resourceId)
-        return nodes?.firstOrNull()
+        val nodes = root.findAccessibilityNodeInfosByViewId(resourceId) ?: return null
+        val result = nodes.firstOrNull()
+        for (i in 1 until nodes.size) {
+            nodes[i].recycle()
+        }
+        return result
     }
 
     private fun findNodeByContentDesc(

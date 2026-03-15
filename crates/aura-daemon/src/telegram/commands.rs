@@ -582,12 +582,17 @@ impl TelegramCommand {
     }
 }
 
-/// Truncate a string to `max_len` characters, appending `...` if truncated.
+/// Truncate a string to `max_len` bytes, appending `...` if truncated.
+/// Ensures the cut happens at a valid UTF-8 character boundary.
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let mut end = max_len;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 

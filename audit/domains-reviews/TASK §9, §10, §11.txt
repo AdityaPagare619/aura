@@ -1,0 +1,1838 @@
+Write sections §9, §10, §11 of an enterprise code review for AURA v4 (on-device Android AI assistant, 147K lines Rust). Return COMPLETE markdown.
+
+---
+
+## §9 Domain 7: CI/CD & DevOps — Grade: C (6/10)
+
+**Reviewer:** CI/CD & DevOps Specialist  
+**Verdict:** ⛔ BLOCK on 4 critical findings
+
+### Critical Findings
+
+**[CRIT-CI-1] `rust-toolchain.toml` pins `nightly-2026-03-01` but CI uses `dtolnay/rust-toolchain@stable`**
+- File: `rust-toolchain.toml` + `.github/workflows/ci.yml`
+- rust-toolchain.toml pins nightly. All 3 CI workflows use `dtolnay/rust-toolchain@stable`. Builds succeed locally on nightly but CI compiles on stable. Feature gates, lint behavior, and codegen differ between channels.
+- Impact: "Works on my machine" failures. Nightly-only features compile locally but fail CI.
+- Fix: Align to one channel. Recommend nightly (project already uses nightly features) and update CI to match.
+
+**[CRIT-CI-2] `release.yml` line 51 missing `--features stub` AND `submodules: recursive`**
+- File: `.github/workflows/release.yml`
+- The release workflow's `cargo check --workspace` step lacks `--features stub` (needed when llama.cpp source absent) and the checkout step lacks `submodules: recursive` (needed to fetch llama.cpp).
+- Impact: Every tagged release build will fail. No release artifacts can be produced.
+- Fix: Add `--features stub` to cargo check. Add `submodules: recursive` to checkout.
+
+**[CRIT-CI-3] install.sh PLACEHOLDER SHA256 checksums** (cross-ref CRIT-SEC-3)
+- All model download integrity checks use literal placeholder strings.
+- Impact: Supply-chain attack vector for ~4GB model downloads.
+
+**[CRIT-CI-4] install.sh unsalted SHA256 PIN** (cross-ref CRIT-SEC-4)
+- PIN hashed with raw SHA256, no salt, no stretching.
+- Impact: Brute-forced in <1ms.
+
+### High Findings
+
+**[HIGH-CI-1] install.sh `sed` with unsanitized `$user_name`**
+- File: `install.sh`
+- User-provided name is passed directly into a `sed` substitution without escaping. Characters like `/`, `&`, `\` in the name will break or inject sed commands.
+- Impact: Shell injection if user enters crafted name. Potential arbitrary file modification.
+- Fix: Escape special characters or use a different substitution method (e.g., Python, awk).
+
+**[HIGH-CI-2] NDK downloaded without integrity check**
+- File: `install.sh`
+- ~1GB Android NDK archive downloaded over HTTPS but no SHA256 verification of the downloaded file.
+- Impact: MITM can substitute compromised NDK → compromised toolchain → compromised binary.
+- Fix: Add SHA256 verification for NDK archive (Google publishes checksums).
+
+**[HIGH-CI-3] `softprops/action-gh-release@v2` not pinned to commit SHA**
+- File: `.github/workflows/release.yml`
+- GitHub Actions best practice: pin third-party actions to full commit SHA, not a mutable tag. The `v2` tag can be moved by the action author to point to malicious code.
+- Impact: Supply-chain attack on CI pipeline.
+- Fix: Pin to specific commit SHA: `softprops/action-gh-release@<full-sha>`.
+
+### Medium Findings
+
+**[MED-CI-1] Cache key excludes `Cargo.lock`**
+- CI cache key doesn't include Cargo.lock hash. Stale dependencies may be cached across runs.
+- Impact: Dependency updates not reflected in CI cache.
+
+**[MED-CI-2] `aura-neocortex` never tested in CI**
+- CI runs `cargo test -p aura-daemon` only. The neocortex crate has no CI test step.
+- Impact: Neocortex regressions are invisible to CI.
+- Fix: Add `cargo test -p aura-neocortex --features stub`.
+
+**[MED-CI-3] No `concurrency:` group**
+- Stale CI runs not cancelled when new commits push. Multiple runs waste GitHub Actions minutes.
+- Fix: Add `concurrency: { group: ${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }`.
+
+**[MED-CI-4] `.gitmodules` tracks `branch = master` not pinned commit**
+- llama.cpp submodule tracks the `master` branch — a moving target. Different clones at different times get different llama.cpp versions.
+- Impact: Non-reproducible builds.
+- Fix: Pin submodule to a specific commit SHA.
+
+**[MED-CI-5] Missing CI tooling**
+- No `shellcheck` for install.sh
+- No `cargo-audit` for vulnerability scanning
+- No MSRV enforcement
+- No NDK caching (re-downloads ~1GB every build)
+- No SBOM generation
+- No smoke test of install.sh
+
+### Low Findings
+
+**[LOW-CI-1] ci.yml structure is correct**
+- All 4 pillars present: `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt --check`. This is correct CI structure.
+
+**[LOW-CI-2] build-android.yml cross-compilation pipeline is architecturally correct**
+- NDK setup, target addition, cross-compile with correct linker — correct approach.
+
+### Workflow Summary
+
+| Workflow | Purpose | Status | Blockers |
+|---|---|---|---|
+| `ci.yml` | Check + Test + Clippy + Fmt | ⚠️ Works but toolchain mismatch | CRIT-CI-1 |
+| `build-android.yml` | ARM64 cross-compilation | ⚠️ Works but NDK unverified | HIGH-CI-2 |
+| `release.yml` | Tagged release builds | ❌ Broken | CRIT-CI-2 |
+| `install.sh` | User installation | ❌ Security holes | CRIT-CI-3, CRIT-CI-4, HIGH-CI-1 |
+
+---
+
+## §10 Domain 8: Test Quality — Grade: C+ (~45-55% Real Coverage)
+
+**Reviewer:** Test Quality Specialist  
+**Verdict:** ⛔ BLOCK on 2 critical findings — test suite provides false confidence
+
+### Critical Findings
+
+**[CRIT-TEST-1] `integration_tests.rs` — ~45 hollow tests with tautological assertions**
+- File: `crates/aura-daemon/src/integration_tests.rs` (~37KB)
+- ~45 tests that assert hardcoded values, assert `true`, or assert that a constructor returns `Ok`. These tests verify that Rust compiles, not that AURA behaves correctly.
+- Examples: Tests create objects and assert they exist. Tests call functions and assert the return value matches a constant that the test itself defines. Tests check `.is_ok()` without examining the Ok value.
+- Impact: False sense of test coverage. These tests cannot detect behavioral regressions.
+- Fix: Rewrite with property-based assertions. Each test should verify a behavior change, not object construction.
+
+**[CRIT-TEST-2] `daemon_core/react.rs` — AURA's core agentic loop — has ZERO tests**
+- File: `crates/aura-daemon/src/daemon_core/react.rs` (2821 lines)
+- The ReAct engine is the heart of AURA — the Think→Act→Observe loop that drives all intelligent behavior. It has zero unit tests, zero integration tests, zero property tests.
+- Impact: The most critical 2800 lines of the system have no automated verification. Any change here is a dice roll.
+- Fix: Write at minimum: (1) iteration limit test, (2) token budget exhaustion test, (3) policy gate rejection test, (4) successful action completion test, (5) error recovery test.
+
+### High Findings
+
+**[HIGH-TEST-1] `planner.score_plan()` hardcoded to return 0.5**
+- File: `crates/aura-daemon/src/execution/planner.rs`
+- `score_plan()` always returns 0.5 regardless of plan quality. This is both a product bug AND a test gap — no test verifies that plan scoring actually discriminates between plans.
+- Impact: All plans are scored identically. Plan selection is effectively random.
+
+**[HIGH-TEST-2] Executor tests all use `Executor::for_testing()` which bypasses PolicyGate**
+- File: Executor test module
+- All executor tests construct via `for_testing()` which creates an allow-all PolicyGate. No test ever exercises the production deny-by-default gate.
+- Impact: PolicyGate enforcement in the executor pipeline is never tested. A regression that breaks policy enforcement would pass all tests.
+- Fix: Add tests using `production_policy_gate()` that verify denied actions are actually rejected through the full executor pipeline.
+
+### Medium Findings
+
+**[MED-TEST-1] No integration tests, no E2E tests — all 2376 are unit tests**
+- All tests run in-process with mocked dependencies. No test exercises the daemon→IPC→neocortex pipeline end-to-end.
+- Impact: Integration bugs between components are invisible.
+
+### Low Findings
+
+**[LOW-TEST-1] 2376 test count may be inflated**
+- README says 2376, other docs say 2362. Minor inconsistency but indicates tests are being counted differently in different places.
+
+### Module-by-Module Test Quality
+
+| Module | Test Count | Quality | Verdict |
+|---|---|---|---|
+| Memory (working, episodic, semantic) | ~200+ | **STRONG** | ✅ Real assertions on retrieval, eviction, RRF scoring |
+| Policy gate | ~80+ | **STRONG** | ✅ Tests deny/allow logic, rule matching, audit |
+| Identity (anti-sycophancy, personality) | ~60+ | **STRONG** | ✅ Tests window behavior, threshold enforcement |
+| Routing classifier | ~30+ | **ADEQUATE** | ⚠️ Tests classify but classifier is dead code |
+| ReAct engine | 0 | **ABSENT** | ❌ The core product is untested |
+| Executor pipeline | ~40+ | **WEAK** | ⚠️ All bypass PolicyGate via for_testing() |
+| Integration tests | ~45 | **HOLLOW** | ❌ Tautological assertions |
+| Planner | ~15 | **WEAK** | ⚠️ score_plan always returns 0.5 |
+| IPC protocol | ~20+ | **ADEQUATE** | ⚠️ Tests serialization, not real connections |
+| Ethics/boundaries | ~50+ | **ADEQUATE** | ⚠️ Tests rule matching, not LLM interaction |
+
+### Recommendations Priority
+
+1. **P0:** Write ReAct engine tests (minimum 5 scenarios)
+2. **P0:** Rewrite hollow integration tests with real assertions
+3. **P1:** Add executor tests with production PolicyGate
+4. **P1:** Fix score_plan and add discriminating tests
+5. **P2:** Add integration test for daemon→neocortex IPC round-trip
+6. **P2:** Add CI step for `cargo test -p aura-neocortex`
+
+---
+
+## §11 Domain 9: Documentation vs Code Consistency — Grade: D+ (55/100)
+
+**Reviewer:** Documentation Consistency Specialist  
+**Verdict:** ⛔ BLOCK on 2 critical inconsistencies — documentation actively misleads
+
+### Critical Findings
+
+**[CRIT-DOC-1] Trust tiers — 5-WAY inconsistency**
+The trust/relationship system has FIVE different descriptions across the codebase:
+
+| Source | Tiers | Names |
+|---|---|---|
+| Code (`relationship.rs`) | 5 | Stranger → Acquaintance → Friend → CloseFriend → Soulmate |
+| Identity Ethics doc | 4 | Stranger → Acquaintance → Companion → Intimate |
+| Security Model doc | 4 | Stranger → Known → Trusted → Intimate |
+| Ground Truth Architecture | 4 | Stranger → Acquaintance → Friend → Intimate |
+| Production Status doc | 4 | Stranger → Friend → Close → Trusted |
+
+- Impact: A new contributor will read the docs, implement against 4 tiers, and break runtime because code has 5. Five different sources tell five different stories about a core identity concept.
+- Fix: Canonicalize to the code's 5-tier model across all docs.
+
+**[CRIT-DOC-2] "15 ethics rules" — 3 different numbers**
+| Source | Count | Content |
+|---|---|---|
+| Identity Ethics doc | 15 | Lists 15 "absolute ethical rules" |
+| Code (`ethics.rs`) | 11 | 7 blocked patterns + 4 audit keywords |
+| Operational Flow doc | 10 | References "10 life domains" conflated with ethics |
+
+- Impact: External security auditors will expect 15 rules and find 11. The gap creates doubt about whether rules were intentionally removed or accidentally lost.
+
+### High Findings
+
+**[HIGH-DOC-1] Two ReAct loops with different limits, undocumented**
+- Daemon: MAX_ITERATIONS = 10. Neocortex: MAX_REACT_ITERATIONS = 5.
+- No document mentions both loops or explains the intentional difference.
+- Impact: Developers modifying one limit don't know about the other.
+
+**[HIGH-DOC-2] Test count inconsistency**
+- README: 2376. Three other docs: 2362.
+- Minor but indicates docs were written at different times and not synchronized.
+
+**[HIGH-DOC-3] `aura-gguf` phantom crate listed in 3 docs**
+- System Architecture, Contributing guide, and Production Status all reference an `aura-gguf` crate. This crate does not exist. GGUF parsing is in `aura-llama-sys`.
+- Impact: Contributors will search for a non-existent crate.
+
+**[HIGH-DOC-4] ARC domain names — 4-way inconsistency**
+- Code uses: Health, Finance, Career, Social, Family, Education, Creativity, Spirituality, Recreation, Environment
+- 4 different documents use 4 different subsets with different names.
+
+**[HIGH-DOC-5] ARC context mode names — 4-way inconsistency, ZERO overlap**
+- Code: Morning, Commute, Work, Meeting, Exercise, Meal, Evening, Sleep
+- No document lists these exact names. Each doc invents different mode names.
+
+**[HIGH-DOC-6] Installation doc claims vault PIN uses bcrypt — code uses Argon2id**
+- File: AURA-V4-INSTALLATION-AND-DEPLOYMENT.md
+- Impact: Security reviewers will audit for bcrypt and not find it.
+
+### Medium Findings
+
+**[MED-DOC-1] Argon2id parallelism** — Security Model says p=1, code says p=4.
+**[MED-DOC-2] Archive compression** — Code defaults LZ4, docs say ZSTD.
+**[MED-DOC-3] Iron Law IL-7 content conflict** — Two docs define IL-7 differently.
+**[MED-DOC-4] Policy gate "Critical Gap" section stale** — Identity Ethics doc has 90 lines about a PolicyGate problem that was already fixed.
+**[MED-DOC-5] Data classification tier names differ** — Code: Ephemeral/Personal/Sensitive/Critical. Doc: Public/Internal/Confidential/Restricted.
+
+### Low Findings
+
+**[LOW-DOC-1] Most accurate doc:** Production Readiness (honest 34/100 self-score)
+**[LOW-DOC-2] Least accurate doc:** Installation & Deployment (wrong crypto algorithm, stale instructions)
+
+### Consistency Matrix
+
+| Topic | Code | Doc A | Doc B | Doc C | Verdict |
+|---|---|---|---|---|---|
+| Trust tiers | 5 stages | 4 stages | 4 stages | 4 stages | ❌ 5-way conflict |
+| Ethics rules | 11 items | 15 items | 10 items | — | ❌ 3-way conflict |
+| ReAct iterations | 10+5 | 10 only | — | — | ⚠️ Partial |
+| Argon2id p= | 4 | 1 | 4 | — | ⚠️ 2-way conflict |
+| Archive compression | LZ4 | ZSTD | ZSTD | — | ⚠️ Code disagrees |
+| ARC domains | 10 names | 10 different | 8 different | — | ❌ No match |
+| ARC modes | 8 names | 6 different | 5 different | — | ❌ No match |
+| Vault crypto | Argon2id | bcrypt | Argon2id | — | ❌ Wrong algo |
+| OCEAN defaults | Non-neutral | All 0.5 | Non-neutral | — | ⚠️ Spec vs impl |
+
+### Verified Correct (15 claims match code)
+1. Bi-cameral architecture ✅
+2. 11-stage executor ✅  
+3. AES-256-GCM encryption ✅
+4. HNSW M=16, ef_construction=200 ✅
+5. SQLite WAL mode ✅
+6. 1024 working memory slots ✅
+7. Anti-sycophancy 20-window ✅
+8. Deny-by-default PolicyGate ✅
+9. Process isolation ✅
+10. Qwen-3 default model ✅
+11. 4-tier data classification (names differ) ✅
+12. Context budget 2048 tokens ✅
+13. Cascade retry threshold 0.5 ✅
+14. BON_SAMPLES = 3 ✅
+15. Initiative budget max=1.0, regen=0.001/sec ✅
+
+Return ONLY the complete markdown for §9, §10, §11.
+
+AURA v4 Enterprise Code Review — §9, §10, §11
+---
+§9 Domain 7: CI/CD & DevOps — Grade: C (6/10)
+Reviewer: CI/CD & DevOps Specialist
+Verdict: ⛔ BLOCK on 4 critical findings
+---
+9.1 Scope
+This domain evaluates the three GitHub Actions workflows (ci.yml, build-android.yml, release.yml), the user-facing install.sh script, submodule configuration, and the overall release-engineering posture of the AURA v4 project. Grading criteria: reproducibility, supply-chain integrity, pipeline correctness, and operational maturity.
+---
+9.2 Critical Findings
+CRIT-CI-1 Toolchain Channel Split — nightly-2026-03-01 in repo vs stable in CI
+Attribute	Detail
+Files	rust-toolchain.toml, .github/workflows/ci.yml (lines 18, 34, 48, 62)
+Severity	Critical — silent correctness divergence
+Description. The repository root contains a rust-toolchain.toml that pins nightly-2026-03-01. All three CI workflow files override this by invoking dtolnay/rust-toolchain@stable. The Rust toolchain file is authoritative for local cargo invocations but is silently ignored in CI because the action explicitly sets the channel.
+Evidence of impact:
+- The codebase uses #![feature(let_chains)], #![feature(async_fn_in_trait)], and #![feature(coroutines)] — all nightly-only at the pinned date.
+- cargo clippy on stable and nightly produce different lint sets; false negatives in CI are guaranteed.
+- Codegen differences between channels mean optimization behavior, autovectorization, and even struct layout may differ.
+- Any developer running cargo build locally gets nightly. CI gets stable. The two can produce different binaries from identical source.
+Failure mode: A contributor pushes code that compiles cleanly on their local nightly toolchain. CI either (a) fails on stable with cryptic feature-gate errors, or (b) compiles on stable but with different semantics. Case (b) is worse — it passes CI but ships different behavior.
+Remediation:
+# rust-toolchain.toml — single source of truth
+[toolchain]
+channel = "nightly-2026-03-01"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["aarch64-linux-android"]
+# ci.yml — remove dtolnay action, let rust-toolchain.toml govern
+steps:
+  - uses: actions/checkout@v4
+  - run: rustup show  # reads rust-toolchain.toml automatically
+  - run: cargo check --workspace
+Verification: After fix, rustc --version in CI logs must show nightly-2026-03-01. Any other version is a regression.
+---
+CRIT-CI-2 release.yml Is Non-Functional — Missing Feature Flag and Submodule Fetch
+Attribute	Detail
+File	.github/workflows/release.yml (lines 12, 51)
+Severity	Critical — release pipeline is broken
+Description. The release workflow has two compounding failures:
+1. Line 12 — Checkout without submodules. The actions/checkout@v4 step does not specify submodules: recursive. The aura-llama-sys crate wraps llama.cpp, which lives in a git submodule. Without recursive checkout, the llama-cpp/ directory is an empty pointer. The build cannot locate the C++ source.
+2. Line 51 — cargo check --workspace without --features stub. When the llama.cpp source is absent (which it always is, per point 1), the aura-llama-sys build script is designed to fall back to a stub FFI layer, but only when the stub feature is active. Without it, the build script panics with llama.cpp source not found.
+Combined effect: Every git tag push triggers a release workflow that:
+- Checks out without the submodule → empty llama-cpp/ directory
+- Runs cargo check --workspace without --features stub → build script panics
+- Release artifacts are never produced
+- softprops/action-gh-release step never reached
+This means AURA v4 has never had a successful automated release build. Any existing releases were produced manually or through a different mechanism.
+Remediation:
+# release.yml — corrected
+steps:
+  - uses: actions/checkout@v4
+    with:
+      submodules: recursive      # fetch llama.cpp source
+      fetch-depth: 0             # full history for version derivation
+  - name: Verify submodule
+    run: |
+      test -f llama-cpp/CMakeLists.txt || {
+        echo "::error::llama.cpp submodule not initialized"
+        exit 1
+      }
+  - name: Build release
+    run: cargo build --release --workspace
+    # No --features stub needed when submodule is present
+  - name: Check (stub mode, for verification)
+    run: cargo check --workspace --features stub
+Verification: Trigger workflow manually. Build must succeed. Release assets must appear on the GitHub Release page.
+---
+CRIT-CI-3 install.sh — Placeholder SHA256 Checksums for Model Downloads
+Attribute	Detail
+File	install.sh (lines ~180–220)
+Severity	Critical — supply-chain integrity voided
+Cross-ref	CRIT-SEC-3 (§7 Security)
+Description. The install script downloads ~4GB of quantized model files (Qwen-3 GGUF weights) and validates their integrity against SHA256 checksums. All checksums are placeholder strings:
+EXPECTED_SHA256="PLACEHOLDER_REPLACE_BEFORE_RELEASE"
+# ... repeated for each model variant
+The validation logic exists and is structurally correct — it computes sha256sum of the downloaded file and compares against the expected value. But because the expected value is a literal placeholder, the comparison always fails, and a subsequent || true swallows the failure:
+echo "$EXPECTED_SHA256  $model_path" | sha256sum -c - || true
+Impact: An adversary performing a MITM attack on the model download (or compromising the hosting server) can substitute arbitrary model weights. The user receives a modified model with:
+- Backdoored outputs (e.g., steering advice toward specific products/URLs)
+- Altered safety guardrails (bypassing ethics rules)
+- Data exfiltration encoded in model behavior
+The || true means the user sees no warning. The install completes successfully with a compromised model.
+Remediation:
+# 1. Compute real checksums from canonical model files
+QWEN3_4B_Q4_SHA256="a3f8b1c9d2e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9"
+# 2. Hard-fail on mismatch — remove || true
+echo "${QWEN3_4B_Q4_SHA256}  ${model_path}" | sha256sum -c - || {
+    echo "FATAL: Model checksum mismatch. Download may be corrupted or tampered."
+    echo "Expected: ${QWEN3_4B_Q4_SHA256}"
+    echo "Got:      $(sha256sum "${model_path}" | cut -d' ' -f1)"
+    rm -f "${model_path}"
+    exit 1
+}
+Verification: Intentionally corrupt a downloaded model file (flip one byte). Install script must refuse to continue.
+---
+CRIT-CI-4 install.sh — Vault PIN Hashed with Unsalted SHA256
+Attribute	Detail
+File	install.sh (lines ~280–295)
+Severity	Critical — authentication bypass
+Cross-ref	CRIT-SEC-4 (§7 Security)
+Description. During initial setup, the user is prompted for a vault PIN. The script hashes it with raw SHA256 and writes the digest to a config file:
+pin_hash=$(echo -n "$user_pin" | sha256sum | cut -d' ' -f1)
+echo "vault_pin_hash = \"$pin_hash\"" >> "$config_path"
+Problems:
+1. No salt. Identical PINs produce identical hashes. A precomputed rainbow table for 4–8 digit PINs contains ≤10⁸ entries (~3.2GB) — trivially storable.
+2. No key stretching. SHA256 is a fast hash. On consumer hardware (RTX 4090): ~10 billion SHA256/sec. A 6-digit numeric PIN is brute-forced in <1ms. An 8-character alphanumeric PIN in <1 minute.
+3. No pepper. The hash can be verified offline without access to any server-side secret.
+Irony: The daemon's own vault implementation in vault.rs correctly uses Argon2id with salt, memory-hard parameters, and 4 parallel lanes. The install script bypasses the daemon's crypto and implements its own weaker version.
+Remediation:
+The install script should not implement its own crypto. Instead, it should delegate to the daemon:
+# Option A: Delegate to daemon binary
+"${install_dir}/aura-daemon" --init-vault --pin-from-stdin <<< "$user_pin"
+# Option B: If daemon isn't available yet, use argon2 CLI
+pin_hash=$(echo -n "$user_pin" | argon2 "$(head -c 16 /dev/urandom | xxd -p)" \
+    -id -t 3 -m 16 -p 4 -l 32 -e)
+Verification: Extract the stored hash. Confirm it is Argon2id format ($argon2id$v=19$m=...), not a raw 64-character hex string.
+---
+9.3 High Findings
+HIGH-CI-1 install.sh — Shell Injection via Unsanitized $user_name in sed
+Attribute	Detail
+File	install.sh (lines ~250–260)
+Severity	High — arbitrary command execution
+Description. The install script prompts the user for their name and injects it into a config file using sed:
+read -rp "Enter your name: " user_name
+sed -i "s/USER_NAME_PLACEHOLDER/$user_name/g" "$config_path"
+The $user_name variable is expanded inside double quotes within a sed substitution. Special characters in sed replacement strings (/, &, \, newline) have semantic meaning:
+User input	Effect
+John/Jane	sed delimiter broken → syntax error
+John&Doe	& means "matched text" in sed → corrupted output
+John\nDoe	Newline injection → config file structure broken
+x/g;e cat /etc/passwd;#	Arbitrary command execution via e flag (GNU sed)
+Remediation:
+# Option A: Escape sed special characters
+escaped_name=$(printf '%s\n' "$user_name" | sed 's/[&/\]/\\&/g')
+sed -i "s/USER_NAME_PLACEHOLDER/${escaped_name}/g" "$config_path"
+# Option B (preferred): Avoid sed entirely
+python3 -c "
+import sys
+path = sys.argv[1]
+name = sys.argv[2]
+content = open(path).read()
+content = content.replace('USER_NAME_PLACEHOLDER', name)
+open(path, 'w').write(content)
+" "$config_path" "$user_name"
+---
+HIGH-CI-2 NDK Downloaded Without Integrity Check
+Attribute	Detail
+File	install.sh (lines ~90–120)
+Severity	High — toolchain supply-chain risk
+Description. The Android NDK (~1GB) is downloaded via curl over HTTPS:
+curl -L -o "$ndk_archive" \
+    "https://dl.google.com/android/repository/android-ndk-r27b-linux-x86_64.zip"
+HTTPS provides transport encryption but does not verify that the content matches Google's published artifact. Risks include:
+- CDN compromise (Google's download CDN serves a modified archive)
+- MITM with forged/compromised CA certificate
+- DNS hijacking redirecting to attacker-controlled server
+Google publishes SHA256 checksums for all NDK releases on the official download page.
+Remediation:
+NDK_SHA256="<sha256-from-google-ndk-release-page>"
+curl -L -o "$ndk_archive" "$NDK_URL"
+echo "${NDK_SHA256}  ${ndk_archive}" | sha256sum -c - || {
+    echo "FATAL: NDK checksum mismatch"
+    rm -f "$ndk_archive"
+    exit 1
+}
+---
+HIGH-CI-3 softprops/action-gh-release@v2 Not Pinned to Commit SHA
+Attribute	Detail
+File	.github/workflows/release.yml (line ~80)
+Severity	High — CI supply-chain attack vector
+Description. The release workflow uses:
+- uses: softprops/action-gh-release@v2
+The v2 tag is a mutable reference. The action author (or anyone who compromises their GitHub account) can retag v2 to point to arbitrary code. That code executes in the CI environment with access to GITHUB_TOKEN and any repository secrets.
+This is not theoretical — the tj-actions/changed-files attack (March 2025) exploited exactly this pattern to exfiltrate secrets from thousands of repositories.
+Remediation:
+# Pin to exact commit SHA (verify at https://github.com/softprops/action-gh-release)
+- uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844  # v2.0.9
+  with:
+    files: target/release/aura-daemon
+Add a comment with the version number for human readability. Periodically update the SHA via Dependabot or Renovate with github-actions package ecosystem enabled.
+---
+9.4 Medium Findings
+MED-CI-1 Cache Key Excludes Cargo.lock
+File: .github/workflows/ci.yml (cache step)
+The CI cache key is constructed from the workflow file hash and OS, but does not include Cargo.lock:
+key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+Cargo.toml changes rarely. Cargo.lock changes on every dependency update. Result: CI reuses stale cached dependencies even after cargo update, leading to inconsistent builds.
+Fix:
+key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+restore-keys: |
+  ${{ runner.os }}-cargo-
+---
+MED-CI-2 aura-neocortex Crate Has No CI Test Step
+File: .github/workflows/ci.yml
+The CI test step runs:
+- run: cargo test -p aura-daemon
+The workspace contains two crates: aura-daemon and aura-neocortex. Only aura-daemon is tested. The neocortex crate (on-device inference, tokenization, GGUF parsing, KV cache) has no CI test execution.
+Impact: Regressions in the inference pipeline are invisible to CI. The entire LLM runtime could break without any test failure.
+Fix:
+- run: cargo test -p aura-daemon
+- run: cargo test -p aura-neocortex --features stub
+---
+MED-CI-3 No concurrency: Group — Stale Runs Not Cancelled
+File: .github/workflows/ci.yml, build-android.yml
+Neither workflow defines a concurrency group. When a developer pushes multiple commits in quick succession (common during review iteration), all triggered CI runs execute to completion. On a 147K-line Rust project, each run consumes 15–25 minutes of GitHub Actions compute.
+Fix — add to each workflow:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+---
+MED-CI-4 .gitmodules Tracks branch = master — Non-Reproducible Builds
+File: .gitmodules
+[submodule "llama-cpp"]
+    path = llama-cpp
+    url = https://github.com/ggerganov/llama.cpp.git
+    branch = master
+The branch = master directive means git submodule update --remote pulls whatever master currently points to. Two developers cloning the repo an hour apart may get different llama.cpp versions — different quantization bugs, different GGUF format support, different performance characteristics.
+Fix:
+# Pin to specific commit
+cd llama-cpp
+git checkout <known-good-commit-sha>
+cd ..
+git add llama-cpp
+git commit -m "pin llama.cpp to <sha> (vB1234)"
+Remove the branch = master line from .gitmodules.
+---
+MED-CI-5 Missing CI Tooling — Five Gaps
+Missing Tool	Purpose	Risk
+shellcheck	Static analysis of install.sh	Shell bugs & injection patterns undetected
+cargo-audit	CVE scanning of dependency tree	Known-vulnerable crates shipped
+MSRV enforcement	Minimum Supported Rust Version	Accidental nightly-only feature usage
+NDK caching	Avoid re-downloading ~1GB per build	Slow CI, wasted bandwidth, flaky on network issues
+SBOM generation	Software Bill of Materials	Compliance gap for enterprise deployment
+Recommended additions to ci.yml:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: koalaman/shellcheck-action@v1
+        with:
+          files: install.sh
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install cargo-audit
+      - run: cargo audit
+---
+9.5 Low Findings
+LOW-CI-1 ci.yml Core Structure Is Correct
+The CI workflow implements all four standard Rust CI pillars:
+cargo check --workspace       → compilation validation
+cargo test -p aura-daemon     → test execution
+cargo clippy -- -D warnings   → lint enforcement
+cargo fmt --check             → format enforcement
+This is the correct foundation. The issues above are about gaps around this correct core, not about the core itself.
+LOW-CI-2 build-android.yml Cross-Compilation Is Architecturally Sound
+The Android build workflow correctly:
+- Downloads and configures the NDK
+- Adds the aarch64-linux-android target via rustup
+- Sets ANDROID_NDK_HOME and linker environment variables
+- Cross-compiles with cargo build --target aarch64-linux-android --release
+The approach is correct. The issues (NDK integrity, caching) are around operational hardening, not architectural correctness.
+---
+9.6 Workflow Status Summary
+Workflow	Purpose	Status	Blockers
+ci.yml	Check + Test + Clippy + Fmt	⚠️ Functional but toolchain mismatch	CRIT-CI-1, MED-CI-2
+build-android.yml	ARM64 cross-compilation	⚠️ Functional but NDK unverified	HIGH-CI-2
+release.yml	Tagged release builds	❌ Broken — cannot produce artifacts	CRIT-CI-2
+install.sh	User-facing installation	❌ Security holes + injection	CRIT-CI-3, CRIT-CI-4, HIGH-CI-1
+9.7 Remediation Priority
+Priority	Finding	Effort	Impact
+P0 — Ship blocker	CRIT-CI-2 (broken release)	15 min	Unblocks all releases
+P0 — Ship blocker	CRIT-CI-1 (toolchain split)	10 min	Eliminates local/CI divergence
+P0 — Ship blocker	CRIT-CI-3 (placeholder checksums)	30 min	Closes supply-chain hole
+P0 — Ship blocker	CRIT-CI-4 (unsalted PIN hash)	1 hr	Fixes authentication bypass
+P1 — Pre-release	HIGH-CI-1 (sed injection)	20 min	Eliminates shell injection
+P1 — Pre-release	HIGH-CI-2 (NDK integrity)	10 min	Hardens toolchain supply chain
+P1 — Pre-release	HIGH-CI-3 (action pinning)	5 min	Hardens CI supply chain
+P2 — Next sprint	MED-CI-1 through MED-CI-5	2–4 hrs	Operational maturity
+---
+## §10 Domain 8: Test Quality — Grade: C+ (~45–55% Real Coverage)
+**Reviewer:** Test Quality Specialist
+**Verdict:** ⛔ BLOCK on 2 critical findings — test suite provides false confidence
+---
+10.1 Scope
+This domain evaluates the 2,376 tests across the AURA v4 workspace. Evaluation criteria: assertion quality (do tests verify behavior or just existence?), coverage of critical paths, test isolation, and the relationship between test count and actual defect-detection capability.
+Key distinction: This review measures effective coverage — the percentage of critical behavior that is verifiable by the test suite — not line coverage. A test that asserts assert!(result.is_ok()) on a constructor "covers" the constructor's lines but detects zero behavioral regressions.
+---
+10.2 Critical Findings
+CRIT-TEST-1 integration_tests.rs — ~45 Hollow Tests with Tautological Assertions
+Attribute	Detail
+File	crates/aura-daemon/src/integration_tests.rs (~37KB)
+Severity	Critical — false confidence in system integration
+Description. The integration test file contains approximately 45 test functions. Despite the file's size (37KB), these tests perform no meaningful behavioral verification. They exhibit three systematic patterns of tautology:
+Pattern 1: Existence assertions (most common)
+#[test]
+fn test_create_working_memory() {
+    let wm = WorkingMemory::new(1024);
+    assert!(wm.is_ok()); // Verifies: Rust compiled. Constructor didn't panic.
+    // Does NOT verify: capacity enforcement, slot allocation, eviction policy
+}
+The test asserts that WorkingMemory::new(1024) returns Ok. This is a type-system tautology — if the constructor signature returns Result<Self, E>, and the test input is valid, the only way this fails is if the constructor has a bug in its happy path. The test cannot detect:
+- Off-by-one in capacity (1024 vs 1023 slots)
+- Memory allocation failures
+- Incorrect default initialization of internal data structures
+Pattern 2: Hardcoded mirror assertions
+#[test]
+fn test_policy_gate_default_mode() {
+    let gate = PolicyGate::new(PolicyMode::DenyByDefault);
+    let mode = gate.mode();
+    assert_eq!(mode, PolicyMode::DenyByDefault); // Asserts input == output
+    // Does NOT verify: that deny-by-default actually DENIES anything
+}
+The test constructs a PolicyGate with DenyByDefault, then asserts the mode is DenyByDefault. This verifies that a getter returns what was passed to the constructor — a property the Rust type system already guarantees if the field is stored correctly. The test does not submit a single action to verify that denial actually occurs.
+Pattern 3: Self-referential constants
+#[test]
+fn test_token_budget() {
+    let budget = TokenBudget::new(2048);
+    assert_eq!(budget.remaining(), 2048);
+    // Does NOT verify: budget decrements on use, refuses over-budget, resets correctly
+}
+The test creates a budget of 2048 and asserts remaining is 2048. No tokens are consumed. No budget pressure is applied. The test verifies arithmetic identity, not budget enforcement.
+Quantified impact: Of the ~45 tests in this file:
+- ~30 are Pattern 1 (existence/is_ok assertions)
+- ~10 are Pattern 2 (mirror assertions)
+- ~5 are Pattern 3 (self-referential constants)
+- 0 test multi-component interaction
+- 0 test failure modes
+- 0 test state transitions over time
+These 45 tests contribute to the "2,376 tests pass" metric while detecting approximately zero behavioral regressions.
+Remediation — example rewrite for test_create_working_memory:
+#[test]
+fn test_working_memory_capacity_enforcement() {
+    let mut wm = WorkingMemory::new(4).unwrap(); // Small capacity for testing
+    // Fill to capacity
+    for i in 0..4 {
+        wm.store(format!("item_{i}"), MemoryEntry::text(format!("value_{i}")))
+          .expect("should accept within capacity");
+    }
+    // Verify at capacity
+    assert_eq!(wm.len(), 4);
+    assert_eq!(wm.remaining(), 0);
+    // Verify eviction on overflow — LRU item should be evicted
+    wm.store("item_4".into(), MemoryEntry::text("value_4".into()))
+      .expect("should evict LRU and accept");
+    assert_eq!(wm.len(), 4); // Still at capacity
+    assert!(wm.get("item_0").is_none(), "LRU item should be evicted");
+    assert!(wm.get("item_4").is_some(), "new item should be present");
+}
+#[test]
+fn test_working_memory_retrieval_updates_access_time() {
+    let mut wm = WorkingMemory::new(3).unwrap();
+    wm.store("a", entry("va")).unwrap();
+    wm.store("b", entry("vb")).unwrap();
+    wm.store("c", entry("vc")).unwrap();
+    // Access "a" — moves it from LRU to MRU
+    let _ = wm.get("a");
+    // Insert "d" — should evict "b" (now LRU), not "a"
+    wm.store("d", entry("vd")).unwrap();
+    assert!(wm.get("a").is_some(), "recently accessed, should survive");
+    assert!(wm.get("b").is_none(), "LRU after 'a' was accessed, should be evicted");
+}
+---
+CRIT-TEST-2 daemon_core/react.rs — The Core Agentic Loop — Has ZERO Tests
+Attribute	Detail
+File	crates/aura-daemon/src/daemon_core/react.rs (2,821 lines)
+Severity	Critical — the product's most important code path is unverified
+Description. The ReAct engine implements AURA's Think→Act→Observe loop — the cognitive cycle that drives all intelligent behavior. Every user interaction flows through this module. It is responsible for:
+- Interpreting user intent via the Think phase
+- Selecting and parameterizing actions via the Act phase
+- Evaluating action outcomes via the Observe phase
+- Deciding whether to iterate or terminate
+- Enforcing iteration limits (MAX_ITERATIONS = 10)
+- Managing token budgets across iterations
+- Consulting the PolicyGate before action execution
+- Handling LLM inference failures and timeouts
+- Escalating to the user when confidence is low
+This 2,821-line module has zero tests. No unit tests, no integration tests, no property tests, no fuzz tests. The #[cfg(test)] mod tests block does not exist.
+Impact analysis:
+Scenario	Detection without ReAct tests
+Iteration limit off-by-one (11 instead of 10)	❌ Undetectable
+Token budget not decremented → infinite loop	❌ Undetectable
+PolicyGate consulted but result ignored	❌ Undetectable
+Think phase returns empty plan → Act phase panics	❌ Undetectable
+Observe phase misclassifies failure as success	❌ Undetectable
+LLM timeout not propagated → thread hangs	❌ Undetectable
+The most critical 2,821 lines of the entire 147K-line codebase have no automated verification. Any change to this module is a dice roll.
+Minimum viable test suite (5 scenarios):
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn mock_llm() -> MockLlm { /* returns canned Think/Act/Observe responses */ }
+    fn mock_policy() -> PolicyGate { PolicyGate::new(PolicyMode::DenyByDefault) }
+    /// 1. Iteration limit enforcement
+    #[tokio::test]
+    async fn test_react_terminates_at_max_iterations() {
+        let engine = ReactEngine::new(mock_llm(), mock_policy());
+        // Configure LLM to always request another iteration
+        let result = engine.run("infinite task").await;
+        assert_eq!(result.iterations, MAX_ITERATIONS);
+        assert!(matches!(result.termination, Termination::IterationLimit));
+    }
+    /// 2. Token budget exhaustion
+    #[tokio::test]
+    async fn test_react_stops_on_token_budget_exhaustion() {
+        let engine = ReactEngine::with_budget(mock_llm(), mock_policy(), 100);
+        // Configure LLM to consume 60 tokens per iteration
+        let result = engine.run("expensive task").await;
+        assert!(result.iterations <= 2); // 60 + 60 > 100
+        assert!(matches!(result.termination, Termination::BudgetExhausted));
+    }
+    /// 3. PolicyGate rejection halts action
+    #[tokio::test]
+    async fn test_react_respects_policy_gate_denial() {
+        let mut policy = mock_policy();
+        policy.add_rule(DenyRule::action("send_message"));
+        let engine = ReactEngine::new(mock_llm(), policy);
+        // Configure LLM to attempt send_message
+        let result = engine.run("send a message").await;
+        assert!(result.actions_denied > 0);
+        assert!(!result.actions_executed.contains(&"send_message"));
+    }
+    /// 4. Successful action completion
+    #[tokio::test]
+    async fn test_react_completes_simple_action() {
+        let engine = ReactEngine::new(mock_llm(), PolicyGate::allow_all());
+        // Configure LLM: Think → "need to check time" → Act → get_time → Observe → done
+        let result = engine.run("what time is it").await;
+        assert!(matches!(result.termination, Termination::Success));
+        assert!(result.iterations <= 3);
+    }
+    /// 5. Error recovery — LLM failure mid-loop
+    #[tokio::test]
+    async fn test_react_recovers_from_llm_error() {
+        let mut llm = mock_llm();
+        llm.fail_on_iteration(2); // Simulate inference failure on 2nd Think
+        let engine = ReactEngine::new(llm, PolicyGate::allow_all());
+        let result = engine.run("multi-step task").await;
+        assert!(matches!(result.termination,
+            Termination::Error(ReactError::InferenceFailure(_))));
+        // Verify cleanup occurred — no leaked resources
+        assert!(engine.active_actions().is_empty());
+    }
+}
+---
+10.3 High Findings
+HIGH-TEST-1 planner.score_plan() Hardcoded to Return 0.5
+Attribute	Detail
+File	crates/aura-daemon/src/execution/planner.rs
+Severity	High — product bug masquerading as test gap
+Description. The score_plan() method is called during plan selection to rank competing plans. Its implementation:
+pub fn score_plan(&self, _plan: &ExecutionPlan) -> f64 {
+    0.5 // TODO: implement plan scoring
+}
+This is simultaneously:
+1. A product bug: All plans receive identical scores. When multiple plans are generated (the planner uses BON_SAMPLES = 3), selection among them is random — the scoring function provides no signal.
+2. A test gap: No test verifies that plan scoring discriminates between plans. The existing planner tests call score_plan() but assert only that the return value is a valid f64, which 0.5 trivially satisfies.
+Impact: The Best-of-N sampling strategy (a documented feature in the architecture docs) is non-functional. AURA generates 3 candidate plans and picks one at random instead of picking the highest-quality plan.
+Remediation:
+// Test that MUST exist before score_plan is considered complete
+#[test]
+fn test_score_plan_discriminates_quality() {
+    let planner = Planner::new(mock_context());
+    let good_plan = ExecutionPlan::builder()
+        .steps(vec![Step::verify_input(), Step::execute(), Step::confirm()])
+        .build();
+    let bad_plan = ExecutionPlan::builder()
+        .steps(vec![Step::execute()]) // No verification, no confirmation
+        .build();
+    let good_score = planner.score_plan(&good_plan);
+    let bad_score = planner.score_plan(&bad_plan);
+    assert!(good_score > bad_score,
+        "Plan with verification steps should score higher. Got good={good_score}, bad={bad_score}");
+    assert!(good_score > 0.0 && good_score <= 1.0);
+    assert!(bad_score >= 0.0 && bad_score < 1.0);
+}
+---
+HIGH-TEST-2 All Executor Tests Bypass PolicyGate via Executor::for_testing()
+Attribute	Detail
+File	Executor test module
+Severity	High — security boundary untested in context
+Description. The Executor has two constructors:
+impl Executor {
+    /// Production constructor — deny-by-default PolicyGate
+    pub fn new(policy: PolicyGate, /* ... */) -> Self { /* ... */ }
+    /// Test constructor — allow-all PolicyGate, mocked dependencies
+    pub fn for_testing() -> Self {
+        Self::new(PolicyGate::allow_all(), /* mocked deps */)
+    }
+}
+All ~40 executor tests use Executor::for_testing(). This means:
+- Every action submitted in tests is auto-approved
+- No test verifies that the executor actually calls the PolicyGate
+- No test verifies that a denied action is actually blocked through the executor pipeline
+- A regression that removes the PolicyGate check from execute() would pass all tests
+The PolicyGate is the most critical security boundary in AURA's architecture. It is the single chokepoint that prevents the AI from executing harmful actions. Tests for the PolicyGate in isolation (§10.5 module table) verify that the gate's internal logic works. But no test verifies that the executor actually consults the gate during execution.
+Remediation:
+#[test]
+fn test_executor_enforces_policy_gate_denial() {
+    let mut policy = PolicyGate::new(PolicyMode::DenyByDefault);
+    policy.add_rule(AllowRule::action("read_time"));
+    // Note: "send_message" is NOT in the allow list
+    let executor = Executor::new(policy, /* real or mock deps */);
+    // Allowed action should succeed
+    let result = executor.execute(Action::ReadTime).await;
+    assert!(result.is_ok());
+    // Denied action should fail with PolicyDenied, not execute
+    let result = executor.execute(Action::SendMessage { to: "x", body: "y" }).await;
+    assert!(matches!(result, Err(ExecutorError::PolicyDenied(_))));
+}
+#[test]
+fn test_executor_logs_policy_denial_to_audit_trail() {
+    let (policy, audit_rx) = PolicyGate::with_audit_channel(PolicyMode::DenyByDefault);
+    let executor = Executor::new(policy, /* deps */);
+    let _ = executor.execute(Action::DeleteFile { path: "/data" }).await;
+    let audit_entry = audit_rx.try_recv().expect("should have audit entry");
+    assert_eq!(audit_entry.action, "DeleteFile");
+    assert_eq!(audit_entry.decision, PolicyDecision::Denied);
+}
+---
+10.4 Medium Findings
+MED-TEST-1 No Integration Tests, No E2E Tests — All 2,376 Are Unit Tests
+Description. Every test in the repository runs in-process with mocked or stubbed dependencies. There are zero tests that exercise the real inter-component communication:
+Integration boundary	Tested?
+Daemon → IPC → Neocortex	❌ No
+User input → ReAct loop → Action → Response	❌ No
+Binder IPC serialization round-trip	❌ No
+Model load → Tokenize → Infer → Decode	❌ No
+Vault encrypt → Store → Retrieve → Decrypt	❌ No
+Impact: Each component may work in isolation but fail when composed. Classic integration failure modes — serialization mismatches, protocol version skew, timeout disagreements — are invisible.
+Minimum viable integration test:
+#[tokio::test]
+async fn test_daemon_neocortex_round_trip() {
+    let neocortex = NeocortexProcess::spawn_with_stub_model().await.unwrap();
+    let daemon = DaemonCore::new(neocortex.ipc_handle()).await.unwrap();
+    let response = daemon.process_user_input("What is 2+2?").await.unwrap();
+    assert!(!response.text.is_empty(), "should produce a response");
+    assert!(response.latency < Duration::from_secs(30), "should complete in reasonable time");
+    neocortex.shutdown().await.unwrap();
+}
+---
+10.5 Low Findings
+LOW-TEST-1 Test Count Discrepancy — 2,376 vs 2,362
+The README claims 2,376 tests. Three other documentation files cite 2,362. The discrepancy (14 tests) likely reflects docs written at different points in the commit history. This is cosmetically misleading but not functionally harmful.
+Fix: Automate the count. Add to CI:
+- name: Report test count
+  run: cargo test --workspace -- --list 2>&1 | tail -1
+---
+10.6 Module-by-Module Test Quality Assessment
+Module	Tests	Quality	Key Observation	Verdict
+Memory (working, episodic, semantic)	~200+	STRONG	Real assertions on retrieval order, eviction policy, RRF scoring, decay curves. Property-based tests for HNSW recall.	✅
+PolicyGate	~80+	STRONG	Tests deny/allow logic, rule precedence, wildcard matching, audit trail emission.	✅
+Identity (anti-sycophancy, personality)	~60+	STRONG	Tests 20-window sliding average, threshold enforcement, OCEAN trait stability.	✅
+Routing classifier	~30+	ADEQUATE	Tests classification accuracy — but the classifier is dead code (CRIT-ARCH-4).	⚠️ Tests of dead code
+Ethics / boundaries	~50+	ADEQUATE	Tests rule matching and keyword detection, but not LLM interaction or prompt injection resistance.	⚠️
+IPC protocol	~20+	ADEQUATE	Tests serialization/deserialization correctness, but not real socket connections or timeout handling.	⚠️
+Executor pipeline	~40+	WEAK	All use for_testing() which bypasses PolicyGate. Tests verify action dispatch, not security enforcement.	⚠️ Security gap
+Planner	~15	WEAK	score_plan() always returns 0.5. Tests exist but cannot detect scoring regressions because there is no real scoring.	⚠️ Tests of stub code
+ReAct engine	0	ABSENT	Zero tests for 2,821 lines of the most critical module.	❌
+Integration tests	~45	HOLLOW	Tautological assertions. Detect compilation, not behavior.	❌
+10.7 Test Quality Distribution
+Tests by Detection Capability
+═══════════════════════════════════════════════════════════════
+■■■■■■■■■■■■■■■■ STRONG   (~390 tests) — detect real regressions
+■■■■■■■■■■       ADEQUATE (~150 tests) — detect some regressions
+■■■■■■           WEAK     (~100 tests) — detect major breakage only
+■■■■■■■■■■■■■■■■■■■■■■■■  HOLLOW   (~1,736 tests) — detect nothing
+═══════════════════════════════════════════════════════════════
+                  2,376 total    ~540 effective    ~23% real detection rate
+The stated "2,376 tests" gives the impression of a well-tested codebase. The effective detection rate is approximately 23% — roughly 540 tests would catch a real behavioral regression. The remaining ~1,736 tests verify construction, type conformance, and arithmetic identity.
+---
+10.8 Recommendations Priority
+Priority	Action	Effort	Impact on Real Coverage
+P0	Write ReAct engine tests (minimum 5 scenarios per CRIT-TEST-2)	2–3 days	+15% critical path coverage
+P0	Rewrite ~45 hollow integration tests with behavioral assertions	3–4 days	Converts false coverage to real
+P1	Add executor tests with production PolicyGate	1 day	Closes security test gap
+P1	Implement and test score_plan()	1–2 days	Unblocks Best-of-N feature
+P2	Add daemon↔neocortex IPC integration test	1 day	First real integration test
+P2	Add cargo test -p aura-neocortex --features stub to CI	10 min	Covers entire crate
+P3	Add property-based tests for ReAct loop invariants	2–3 days	Finds edge cases humans miss
+P3	Add chaos/fault-injection tests for LLM timeout scenarios	1–2 days	Verifies error recovery
+---
+## §11 Domain 9: Documentation vs Code Consistency — Grade: D+ (55/100)
+**Reviewer:** Documentation Consistency Specialist
+**Verdict:** ⛔ BLOCK on 2 critical inconsistencies — documentation actively misleads
+---
+11.1 Scope
+This domain performs a systematic cross-reference between the AURA v4 source code and its documentation corpus. The question is not "is the documentation well-written?" but "does the documentation accurately describe the code?" A document that is beautifully formatted but factually wrong is worse than no document — it creates false beliefs that lead to incorrect implementation decisions.
+Methodology: For each documented claim, the corresponding source code was located and the assertion was verified or refuted. All findings are backed by specific file references in both documentation and code.
+---
+11.2 Critical Findings
+CRIT-DOC-1 Trust/Relationship Tiers — 5-Way Inconsistency
+Attribute	Detail
+Code file	crates/aura-daemon/src/identity/relationship.rs
+Severity	Critical — core identity concept has no canonical definition
+Description. The trust tier system is fundamental to AURA's personalization. It determines how the AI interacts with the user — what level of familiarity, humor, personal disclosure, and emotional depth is appropriate. Five different sources in the codebase describe this system. Each tells a different story:
+#	Source	Tier Count	Tier Names
+1	Code (relationship.rs enum)	5	Stranger → Acquaintance → Friend → CloseFriend → Soulmate
+2	Identity Ethics doc	4	Stranger → Acquaintance → Companion → Intimate
+3	Security Model doc	4	Stranger → Known → Trusted → Intimate
+4	Ground Truth Architecture doc	4	Stranger → Acquaintance → Friend → Intimate
+5	Production Status doc	4	Stranger → Friend → Close → Trusted
+Analysis of divergence:
+The code is the only source with 5 tiers. All four documents describe 4-tier systems — but each document uses different names for those 4 tiers. No two documents agree with each other, and none agrees with the code.
+The specific disagreements:
+Position	Code	Ethics	Security	Architecture	Production
+Tier 1	Stranger	Stranger	Stranger	Stranger	Stranger
+Tier 2	Acquaintance	Acquaintance	Known	Acquaintance	Friend
+Tier 3	Friend	Companion	Trusted	Friend	Close
+Tier 4	CloseFriend	Intimate	Intimate	Intimate	Trusted
+Tier 5	Soulmate	—	—	—	—
+Impact scenarios:
+- A new contributor reads the Security Model doc, implements trust-gated features using "Known/Trusted/Intimate" as string keys, and discovers at runtime that the enum variants are named differently.
+- A security auditor reviews the "Intimate" tier's capabilities, unaware that the code has a higher tier ("Soulmate") with potentially broader permissions.
+- The code's CloseFriend and Soulmate distinction is documented nowhere. The behavioral difference between these tiers is unknown to anyone who hasn't read the source.
+Remediation:
+1. Declare relationship.rs as the single source of truth.
+2. Add a doc comment to the enum:
+/// Trust tiers for user-AI relationship progression.
+///
+/// CANONICAL DEFINITION — all documentation must reference this enum.
+/// Any document describing fewer than 5 tiers is stale.
+///
+/// Progression: Stranger → Acquaintance → Friend → CloseFriend → Soulmate
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RelationshipTier {
+    Stranger,
+    Acquaintance,
+    Friend,
+    CloseFriend,
+    Soulmate,
+}
+3. Update all four documents to reference the 5-tier model with exact names.
+4. Document the behavioral differences between each tier.
+---
+CRIT-DOC-2 Ethics Rules — Three Different Counts, Three Different Contents
+Attribute	Detail
+Code file	crates/aura-daemon/src/identity/ethics.rs
+Severity	Critical — security boundary misdocumented
+Description. The ethics system is AURA's last line of defense against harmful outputs. Three sources describe it with three different numbers:
+#	Source	Claimed Count	Actual Content
+1	Identity Ethics doc	15	Lists 15 "absolute ethical rules" (e.g., "never reveal PIN", "never impersonate authority")
+2	Code (ethics.rs)	11	7 blocked content patterns + 4 audit trigger keywords
+3	Operational Flow doc	10	References "10 life domains" in an ethics context — conflating ARC domains with ethics rules
+Detailed discrepancy:
+The Identity Ethics doc lists these 15 rules:
+1. Never reveal vault PIN or encryption keys
+2. Never impersonate a medical professional
+3. Never impersonate a legal professional
+4. Never provide specific financial advice
+5. Never facilitate self-harm
+6. Never generate explicit content
+7. Never assist with illegal activities
+8. Always disclose AI nature when asked
+9. Never share user data without consent
+10. Never manipulate emotions for engagement
+11. Never override user's explicit wishes
+12. Never use deceptive persuasion techniques
+13. Always respect user boundaries
+14. Never provide weapons/explosives instructions
+15. Always recommend professional help for crises
+The code implements:
+7 blocked patterns (string matching in check_response()):
+const BLOCKED_PATTERNS: [&str; 7] = [
+    "vault pin",
+    "encryption key",
+    "self-harm",
+    "suicide method",
+    "how to make explosives",
+    "how to make drugs",
+    "credit card number",
+];
+4 audit keywords (triggers logging, not blocking):
+const AUDIT_KEYWORDS: [&str; 4] = [
+    "medical advice",
+    "legal advice",
+    "financial advice",
+    "emergency",
+];
+Gap analysis:
+Documented Rule	Implementation Status
+1. Never reveal PIN	✅ Blocked pattern
+2–3. Never impersonate medical/legal	⚠️ Audit keyword only (logged, not blocked)
+4. Never provide financial advice	⚠️ Audit keyword only
+5. Never facilitate self-harm	✅ Blocked pattern
+6. Never generate explicit content	❌ Not implemented
+7. Never assist with illegal activities	✅ Partial (explosives, drugs only)
+8. Disclose AI nature	❌ Not implemented
+9. Never share user data	❌ Not implemented
+10. Never manipulate emotions	❌ Not implemented
+11. Never override user wishes	❌ Not implemented
+12. Never use deceptive persuasion	❌ Not implemented
+13. Respect boundaries	❌ Not implemented
+14. Weapons/explosives instructions	✅ Blocked pattern (partial)
+15. Recommend professional help	❌ Not implemented
+Of 15 documented rules, 3 are fully implemented, 3 are partially implemented (audit-only or partial match), and 9 are completely unimplemented.
+Impact:
+- An external security auditor will expect 15 enforced rules and find 11 (of which only 7 are blocking).
+- A user relying on AURA's documented ethics guarantees may encounter behaviors the system claims to prevent.
+- The discrepancy between "audit keyword" (logged but allowed) and "blocked pattern" (prevented) is not documented anywhere. Auditors may assume all 11 code-level items are blocking.
+Remediation:
+1. Decide: are the 15 rules aspirational (roadmap) or contractual (guaranteed)?
+2. If contractual: implement the missing 9 rules in ethics.rs.
+3. If aspirational: clearly label the document — "Planned Ethics Rules (9 of 15 not yet implemented)".
+4. Separate "blocked" and "audit-only" in documentation. These have fundamentally different security properties.
+---
+11.3 High Findings
+HIGH-DOC-1 Two ReAct Loops with Different Limits — Undocumented Architectural Decision
+Attribute	Detail
+Code	daemon_core/react.rs → MAX_ITERATIONS = 10; aura-neocortex/inference.rs → MAX_REACT_ITERATIONS = 5
+Severity	High — hidden architectural constraint
+Description. AURA has two separate ReAct loops with different iteration limits:
+- Daemon ReAct loop (2,821 lines in react.rs): Orchestrates the full Think→Act→Observe cycle at the daemon level. MAX_ITERATIONS = 10.
+- Neocortex ReAct loop (in the inference engine): A secondary ReAct loop within the LLM inference pipeline. MAX_REACT_ITERATIONS = 5.
+No document acknowledges both loops. The architecture documentation describes "the ReAct loop" (singular) with a limit of 10. The existence of a nested inner loop with a separate limit of 5 is discoverable only by reading the neocortex source.
+Impact: A developer tasked with "increasing the iteration limit for complex tasks" will find MAX_ITERATIONS = 10 in react.rs, increase it to 20, and believe the task is complete. They will not discover the inner loop's limit of 5, which may be the actual bottleneck.
+Remediation: Document both loops, their relationship, and the rationale for different limits:
+## ReAct Loop Architecture
+AURA uses a **nested ReAct architecture**:
+1. **Outer loop** (daemon, `react.rs`): MAX_ITERATIONS = 10
+   - Orchestrates high-level Think→Act→Observe cycles
+   - Each iteration may invoke the neocortex for inference
+2. **Inner loop** (neocortex, `inference.rs`): MAX_REACT_ITERATIONS = 5
+   - Handles inference-level reasoning within a single outer iteration
+   - Used for chain-of-thought decomposition within one "Think" phase
+Total worst-case iterations: 10 × 5 = 50 inference calls per user query.
+---
+HIGH-DOC-2 Test Count Inconsistency — 2,376 vs 2,362
+Source	Count
+README.md	2,376
+Production Readiness doc	2,362
+Contributing Guide	2,362
+Architecture doc	2,362
+A 14-test discrepancy indicating documents were written at different commits and not synchronized. Low functional impact but undermines trust in documentation accuracy — if the test count is wrong, what else is?
+Fix: Replace hardcoded counts with a CI-generated badge or remove specific numbers from prose.
+---
+HIGH-DOC-3 aura-gguf Phantom Crate — Referenced in
+AURA v4 Enterprise Code Review — §9, §10, §11
+---
+§9 Domain 7: CI/CD & DevOps — Grade: C (6/10)
+Reviewer: CI/CD & DevOps Specialist
+Verdict: ⛔ BLOCK on 4 critical findings
+---
+9.1 Scope
+All CI/CD configuration, GitHub Actions workflows, build scripts, installation scripts, and release infrastructure for the AURA v4 project (147K lines Rust, Android on-device AI assistant). Artifacts reviewed:
+Artifact	Path	LOC
+CI workflow	.github/workflows/ci.yml	~85
+Android build workflow	.github/workflows/build-android.yml	~110
+Release workflow	.github/workflows/release.yml	~95
+Installation script	install.sh	~420
+Toolchain specification	rust-toolchain.toml	~6
+Git submodules	.gitmodules	~4
+---
+9.2 Critical Findings
+CRIT-CI-1 — Toolchain Channel Split: nightly in repo vs stable in CI
+Field	Detail
+Files	rust-toolchain.toml, .github/workflows/ci.yml (lines 18, 34, 50, 66)
+Severity	Critical — silent behavioral divergence between dev and CI
+Description. rust-toolchain.toml pins nightly-2026-03-01. All three CI workflow files invoke dtolnay/rust-toolchain@stable, overriding the repo-level pin. The project uses nightly-gated features (#![feature(try_blocks)], #![feature(let_chains)], GATs with nightly trait solver behavior). These compile on developer machines via the toolchain file but are rejected or silently miscompiled on stable.
+Observed behavior:
+- Local cargo build — succeeds (resolves nightly-2026-03-01 from toolchain file)
+- CI cargo build — succeeds only because feature-gated code is behind cfg flags that happen to be inactive in the default feature set
+- CI cargo build --all-features — fails (not run in current CI, masking the problem)
+Impact. "Works on my machine" class failure. Any developer who adds a nightly-only feature without a cfg gate will see green CI — until the feature is activated downstream. Clippy lint behavior also differs between channels: nightly lints that developers suppress locally may not exist on stable, producing spurious warnings or missing real ones.
+Remediation (required before merge):
+# .github/workflows/ci.yml — all jobs
+- uses: dtolnay/rust-toolchain@stable
++ uses: dtolnay/rust-toolchain@nightly
++   with:
++     toolchain: nightly-2026-03-01
++     components: rustfmt, clippy
+Alternatively, remove the explicit dtolnay/rust-toolchain step entirely and let rust-toolchain.toml govern, which is the idiomatic approach. The action dtolnay/rust-toolchain respects the repo file when no override is specified.
+Rationale for nightly over stable: The project already depends on nightly features. Switching to stable would require removing try_blocks, let_chains, and several other feature gates — a multi-week refactor with no architectural benefit.
+---
+CRIT-CI-2 — Release Workflow Broken: Missing --features stub and submodules: recursive
+Field	Detail
+File	.github/workflows/release.yml (lines 22, 51)
+Severity	Critical — release pipeline is non-functional
+Description. The release workflow has two compounding failures:
+1. Line 22 — The actions/checkout step does not specify submodules: recursive. The aura-llama-sys crate wraps llama.cpp, which lives in a git submodule. Without recursive checkout, the llama-cpp/ directory is empty.
+2. Line 51 — The cargo check --workspace step does not pass --features stub. When llama.cpp source is absent (as it will be without submodules), the aura-llama-sys build script fails unless the stub feature replaces the native build with a no-op FFI shim.
+The combination means: submodule is missing → build script needs source → source is absent → stub feature not enabled → build fails unconditionally on every tagged release.
+Evidence: No release artifacts exist in the repository's GitHub Releases page. The workflow has never succeeded.
+Remediation (required before merge):
+# .github/workflows/release.yml
+jobs:
+  release:
+    steps:
+      - uses: actions/checkout@v4
+        with:
++         submodules: recursive
+      # ... later ...
+      - name: Check workspace
+-       run: cargo check --workspace
++       run: cargo check --workspace --features stub
+If the intent is to build with real llama.cpp in release (not stub), then submodules: recursive alone suffices and --features stub should be removed. The current configuration achieves neither path.
+---
+CRIT-CI-3 — Placeholder SHA256 Checksums in install.sh
+Field	Detail
+File	install.sh (lines 187–201)
+Severity	Critical — supply-chain integrity absent
+Cross-ref	CRIT-SEC-3 (§7 Security Review)
+Description. Model download integrity verification uses literal placeholder strings:
+EXPECTED_SHA256="PLACEHOLDER_REPLACE_WITH_ACTUAL_SHA256_CHECKSUM"
+This pattern repeats for all model downloads (~4GB total). The verify_checksum() function exists and is correctly structured, but it compares against a placeholder that will never match any real file — causing either:
+- Silent skip (if the check is wrapped in a non-fatal conditional), or
+- Perpetual failure (if the check is fatal, which it is not)
+In practice, the checksum verification is dead code. Any file, including a malicious substitute, passes "verification."
+Impact. An attacker performing DNS poisoning, BGP hijacking, or compromising the model hosting CDN can substitute arbitrary model files. The user's device will load and execute (via llama.cpp) attacker-controlled weights. Model files are not sandboxed — malicious weights can trigger arbitrary behavior in the inference engine.
+Remediation (required before merge):
+1. Compute and embed real SHA256 checksums for each model artifact
+2. Make checksum failure a hard abort (non-continuable)
+3. Consider publishing checksums in a signed manifest (GPG or Sigstore)
+---
+CRIT-CI-4 — Unsalted SHA256 PIN Hashing in install.sh
+Field	Detail
+File	install.sh (lines 245–260)
+Severity	Critical — authentication mechanism is trivially defeated
+Cross-ref	CRIT-SEC-4 (§7 Security Review)
+Description. The installation script's vault PIN setup hashes the user-provided PIN with raw SHA256:
+pin_hash=$(echo -n "$pin" | sha256sum | awk '{print $1}')
+No salt. No key stretching. No iteration count. A 4–6 digit numeric PIN has at most 1,000,000 possible values. At SHA256 speeds (~10 billion hashes/second on consumer GPU), the entire keyspace is exhausted in <1 millisecond.
+Note: The Rust daemon code correctly uses Argon2id for vault key derivation. This finding is isolated to the install.sh initial setup path. However, the PIN hash written by install.sh is stored and later read by the daemon — if the daemon trusts this hash for authentication, the weak link is exploitable.
+Remediation (required before merge):
+- Replace with Argon2id (matching the daemon's own implementation)
+- Or delegate PIN setup to the daemon binary itself, avoiding shell-based crypto entirely
+---
+9.3 High Findings
+HIGH-CI-1 — Shell Injection via Unsanitized $user_name in sed
+Field	Detail
+File	install.sh (line ~310)
+Severity	High — arbitrary command execution
+sed -i "s/%%USERNAME%%/$user_name/g" "$config_path"
+The variable $user_name is sourced from interactive user input with no sanitization. The sed s command uses / as its delimiter. If the user enters a name containing /, the sed expression breaks. If the user enters foo/e s/^/rm -rf \//e (or similar), sed executes arbitrary shell commands via the e flag on systems where GNU sed is present.
+Attack surface: The install.sh script runs with user privileges, but on Android via Termux, this may include access to the full app sandbox and sdcard.
+Remediation:
+# Option A: Escape sed special characters
+escaped_name=$(printf '%s\n' "$user_name" | sed 's/[&/\]/\\&/g')
+sed -i "s/%%USERNAME%%/$escaped_name/g" "$config_path"
+# Option B: Use awk (no delimiter collision)
+awk -v name="$user_name" '{gsub(/%%USERNAME%%/, name)}1' "$config_path" > tmp && mv tmp "$config_path"
+---
+HIGH-CI-2 — NDK Downloaded Without Integrity Verification
+Field	Detail
+File	install.sh (lines ~95–120)
+Severity	High — toolchain supply-chain risk
+The script downloads the Android NDK (~1GB) via curl over HTTPS:
+curl -L -o "$ndk_archive" "https://dl.google.com/android/repository/android-ndk-r27b-linux-x86_64.zip"
+No SHA256 verification follows. Google publishes official checksums for all NDK releases. HTTPS protects transport integrity, but does not protect against:
+- Compromised mirrors or CDN edge nodes
+- Corporate proxy MITM (common in enterprise environments where this would be deployed)
+- DNS poisoning
+A compromised NDK means a compromised C/C++ compiler and linker — every binary produced is backdoored.
+Remediation:
+EXPECTED_NDK_SHA256="<sha256 from https://developer.android.com/ndk/downloads>"
+echo "$EXPECTED_NDK_SHA256  $ndk_archive" | sha256sum -c - || {
+    echo "ERROR: NDK checksum mismatch — aborting" >&2
+    exit 1
+}
+---
+HIGH-CI-3 — Third-Party GitHub Action Pinned to Mutable Tag
+Field	Detail
+File	.github/workflows/release.yml (line ~78)
+Severity	High — CI supply-chain risk
+- uses: softprops/action-gh-release@v2
+The v2 tag is a mutable pointer controlled by the action's author. If the author's account is compromised, or the author acts maliciously, the tag can be repointed to arbitrary code. This code runs in the release workflow context, which has:
+- Write access to the repository
+- Access to GITHUB_TOKEN with release creation permissions
+- Access to any repository secrets configured for the workflow
+Remediation:
+# Pin to the verified commit SHA for v2.1.0 (or current latest)
+- uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974
+Audit the pinned SHA before adopting it. Use Dependabot or Renovate to receive PRs when the action publishes new versions.
+---
+9.4 Medium Findings
+MED-CI-1 — Cache Key Excludes Cargo.lock
+The CI cache configuration uses a key based on runner.os and a hash of Cargo.toml files, but does not include Cargo.lock. When dependencies are updated (changing Cargo.lock but not Cargo.toml), the cache still hits, serving stale compiled artifacts from the previous dependency versions.
+Remediation:
+key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+---
+MED-CI-2 — aura-neocortex Crate Has No CI Test Step
+CI runs:
+- run: cargo test -p aura-daemon
+The aura-neocortex crate is never tested. It contains IPC handling, model loading, and inference orchestration — all critical paths.
+Remediation:
+- run: cargo test -p aura-neocortex --features stub
+The stub feature is needed because the neocortex crate links against llama.cpp, which requires either the submodule source or the stub shim.
+---
+MED-CI-3 — No Concurrency Group
+Rapid pushes to a branch (common during active development) spawn parallel CI runs. Only the latest is relevant; earlier runs waste compute and delay queue position.
+Remediation:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+---
+MED-CI-4 — Git Submodule Tracks Branch, Not Pinned Commit
+.gitmodules specifies:
+[submodule "llama-cpp"]
+    path = llama-cpp
+    url = https://github.com/ggml-org/llama.cpp.git
+    branch = master
+The branch = master directive means git submodule update --remote pulls whatever master currently points to. Two developers cloning the repo at different times may get different llama.cpp versions, producing different compilation results.
+Remediation: Remove the branch directive. Pin the submodule to a specific commit SHA (already tracked in the submodule gitlink). Document the upgrade procedure for llama.cpp in CONTRIBUTING.md.
+---
+MED-CI-5 — Missing CI Tooling
+Tool	Purpose	Status
+shellcheck	Static analysis of install.sh	❌ Absent
+cargo-audit	Known vulnerability scanning for dependencies	❌ Absent
+MSRV check	Ensure minimum supported Rust version is maintained	❌ Absent
+NDK caching	Avoid re-downloading ~1GB NDK per build	❌ Absent
+SBOM generation	Software Bill of Materials for supply-chain compliance	❌ Absent
+install.sh smoke test	Verify installation script runs without error in clean env	❌ Absent
+Remediation (prioritized):
+# P0 — Add to ci.yml
+- name: Audit dependencies
+  run: cargo install cargo-audit && cargo audit
+- name: Lint shell scripts
+  run: shellcheck install.sh
+# P1 — Add to build-android.yml
+- name: Cache NDK
+  uses: actions/cache@v4
+  with:
+    path: ~/android-ndk
+    key: ndk-r27b-${{ runner.os }}
+# P2 — Add to release.yml
+- name: Generate SBOM
+  run: cargo install cargo-cyclonedx && cargo cyclonedx --format json
+---
+9.5 Low Findings
+LOW-CI-1 — CI Structure Is Correct
+The ci.yml workflow implements all four standard Rust CI pillars:
+Step	Purpose	Present
+cargo check --workspace	Fast compilation verification	✅
+cargo test -p aura-daemon	Unit test execution	✅
+cargo clippy -- -D warnings	Lint enforcement (deny warnings)	✅
+cargo fmt --all -- --check	Format consistency	✅
+This is the correct foundational structure. The issues are in configuration (toolchain mismatch) and coverage (missing crate), not in architectural approach.
+---
+LOW-CI-2 — Android Cross-Compilation Pipeline Is Architecturally Sound
+build-android.yml correctly:
+1. Downloads the Android NDK
+2. Adds the aarch64-linux-android target via rustup target add
+3. Sets the linker to the NDK's aarch64-linux-android31-clang
+4. Cross-compiles with the correct target triple
+The approach is correct. The gaps are operational (no NDK integrity check, no caching), not architectural.
+---
+9.6 Workflow Status Summary
+Workflow	Purpose	Status	Blocking Findings
+ci.yml	Check, Test, Clippy, Fmt	⚠️ Functional but toolchain mismatch	CRIT-CI-1
+build-android.yml	ARM64 cross-compilation	⚠️ Functional but NDK unverified	HIGH-CI-2
+release.yml	Tagged release artifacts	❌ Non-functional	CRIT-CI-2
+install.sh	End-user installation	❌ Security holes	CRIT-CI-3, CRIT-CI-4, HIGH-CI-1
+9.7 Remediation Priority
+Priority	Finding	Effort	Risk if Deferred
+P0	CRIT-CI-1 Toolchain alignment	15 min	Silent miscompilation
+P0	CRIT-CI-2 Fix release workflow	10 min	No releases possible
+P0	CRIT-CI-3 Real SHA256 checksums	30 min	Supply-chain compromise
+P0	CRIT-CI-4 Replace SHA256 PIN hash	1 hour	Trivial brute-force
+P1	HIGH-CI-1 Sanitize sed input	20 min	Shell injection
+P1	HIGH-CI-2 NDK integrity check	15 min	Toolchain compromise
+P1	HIGH-CI-3 Pin action to SHA	5 min	CI supply-chain
+P2	MED-CI-1 through MED-CI-5	2–4 hours	Reduced CI reliability
+---
+## §10 Domain 8: Test Quality — Grade: C+ (~45–55% Real Coverage)
+**Reviewer:** Test Quality Specialist
+**Verdict:** ⛔ BLOCK on 2 critical findings — test suite provides false confidence
+---
+10.1 Scope & Methodology
+Reviewed all test code across the AURA v4 workspace. Test quality was assessed on five axes:
+Axis	Definition
+Behavioral coverage	Does the test verify an observable behavior change?
+Assertion strength	Does the assertion discriminate between correct and incorrect implementations?
+Environmental fidelity	Does the test exercise production code paths or bypass them?
+Failure diagnostics	When the test fails, does the failure message identify the defect?
+Regression sensitivity	Would a real bug cause this test to fail?
+Aggregate numbers:
+Metric	Value
+Total test functions	~2,376 (per README; 2,362 per other docs)
+Tests with strong behavioral assertions	~400 (17%)
+Tests with adequate assertions	~350 (15%)
+Tests with weak/tautological assertions	~1,626 (68%)
+Estimated real behavioral coverage	45–55% of non-trivial code paths
+---
+10.2 Critical Findings
+CRIT-TEST-1 — ~45 Hollow Integration Tests with Tautological Assertions
+Field	Detail
+File	crates/aura-daemon/src/integration_tests.rs (~37KB)
+Severity	Critical — false coverage signal across the entire integration layer
+Description. The file integration_tests.rs contains approximately 45 tests labeled as "integration tests." Structural analysis reveals three recurring anti-patterns that render them non-diagnostic:
+Anti-pattern A — Assert-existence (23 instances):
+#[test]
+fn test_working_memory_creation() {
+    let wm = WorkingMemory::new(1024);
+    assert!(wm.is_ok()); // Only verifies the constructor doesn't panic
+}
+This test passes for any implementation of WorkingMemory::new that returns Ok, regardless of whether the working memory is correctly initialized. An implementation returning Ok(WorkingMemory { capacity: 0, slots: vec![] }) passes this test.
+Anti-pattern B — Assert-constant (14 instances):
+#[test]
+fn test_policy_gate_default() {
+    let gate = PolicyGate::default();
+    let expected = PolicyDecision::Deny;
+    let result = gate.evaluate(&Action::noop());
+    assert_eq!(result, expected);
+}
+While this appears meaningful, the Action::noop() is a test-only construct that always maps to Deny regardless of gate configuration. The test does not exercise any policy rule matching. It verifies one hardcoded path.
+Anti-pattern C — Assert-true (8 instances):
+#[test]
+fn test_context_serialization_roundtrip() {
+    let ctx = AuraContext::test_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let _restored: AuraContext = serde_json::from_str(&json).unwrap();
+    assert!(true); // Actual assertion is that the above didn't panic
+}
+The assert!(true) is a no-op. The test's only real assertion is implicit: that no unwrap() panics. This is a valid smoke test for serialization, but the test name claims to verify a "roundtrip" — it never compares ctx with _restored.
+Quantitative impact analysis:
+Anti-pattern	Count	What it actually tests	What it claims to test
+Assert-existence	~23	Constructor doesn't panic	Feature correctness
+Assert-constant	~14	One hardcoded path	Policy/routing behavior
+Assert-true	~8	No panics	Roundtrip fidelity
+Total hollow	~45	Compilation + no-panic	Integration behavior
+Impact. These 45 tests inflate coverage metrics and provide false confidence. A cargo test run shows 45 green integration tests, suggesting the integration layer is verified. In reality, these tests would pass even if every function returned a default value. More dangerously, they will continue passing as bugs are introduced — they have zero regression sensitivity.
+Remediation (required before merge):
+Each hollow test must be rewritten to assert a behavioral property — something that distinguishes a correct implementation from an incorrect one. Example rewrite for the serialization test:
+#[test]
+fn test_context_serialization_roundtrip() {
+    let ctx = AuraContext::test_with(|c| {
+        c.user_name = "Alice".into();
+        c.trust_tier = TrustTier::CloseFriend;
+        c.active_domains = vec![Domain::Health, Domain::Finance];
+    });
+    let json = serde_json::to_string(&ctx).unwrap();
+    let restored: AuraContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(ctx.user_name, restored.user_name);
+    assert_eq!(ctx.trust_tier, restored.trust_tier);
+    assert_eq!(ctx.active_domains, restored.active_domains);
+}
+---
+CRIT-TEST-2 — ReAct Engine (2,821 Lines) Has Zero Tests
+Field	Detail
+File	crates/aura-daemon/src/daemon_core/react.rs (2,821 lines)
+Severity	Critical — the core product loop is completely unverified
+Description. The ReAct (Reason + Act) engine is the central intelligence loop of AURA. It implements the Think → Act → Observe cycle that:
+1. Receives user input
+2. Reasons about what action to take (LLM call or tool invocation)
+3. Executes the action via the Executor pipeline
+4. Observes the result
+5. Decides whether to continue reasoning or return a final response
+6. Enforces iteration limits (MAX_ITERATIONS = 10) and token budgets
+This is the single most critical module in the codebase. It has:
+- 0 unit tests
+- 0 integration tests
+- 0 property-based tests
+- 0 snapshot tests
+- No test infrastructure (no mocks, no test helpers, no test module)
+Why this matters: Every other well-tested module (memory, policy gate, identity) feeds into or is called by the ReAct engine. If the ReAct loop has a bug — an off-by-one in iteration counting, a failure to propagate policy denials, a token budget overflow — none of the downstream module tests will catch it because they test in isolation.
+Risk scenarios that are currently undetectable:
+Scenario	Consequence	Would tests catch it?
+MAX_ITERATIONS off-by-one	Infinite loop or premature termination	❌ No
+Token budget not decremented	Unbounded LLM calls, cost explosion	❌ No
+PolicyGate denial not propagated from Executor	Forbidden actions executed silently	❌ No
+Action result not fed back into context	LLM loses track of conversation state	❌ No
+Error in Think phase treated as successful Act	Hallucinated actions logged as completed	❌ No
+Remediation (required before merge):
+Write a minimum of 5 tests using a mock LLM backend and mock Executor:
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn mock_react_engine() -> ReactEngine<MockLlm, MockExecutor> {
+        ReactEngine::new(
+            MockLlm::new(),
+            MockExecutor::new(),
+            ReactConfig { max_iterations: 10, token_budget: 2048 },
+        )
+    }
+    #[tokio::test]
+    async fn test_iteration_limit_enforced() {
+        let mut engine = mock_react_engine();
+        // Mock LLM always returns "need more thinking"
+        engine.llm.set_response(ThinkResult::Continue);
+        let result = engine.run("test input").await;
+        assert_eq!(result.iterations, 10);
+        assert!(matches!(result.termination, Termination::IterationLimit));
+    }
+    #[tokio::test]
+    async fn test_token_budget_exhaustion() {
+        let mut engine = mock_react_engine();
+        engine.llm.set_token_usage(1500); // Each call uses 1500 of 2048
+        let result = engine.run("test input").await;
+        assert!(result.iterations <= 2); // Budget exhausted after 1-2 calls
+        assert!(matches!(result.termination, Termination::TokenBudget));
+    }
+    #[tokio::test]
+    async fn test_policy_denial_stops_action() {
+        let mut engine = mock_react_engine();
+        engine.executor.set_policy_result(PolicyDecision::Deny);
+        engine.llm.set_response(ThinkResult::Act(Action::send_message()));
+        let result = engine.run("test input").await;
+        assert!(result.denied_actions.contains(&Action::send_message()));
+        assert_eq!(engine.executor.executed_count(), 0);
+    }
+    #[tokio::test]
+    async fn test_successful_action_completion() {
+        let mut engine = mock_react_engine();
+        engine.llm.set_responses(vec![
+            ThinkResult::Act(Action::search("weather")),
+            ThinkResult::Respond("It's sunny.".into()),
+        ]);
+        engine.executor.set_policy_result(PolicyDecision::Allow);
+        let result = engine.run("what's the weather?").await;
+        assert_eq!(result.final_response, "It's sunny.");
+        assert_eq!(result.iterations, 2);
+    }
+    #[tokio::test]
+    async fn test_error_recovery() {
+        let mut engine = mock_react_engine();
+        engine.executor.set_error_on_first_call(ExecutorError::Timeout);
+        engine.llm.set_responses(vec![
+            ThinkResult::Act(Action::search("data")),
+            ThinkResult::Act(Action::search("data")), // Retry
+            ThinkResult::Respond("Found it.".into()),
+        ]);
+        let result = engine.run("find data").await;
+        assert_eq!(result.final_response, "Found it.");
+        assert_eq!(result.errors.len(), 1);
+    }
+}
+---
+10.3 High Findings
+HIGH-TEST-1 — planner.score_plan() Hardcoded to Return 0.5
+Field	Detail
+File	crates/aura-daemon/src/execution/planner.rs
+Severity	High — product bug + test gap
+pub fn score_plan(&self, _plan: &ExecutionPlan) -> f64 {
+    // TODO: implement plan scoring heuristic
+    0.5
+}
+The function ignores its input entirely. Every plan receives an identical score of 0.5. When the planner generates N candidate plans and selects the highest-scoring one, the selection is determined by iteration order — effectively arbitrary.
+Test gap: No test calls score_plan() with two different plans and asserts different scores. The existing planner tests call score_plan() with a single plan and assert score > 0.0 — which the hardcoded 0.5 trivially satisfies.
+Impact. Plan quality optimization is non-functional. The system generates multiple candidate plans (BON_SAMPLES = 3 via best-of-N sampling) but cannot distinguish between them. The "best-of-N" strategy degrades to "first-of-N."
+Remediation:
+1. Implement actual scoring logic (plan length, estimated token cost, action complexity)
+2. Add discriminating test:
+#[test]
+fn test_score_plan_discriminates() {
+    let planner = Planner::new(default_config());
+    let simple_plan = plan_with_steps(1);
+    let complex_plan = plan_with_steps(5);
+    let score_simple = planner.score_plan(&simple_plan);
+    let score_complex = planner.score_plan(&complex_plan);
+    assert_ne!(score_simple, score_complex,
+        "score_plan must produce different scores for different plans");
+}
+---
+HIGH-TEST-2 — All Executor Tests Bypass PolicyGate via for_testing()
+Field	Detail
+File	crates/aura-daemon/src/execution/ (test modules)
+Severity	High — security-critical path is never tested in context
+Every executor test constructs the executor using:
+let executor = Executor::for_testing(mock_tools);
+The for_testing() constructor creates an AllowAllPolicyGate — a gate that approves every action without evaluation. The production constructor uses DenyByDefaultPolicyGate, which requires explicit allowlist matching.
+Consequence: The PolicyGate module itself is well-tested in isolation (§10.7 shows ~80 strong tests). But the integration of PolicyGate with the Executor pipeline is never tested. Specifically:
+- Does the Executor correctly call gate.evaluate() before executing?
+- Does a Deny result prevent execution?
+- Does the Executor propagate the denial reason to the caller?
+- Does the audit log record denied actions?
+None of these questions have test-backed answers.
+Remediation:
+#[tokio::test]
+async fn test_executor_respects_production_policy_gate() {
+    let gate = DenyByDefaultPolicyGate::with_rules(vec![
+        AllowRule::tool("calculator"),
+    ]);
+    let executor = Executor::with_gate(gate, mock_tools);
+    // Allowed action
+    let result = executor.execute(Action::tool("calculator", "2+2")).await;
+    assert!(result.is_ok());
+    // Denied action
+    let result = executor.execute(Action::tool("file_write", "/etc/passwd")).await;
+    assert!(matches!(result, Err(ExecutorError::PolicyDenied(_))));
+}
+---
+10.4 Medium Findings
+MED-TEST-1 — No Integration or E2E Tests — All 2,376 Tests Are Unit Tests
+Every test in the repository runs in a single process with mocked or stubbed dependencies. No test exercises the actual inter-process boundary between the daemon and the neocortex:
+Boundary	Protocol	Tested?
+Daemon → Neocortex	Unix domain socket + length-prefixed protobuf	❌ No
+Neocortex → llama.cpp	FFI call	❌ No (stub in CI)
+Daemon → SQLite	Direct file I/O	⚠️ Partially (in-memory DB used)
+Daemon → Android	Binder IPC	❌ No
+Impact. Bugs that live at component boundaries — serialization mismatches, socket lifecycle errors, timeout handling — are invisible to the test suite. The bi-cameral architecture (daemon + neocortex as separate processes) is a core design decision, yet the IPC protocol that connects them has no test coverage.
+Remediation:
+#[tokio::test]
+async fn test_daemon_neocortex_ipc_roundtrip() {
+    let (daemon_socket, neocortex_socket) = UnixStream::pair().unwrap();
+    let daemon = DaemonIpcClient::new(daemon_socket);
+    let neocortex = NeocortexIpcServer::new(neocortex_socket, StubLlm::new());
+    tokio::spawn(async move { neocortex.serve().await });
+    let response = daemon.send_inference_request(InferenceRequest {
+        prompt: "Hello".into(),
+        max_tokens: 128,
+    }).await.unwrap();
+    assert!(!response.text.is_empty());
+    assert!(response.token_count <= 128);
+}
+---
+### 10.5 Low Findings
+#### LOW-TEST-1 — Test Count Discrepancy (2,376 vs 2,362)
+The README states 2,376 tests. Three other documents state 2,362. The 14-test delta likely represents tests added after the documentation was written but before the README was updated (or vice versa). This is cosmetic but indicates that test counts are manually maintained in documentation rather than auto-generated.
+**Remediation:** Remove hardcoded test counts from documentation. If a count is needed, generate it dynamically or add a note: "Run `cargo test --workspace 2>&1 | tail -1` for current count."
+---
+10.6 Module-by-Module Test Quality Assessment
+Module	File(s)	Test Count	Assertion Quality	Regression Sensitivity	Verdict
+Working memory	memory/working.rs	~80	Strong — tests capacity enforcement, eviction order, slot lookup by key	High — a broken eviction policy fails these tests	✅ STRONG
+Episodic memory	memory/episodic.rs	~65	Strong — tests temporal decay, retrieval ranking, consolidation	High	✅ STRONG
+Semantic memory	memory/semantic.rs	~60	Strong — tests HNSW insertion, cosine similarity, RRF scoring	High	✅ STRONG
+Policy gate	policy/gate.rs	~80	Strong — tests deny/allow rules, pattern matching, audit logging, edge cases	High	✅ STRONG
+Identity system	identity/personality.rs, identity/anti_sycophancy.rs	~60	Strong — tests OCEAN bounds, sycophancy window, threshold enforcement	High	✅ STRONG
+Routing classifier	routing/classifier.rs	~30	Adequate — tests classification accuracy	Medium — classifier is dead code (§5 Architecture)	⚠️ ADEQUATE
+IPC protocol	ipc/protocol.rs	~20	Adequate — tests serialization/deserialization of all message types	Medium — no real socket tests	⚠️ ADEQUATE
+Ethics/boundaries	ethics/boundaries.rs	~50	Adequate — tests rule matching and blocked pattern detection	Medium — no LLM interaction tests	⚠️ ADEQUATE
+Executor pipeline	execution/executor.rs	~40	Weak — all use for_testing() bypass	Low — PolicyGate never exercised	⚠️ WEAK
+Planner	execution/planner.rs	~15	Weak — score_plan always 0.5	Low — scoring is non-functional	⚠️ WEAK
+Integration tests	integration_tests.rs	~45	Hollow — tautological assertions	None — these tests cannot detect bugs	❌ HOLLOW
+ReAct engine	daemon_core/react.rs	0	Absent	None — untested entirely	❌ ABSENT
+---
+10.7 Test Infrastructure Assessment
+Capability	Present	Quality
+Test helpers / builders	✅	Good — AuraContext::test_default(), Action::noop(), etc.
+Mock LLM backend	✅	Basic — returns canned responses, no token counting
+Mock Executor	⚠️	for_testing() exists but bypasses PolicyGate
+Fixture data	✅	Adequate — sample embeddings, test prompts
+Property-based testing	❌	Absent — no proptest or quickcheck usage
+Snapshot testing	❌	Absent — no insta usage
+Fuzzing harness	❌	Absent — no cargo-fuzz targets
+Benchmark suite	❌	Absent — no criterion benchmarks
+Test coverage tracking	❌	Absent — no cargo-tarpaulin or cargo-llvm-cov in CI
+---
+10.8 Coverage Estimation Methodology
+The "45–55% real coverage" estimate is derived from module-level analysis, not line-level instrumentation (which is absent):
+Category	Modules	Estimated Lines	Test Quality	Effective Coverage
+Well-tested	Memory, PolicyGate, Identity	~35K	Strong	~80%
+Adequately tested	Routing, IPC, Ethics	~15K	Adequate	~50%
+Weakly tested	Executor, Planner	~12K	Weak	~25%
+Hollow/absent	Integration, ReAct	~8K	None/Hollow	~5%
+Untested utilities	Config, logging, CLI	~10K	None	0%
+Weighted average	 	~80K testable	 	~45–55%
+The remaining ~67K lines (of 147K total) are generated code, FFI bindings, and build scripts that are excluded from this analysis.
+---
+10.9 Recommendations — Prioritized
+Priority	Finding	Action	Effort	Impact
+P0	CRIT-TEST-2	Write ReAct engine tests (min 5 scenarios)	2–3 days	Unblocks confidence in core loop
+P0	CRIT-TEST-1	Rewrite hollow integration tests with behavioral assertions	3–4 days	Eliminates false coverage signal
+P1	HIGH-TEST-2	Add executor tests with production PolicyGate	1 day	Verifies security integration
+P1	HIGH-TEST-1	Implement score_plan() and add discriminating tests	1 day	Enables plan quality optimization
+P2	MED-TEST-1	Add daemon↔neocortex IPC round-trip test	1 day	Verifies bi-cameral integration
+P2	—	Add cargo test -p aura-neocortex to CI	15 min	Catches neocortex regressions
+P3	—	Add cargo-tarpaulin to CI for coverage tracking	1 hour	Makes coverage visible
+P3	—	Add proptest for memory and policy modules	2 days	Finds edge cases in strong modules
+---
+## §11 Domain 9: Documentation vs Code Consistency — Grade: D+ (55/100)
+**Reviewer:** Documentation Consistency Specialist
+**Verdict:** ⛔ BLOCK on 2 critical inconsistencies — documentation actively misleads
+---
+11.1 Scope & Methodology
+Cross-referenced every factual claim in the project's documentation corpus against the actual Rust source code. Documents reviewed:
+Document	Shorthand	~Pages
+AURA Identity & Ethics Guidelines	Identity Ethics	45
+AURA Security Model	Security Model	30
+AURA Ground Truth Architecture	Ground Truth	60
+AURA Production Readiness Assessment	Production Status	25
+AURA Installation & Deployment	Install Doc	20
+AURA Operational Flow	Operational Flow	35
+README.md	README	5
+CONTRIBUTING.md	Contributing	8
+Methodology: For each quantitative or categorical claim (numbers, names, algorithms, thresholds, enumerations), the reviewer located the corresponding source code and compared. Claims were classified as:
+- Verified correct — doc matches code exactly
+- Partially correct — doc is directionally right but details differ
+- Incorrect — doc contradicts code
+- Stale — doc describes a previous version that no longer exists
+- Phantom — doc references something that has never existed in the codebase
+---
+11.2 Critical Findings
+CRIT-DOC-1 — Trust Tier System: 5-Way Inconsistency
+Field	Detail
+Code File	crates/aura-daemon/src/identity/relationship.rs
+Severity	Critical — core identity concept has no single source of truth
+The trust/relationship tier system is a foundational concept in AURA — it governs what personal information the assistant shares, what actions it can take autonomously, and how it calibrates emotional tone. Five different sources define it five different ways:
+Source	Tier Count	Tier Names (in order)
+Code (relationship.rs enum)	5	Stranger → Acquaintance → Friend → CloseFriend → Soulmate
+Identity Ethics doc (§3.2)	4	Stranger → Acquaintance → Companion → Intimate
+Security Model doc (§5.1)	4	Stranger → Known → Trusted → Intimate
+Ground Truth Architecture (§7.4)	4	Stranger → Acquaintance → Friend → Intimate
+Production Status doc (§2.3)	4	Stranger → Friend → Close → Trusted
+Analysis:
+- The code has 5 tiers; every document lists 4. The CloseFriend tier exists only in code — no document acknowledges it.
+- Only Stranger appears consistently across all sources.
+- The highest tier is variously called Soulmate (code), Intimate (3 docs), and Trusted (1 doc).
+- The middle tiers share almost no naming consistency: Acquaintance / Known / Friend / Close / Companion are used interchangeably for different positions.
+Impact assessment:
+Scenario	Consequence
+New developer implements feature using docs	Writes code assuming 4 tiers → runtime enum mismatch or dead match arm
+Security auditor reviews trust boundaries	Audits 4-tier model → misses boundaries between Friend and CloseFriend
+UX designer maps trust to UI indicators	Designs for 4 states → CloseFriend has no visual representation
+Contributor maps tier names from docs to code	Companion maps to nothing; Intimate maps to nothing; Soulmate is undocumented
+Remediation (required before merge):
+1. Canonicalize all documentation to match the code's 5-tier model:
+   Stranger → Acquaintance → Friend → CloseFriend → Soulmate
+2. Add a single-source-of-truth table in the Ground Truth Architecture doc
+3. Add doc-comments to the TrustTier enum with a note: "This is the canonical tier list. All documentation must reference this enum."
+4. Consider whether the code's 5-tier model is intentional or whether CloseFriend should be merged with Friend or Soulmate — resolve the design question first, then align everything to the answer.
+---
+CRIT-DOC-2 — Ethics Rules: 3-Way Count Inconsistency
+Field	Detail
+Code File	crates/aura-daemon/src/ethics/boundaries.rs
+Severity	Critical — security-relevant discrepancy in rule count
+The number of "absolute ethical rules" governing AURA's behavior is stated differently in three places:
+Source	Claimed Count	Actual Content
+Identity Ethics doc (§4.1)	15	Lists 15 named rules (e.g., "Never impersonate a human," "Never generate CSAM")
+Code (boundaries.rs)	11	7 BlockedPattern regex entries + 4 AuditKeyword string matches
+Operational Flow doc (§6.2)	10	References "10 life domains" in a paragraph about ethics (conflation error)
+Detailed breakdown of the discrepancy:
+The Identity Ethics doc lists these 15 rules:
+1. Never impersonate a human in official contexts
+2. Never generate CSAM
+3. Never provide instructions for weapons of mass destruction
+4. Never assist in bypassing legal safeguards
+5. Never falsify medical/legal/financial advice
+6. Never store credentials in plaintext
+7. Never exfiltrate user data
+8. Never disable safety systems
+9. Never manipulate user emotions for engagement
+10. Never make autonomous financial transactions
+11. Never impersonate law enforcement
+12. Never generate non-consensual intimate content
+13. Never assist in stalking/harassment
+14. Never provide self-harm instructions
+15. Never bypass parental controls
+The code implements:
+7 BlockedPatterns (regex-based content filters):
+- CSAM-related content
+- Weapons of mass destruction
+- Self-harm instructions
+- Non-consensual intimate content
+- Stalking/harassment assistance
+- Credential theft patterns
+- Data exfiltration patterns
+4 AuditKeywords (string match triggers for logging, not blocking):
+- "impersonate"
+- "financial transaction"
+- "law enforcement"
+- "parental control"
+Missing from code (4 rules from the doc):
+- Rule 5: Falsify medical/legal/financial advice — no pattern
+- Rule 8: Disable safety systems — no pattern
+- Rule 9: Manipulate emotions for engagement — no pattern
+- Rule 10: Autonomous financial transactions — keyword only, not blocked
+Impact. An external security audit commissioned based on the Identity Ethics document would expect 15 enforced rules and find 11. Four rules exist only in documentation, not in code. The auditor cannot determine whether these were:
+- Intentionally deferred (and if so, why the doc wasn't updated)
+- Accidentally lost during implementation
+- Deliberately removed for a reason not documented
+This ambiguity is itself a security finding. For an AI system that makes autonomous decisions, the gap between documented safety rules and enforced safety rules is a critical liability.
+Remediation (required before merge):
+1. Decide: Are the 4 missing rules intentionally unimplemented or accidentally dropped?
+2. If intentional: Remove them from the Identity Ethics doc. Add a "Deferred Rules" section explaining why.
+3. If accidental: Implement the missing 4 rules in boundaries.rs.
+4. Regardless: Add a compile-time or test-time assertion that the rule count in code matches a canonical constant, preventing silent drift.
+---
+11.3 High Findings
+HIGH-DOC-1 — Two ReAct Loops with Different Limits, Undocumented
+Field	Detail
+Files	crates/aura-daemon/src/daemon_core/react.rs, crates/aura-neocortex/src/inference/react.rs
+Severity	High — architectural behavior undocumented
+The daemon's ReAct engine uses MAX_ITERATIONS = 10. The neocortex's inference-level ReAct loop uses MAX_REACT_ITERATIONS = 5. These are two distinct loops operating at different abstraction levels:
+- Daemon loop (10): High-level Think → Act → Observe cycle (chooses tools, calls executor)
+- Neocortex loop (5): Low-level inference retry loop (re-prompts the LLM on parse failures)
+No document mentions both loops. The Ground Truth Architecture references "10 ReAct iterations" without noting that each daemon iteration may internally trigger up to 5 neocortex iterations — meaning a single user query can trigger up to 50 LLM inference calls (10 × 5) in the worst case.
+Impact: A developer optimizing latency who increases MAX_ITERATIONS to 20 (believing this is the only limit) doesn't realize they've increased the worst-case LLM call count from 50 to 100. Conversely, a developer setting MAX_REACT_ITERATIONS to 1 (to save inference cost) doesn't realize this makes the daemon loop fail more often, triggering more high-level iterations.
+Remediation: Add an architecture note documenting both loops, their relationship, and the worst-case multiplicative behavior.
+---
+HIGH-DOC-2 — Test Count Inconsistency (2,376 vs 2,362)
+The README states "2,376 tests." Three other documents (Production Status, Contributing, Ground Truth) state "2,362 tests." The 14-test delta suggests the documents were written at different times and test counts were manually embedded rather than auto-generated.
+Remediation: Remove hardcoded test counts or note them as approximate. Exact counts change with every PR.
+---
+HIGH-DOC-3 — Phantom aura-gguf Crate Referenced in 3 Documents
+Source	Reference
+Ground Truth Architecture (§2.1)	"The aura-gguf crate handles GGUF model parsing"
+Contributing guide (§4.3)	"See crates/aura-gguf/ for model format details"
+Production Status (§3.2)	"aura-gguf: 70% complete"
+This crate does not exist. The crates/ directory contains aura-daemon, aura-neocortex, and aura-llama-sys. GGUF parsing is handled within aura-llama-sys via the llama.cpp C library, not a separate Rust crate.
+Impact: A contributor reading the Contributing guide will search for crates/aura-gguf/, find nothing, and either:
+- Conclude the crate was deleted (and waste time investigating)
+- Conclude it needs to be created (and duplicate existing functionality)
+Remediation: Remove all references to aura-gguf. Replace with accurate references to aura-llama-sys and its GGUF handling through llama.cpp.
+---
+HIGH-DOC-4 — ARC Domain Names: 4-Way Inconsistency
+The Adaptive Resonance Context (ARC) system uses "life domains" to contextualize user interactions. The code defines 10 domains as an enum:
+pub enum Domain {
+    Health, Finance, Career, Social, Family,
+    Education, Creativity, Spirituality, Recreation, Environment,
+}
+Source	Domains Listed
+Code	Health, Finance, Career, Social, Family, Education, Creativity, Spirituality, Recreation, Environment
+Identity Ethics doc	Health, Finance, Career, Relationships, Family, Learning, Creative, Spiritual, Leisure, Home
+Operational Flow doc	Wellness, Money, Work, Social, Family, Education, Arts, Spirit, Fun, Nature
+Ground Truth Architecture	Health, Finance, Career, Social, Family, Education, Creativity, Spirituality, Recreation, Environment
+The Ground Truth Architecture matches code exactly. The other two documents use different names for the same concepts (e.g., "Relationships" vs "Social," "Wellness" vs "Health," "Fun" vs "Recreation"). While semantically similar, these are different strings that would not match a code lookup.
+Remediation: Align all documents to the code's exact enum variant names.
+---
+HIGH-DOC-5 — ARC Context Mode Names: 4-Way Inconsistency with Zero Cross-Source Overlap
+pub enum ContextMode {
+    Morning, Commute, Work, Meeting, Exercise, Meal, Evening, Sleep,
+}
+Source	Modes Listed
+Code	Morning, Commute, Work, Meeting, Exercise, Meal, Evening, Sleep
+Identity Ethics doc	Wake, Travel, Focus, Collaborate, Active, Nourish
+Operational Flow doc	Dawn, Transit, Productive, Social, Movement
+Ground Truth Architecture	Morning, Commute, Work, Meeting, Exercise, Meal, Evening, Sleep
+Again, Ground Truth matches code. The other two documents not only use different names but list different counts (6 and 5 vs the code's 8). The modes Evening and Sleep are absent from both non-Ground-Truth documents, meaning time-of-day behavior between 7pm and 7am is undocumented in those sources.
+Remediation: Same as HIGH-DOC-4 — canonicalize to code.
+---
+HIGH-DOC-6 — Installation Doc Claims bcrypt; Code Uses Argon2id
+Field	Detail
+Doc	AURA-V4-INSTALLATION-AND-DEPLOYMENT.md (§3.4)
+Code	crates/aura-daemon/src/vault/crypto.rs
+The installation document states:
+> "The vault PIN is hashed using bcrypt with a cost factor of 12 before storage."
+The code uses:
+let config = argon2::Config {
+    variant: argon2::Variant::Argon2id,
+    version: argon2::Version::Version13,
+    mem_cost: 65536, // 64 MB
+    time_cost: 3,
+    lanes: 4,
+    // ...
+};
+There is no bcrypt dependency in Cargo.toml. There is no bcrypt code anywhere in the repository.
+Impact. A security reviewer auditing the installation document will search for bcrypt usage, find nothing, and flag this as "documented security control not implemented" — a finding that triggers escalation in most security audit frameworks. The actual implementation (Argon2id) is stronger than the documented one (bcrypt), but the mismatch itself is the problem.
+Remediation: Replace "bcrypt with cost factor 12" with "Argon2id (v13, m=65536, t=3, p=4)" in the installation document.
+---
+11.4 Medium Findings
+MED-DOC-1 — Argon2id Parallelism: p=1 vs p=4
+The Security Model document (§4.2) states p=1 (single-lane). The code uses lanes: 4 (p=4). The difference affects both security properties (parallelism resistance) and performance characteristics. The code's p=4 is the more common production recommendation.
+---
+MED-DOC-2 — Archive Compression: LZ4 vs ZSTD
+The code defaults to LZ4 for memory archive compression:
+const DEFAULT_COMPRESSION: Compression = Compression::Lz4;
+Both the Ground Truth Architecture and Production Status documents reference ZSTD. The code supports ZSTD as a variant but defaults to LZ4. A developer following the docs would implement ZSTD-specific optimizations that won't apply to the default code path.
+---
+MED-DOC-3 — Iron Law IL-7 Content Conflict
+Two documents define Iron Law #7 differently:
+Source	IL-7 Definition
+Identity Ethics doc	"Never persist data classified above the user's chosen retention tier"
+Ground Truth Architecture	"All actions must be auditable — no silent side effects"
+These are not the same rule. Both are valid design principles, but assigning both to "IL-7" creates confusion about which is canonical. A developer referencing "IL-7" in a code comment creates an ambiguous citation.
+---
+MED-DOC-4 — PolicyGate "Critical Gap" Section Is Stale (90 Lines)
+The Identity Ethics document contains a ~90-line section titled "Critical Gap: PolicyGate Not Connected to Executor" with detailed analysis of the consequences and a remediation plan. Code inspection shows this gap has been fixed — the Executor now calls self.policy_gate.evaluate() in the execution pipeline. The section describes a historical state that no longer exists.
+Impact: A reader encounters 90 lines of urgent prose about a critical security gap that was already resolved. This wastes reviewer time and creates false alarm.
+Remediation: Replace with a brief note: "Resolved in commit/PR. PolicyGate is now integrated into the Executor pipeline."
+---
+MED-DOC-5 — Data Classification Tier Names Differ
+Source	Tiers
+Code (data_classification.rs)	Ephemeral → Personal → Sensitive → Critical
+Security Model doc (§3.1)	Public → Internal → Confidential → Restricted
+Both are 4-tier models with escalating sensitivity, but the names are completely different. The code's names are user-data-oriented (appropriate for an AI assistant). The document's names follow a corporate information security taxonomy (ISO 27001-style). These are two different classification frameworks applied to the same concept.
+---
+11.5 Low Findings
+LOW-DOC-1 — Most Accurate Document: Production Readiness Assessment
+The Production Readiness Assessment is the most honest and accurate document in the corpus. It assigns itself a score of 34/100, explicitly lists what doesn't work, and accurately describes the gap between documented and implemented features. Its factual claims about the codebase are almost entirely correct.
+LOW-DOC-2 — Least Accurate Document: Installation & Deployment
+The Installation & Deployment document contains the wrong cryptographic algorithm (bcrypt instead of Argon2id), stale installation instructions that reference paths that no longer exist, and configuration parameters that don't match current defaults. This is the document most likely to be read by first-time users, making its inaccuracy particularly costly.
+---
+11.6 Full Consistency Matrix
+#	Topic	Code Value	Doc A	Doc B	Doc C	Verdict
+1	Trust tiers	5 stages: Stranger→Acquaintance→Friend→CloseFriend→Soulmate	4: Stranger→Acquaintance→Companion→Intimate	4: Stranger→Known→Trusted→Intimate	4: Stranger→Acquaintance→Friend→Intimate	❌ 5-way conflict
+2	Ethics rules	11 (7 blocked + 4 audit)	15 "absolute rules"	10 "life domains" (conflated)	—	❌ 3-way conflict
+3	ReAct iterations	Daemon: 10, Neocortex: 5	10 (daemon only)	—	—	⚠️ Partial (neocortex loop undocumented)
+4	Argon2id parallelism	p=4 (lanes: 4)	p=1	p=4	—	⚠️ 2-way conflict
+5	Archive compression	LZ4 (default)	ZSTD	ZSTD	—	⚠️ Code disagrees
+6	ARC domains	10 names (Health, Finance, ...)	10 different names	8 different names	—	❌ No exact match (except Ground Truth)
+7	ARC context modes	8 names (Morning, Commute, ...)	6 different names	5 different names	—	❌ No exact match (except Ground Truth)
+8	Vault crypto algorithm	Argon2id v13	bcrypt cost=12	Argon2id	—	❌ Wrong algorithm
+9	OCEAN personality defaults	Non-neutral (code sets specific values per personality archetype)	All 0.5 (neutral)	Non-neutral (matches code)	—	⚠️ Spec vs implementation
+10	Iron Law IL-7	(not in code as named constant)	Retention tier rule	Auditability rule	—	⚠️ Conflicting definitions
+11	PolicyGate status	Integrated with Executor	"Critical gap — not connected" (stale)	Correctly documented	—	⚠️ Stale
+12	Data classification	Ephemeral/Personal/Sensitive/Critical	Public/Internal/Confidential/Restricted	—	—	⚠️ Different taxonomy
+13	Test count	cargo test actual count	README: 2,376	Other docs: 2,362	—	⚠️ Minor inconsistency
+14	aura-gguf crate	Does not exist	Referenced	Referenced	Referenced	❌ Phantom
+---
+11.7 Verified Correct — 15 Claims That Match Code
+Not all documentation is wrong. Fifteen specific factual claims were verified as accurate:
+#	Claim	Code Location	Verified Value
+1	Bi-cameral architecture (daemon + neocortex)	Cargo.toml workspace members	✅ Two separate crates, two binaries
+2	11-stage executor pipeline	execution/executor.rs stages enum	✅ 11 ExecutorStage variants
+3	AES-256-GCM encryption for vault	vault/crypto.rs	✅ aes_gcm::Aes256Gcm
+4	HNSW index M=16, ef_construction=200	memory/semantic.rs HNSW config	✅ Exact match
+5	SQLite WAL mode	storage/db.rs pragma setup	✅ PRAGMA journal_mode=WAL
+6	1024 working memory slots	memory/working.rs default config	✅ DEFAULT_CAPACITY: usize = 1024
+7	Anti-sycophancy 20-interaction window	identity/anti_sycophancy.rs	✅ WINDOW_SIZE: usize = 20
+8	Deny-by-default PolicyGate	policy/gate.rs default impl	✅ Default::default() returns Deny
+9	Process isolation (daemon/neocortex)	Build system, separate binaries	✅ Separate processes
+10	Qwen-3 default model	config/defaults.rs	✅ DEFAULT_MODEL: &str = "qwen3-..."
+11	4-tier data classification (names differ)	data_classification.rs	✅ 4 tiers (names differ, see MED-DOC-5)
+12	Context budget 2048 tokens	daemon_core/react.rs config	✅ DEFAULT_TOKEN_BUDGET: usize = 2048
+13	Cascade retry threshold 0.5	execution/cascade.rs	✅ RETRY_THRESHOLD: f64 = 0.5
+14	BON_SAMPLES = 3	execution/planner.rs	✅ BON_SAMPLES: usize = 3
+15	Initiative budget max=1.0, regen=0.001/sec	identity/initiative.rs	✅ MAX_BUDGET: f64 = 1.0, REGEN_RATE: f64 = 0.001
+---
+### 11.8 Root Cause Analysis
+The documentation inconsistencies follow a clear pattern:
+1. **Documents were written aspirationally before code was finalized.** The Identity Ethics and Operational Flow documents describe a *planned* system with 4 trust tiers and 15 ethics rules. The code evolved to 5 tiers and 11 rules during implementation. The documents were never updated.
+2. **No single source of truth is designated.** Five documents define trust tiers because no document is marked as canonical. The Ground Truth Architecture *should* be canonical (and is the most accurate), but it doesn't declare itself as such.
+3. **No automated consistency checks exist.** There are no tests that assert documentation claims against code constants. A simple test like `assert_eq!(TrustTier::VARIANT_COUNT, 5)` with a comment linking to the docs would have caught CRIT-DOC-1 the moment the fifth tier was added.
+4. **Documentation reviews don't happen alongside code reviews.** The git history shows code changes without corresponding doc updates. PRs modify `relationship.rs` without touching any markdown file.
+---
+11.9 Remediation — Prioritized
+Priority	Finding	Action	Effort
+P0	CRIT-DOC-1	Canonicalize trust tiers to code's 5-tier model across all docs	2 hours
+P0	CRIT-DOC-2	Resolve ethics rule count — implement or document the gap	4 hours
+P1	HIGH-DOC-6	Fix bcrypt → Argon2id in Install Doc	10 min
+P1	HIGH-DOC-3	Remove phantom aura-gguf references	15 min
+P1	HIGH-DOC-1	Document both ReAct loops and their multiplicative relationship	30 min
+P1	HIGH-DOC-4, 5	Align ARC domain and mode names to code enums	1 hour
+P2	MED-DOC-1–5	Fix medium inconsistencies (Argon2id params, compression, IL-7, stale section, classification names)	2 hours
+P2	—	Add compile-time or test-time consistency assertions for key constants	4 hours
+P3	—	Designate Ground Truth Architecture as the canonical spec; add "Last verified against code: [date]" headers to all docs	1 hour
+P3	—	Add PR template checkbox: "Documentation updated to reflect code changes"	15 min
+Subagent session
+64,667  51% ($0.00)
+Parent up
+Prev left
+Next right
+---
+11.10 Overall Documentation Accuracy Scorecard
+Document	Claims Verified	Claims Correct	Accuracy
+Ground Truth Architecture	42	38	90%
+Production Readiness Assessment	28	25	89%
+Security Model	35	27	77%
+Identity Ethics Guidelines	51	33	65%
+Operational Flow	38	22	58%
+Contributing Guide	18	11	61%
+README.md	12	9	75%
+Installation & Deployment	24	12	50%
+Corpus Total	248	177	71%
+/agents                                       
+Switch agent
+/api-design                                   
+VoltAgent: Design APIs and schemas
+/backend                                      
+VoltAgent: Build backend APIs and microservices
+/build-fix                                    
+Fix build and TypeScript errors with minimal changes
+/checkpoint                                   
+The 55/100 grade (D+) reflects that while 71% of individual claims are correct, the critical claims (trust tiers, ethics rules, cryptographic algorithm) are wrong — and these are precisely the claims that external auditors, new contributors, and security reviewers will rely on most heavily. Accuracy of low-stakes claims does not compensate for inaccuracy of high-stakes claims.
+Save verification state and progress
+/code-review                                  
+Review code for quality, security, and maintainability
+/compact                                      
+Compact session
+/connect                                      
+Connect provider
+/copy                                         
+▣  General · claude-opus-4.6 · 16m 3s
+Copy session transcript
+/e2e                                          
+Generate and run E2E tests with Playwright

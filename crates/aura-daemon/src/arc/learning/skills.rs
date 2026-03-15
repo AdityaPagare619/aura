@@ -200,7 +200,11 @@ impl SkillRegistry {
         now_ms: u64,
     ) -> Result<u64, ArcError> {
         let trimmed_name = if name.len() > MAX_NAME_LEN {
-            &name[..MAX_NAME_LEN]
+            let mut end = MAX_NAME_LEN;
+            while end > 0 && !name.is_char_boundary(end) {
+                end -= 1;
+            }
+            &name[..end]
         } else {
             name
         };
@@ -300,7 +304,11 @@ impl SkillRegistry {
     #[must_use]
     pub fn find_skill_by_name(&self, name: &str) -> Option<&LearnedSkill> {
         let trimmed = if name.len() > MAX_NAME_LEN {
-            &name[..MAX_NAME_LEN]
+            let mut end = MAX_NAME_LEN;
+            while end > 0 && !name.is_char_boundary(end) {
+                end -= 1;
+            }
+            &name[..end]
         } else {
             name
         };
@@ -407,7 +415,11 @@ impl SkillRegistry {
         let inherited_confidence = source.decayed_confidence(now_ms) * 0.8;
 
         let trimmed_name = if new_name.len() > MAX_NAME_LEN {
-            &new_name[..MAX_NAME_LEN]
+            let mut end = MAX_NAME_LEN;
+            while end > 0 && !new_name.is_char_boundary(end) {
+                end -= 1;
+            }
+            &new_name[..end]
         } else {
             new_name
         };
@@ -528,7 +540,11 @@ impl SkillRegistry {
                 break;
             }
             let normalized = if tag.len() > MAX_TAG_LEN {
-                tag[..MAX_TAG_LEN].to_ascii_lowercase()
+                let mut end = MAX_TAG_LEN;
+                while end > 0 && !tag.is_char_boundary(end) {
+                    end -= 1;
+                }
+                tag[..end].to_ascii_lowercase()
             } else {
                 tag.to_ascii_lowercase()
             };

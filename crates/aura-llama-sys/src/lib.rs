@@ -118,6 +118,16 @@ pub struct SamplingParams {
     pub repeat_penalty: f32,
     /// Maximum number of tokens to generate.
     pub max_tokens: u32,
+    /// Optional compiled GBNF grammar for constrained decoding (Layer 0).
+    ///
+    /// When set, the grammar masks invalid tokens BEFORE temperature/sampling,
+    /// ensuring every generated token is grammar-valid. This replaces the
+    /// post-hoc 0.7× confidence penalty with hard structural enforcement.
+    ///
+    /// The string is a compiled GBNF grammar (see `grammar.rs` for definitions).
+    /// On the FfiBackend, this is passed to `llama_sampler_init_grammar()`.
+    /// On the StubBackend, this field is ignored (no-op).
+    pub grammar_gbnf: Option<String>,
 }
 
 impl Default for SamplingParams {
@@ -128,6 +138,7 @@ impl Default for SamplingParams {
             top_k: 40,
             repeat_penalty: 1.1,
             max_tokens: 512,
+            grammar_gbnf: None,
         }
     }
 }
@@ -228,6 +239,29 @@ pub trait LlamaBackend: Send + Sync {
     ///
     /// Returns `None` on stub backends or if logits are unavailable.
     fn get_token_logprob(&self, ctx: *mut LlamaContext, token: LlamaToken) -> Option<f32>;
+
+    // ── Grammar-constrained decoding (Layer 0) ─────────────────────────
+
+    /// Activate a GBNF grammar for constrained decoding.
+    ///
+    /// When active, `sample_next()` masks invalid tokens BEFORE temperature
+    /// and sampling, enforcing structural correctness at the token level.
+    /// No-op on stub backends.
+    fn set_grammar(&self, _grammar_gbnf: &str) -> BackendResult<()> {
+        Ok(()) // Default: no-op (stub backends)
+    }
+
+    /// Clear the active grammar sampler, freeing its resources.
+    /// Must be called after generation completes.
+    fn clear_grammar(&self) {
+        // Default: no-op (stub backends)
+    }
+
+    /// Notify the grammar that a token was accepted, advancing its state.
+    /// Must be called after each successful `sample_next()` when grammar is active.
+    fn accept_grammar_token(&self, _token: LlamaToken) {
+        // Default: no-op (stub backends)
+    }
 }
 
 // ─── Stub backend (desktop / host builds) ───────────────────────────────────
@@ -912,11 +946,12 @@ impl LlamaBackend for StubBackend {
     ) -> BackendResult<(*mut LlamaModel, *mut LlamaContext)> {
         info!(path, "stub: simulating model load");
 
-        // Return sentinel non-null pointers (0x1, 0x2) so callers can
-        // distinguish "loaded stub" from "failed to load" (null).
-        // These must never be dereferenced — they're just markers.
+        // LLM-MED-4: Sentinel pointers use `std::ptr::dangling_mut()` which returns
+        // a well-aligned, non-null pointer that is guaranteed never to alias valid
+        // allocations. This is preferred over raw integer casts (0x1, 0x2) which have
+        // no alignment guarantees and technically invoke UB under strict provenance.
         let model_ptr = std::ptr::dangling_mut::<LlamaModel>();
-        let ctx_ptr = 0x2 as *mut LlamaContext;
+        let ctx_ptr = std::ptr::dangling_mut::<LlamaContext>();
 
         debug!("stub: model loaded (sentinel pointers)");
         Ok((model_ptr, ctx_ptr))
@@ -1010,6 +1045,40 @@ pub type LlamaPos = i32;
 /// Sequence ID type — matches llama.cpp's `llama_seq_id` (i32).
 pub type LlamaSeqId = i32;
 
+// ─── Opaque types for grammar-constrained sampling ──────────────────────────
+
+/// Opaque sampler chain — wraps llama.cpp's `struct llama_sampler`.
+/// Created by `llama_sampler_init_grammar()`, freed by `llama_sampler_free()`.
+#[repr(C)]
+pub struct LlamaSampler {
+    _opaque: [u8; 0],
+}
+
+/// A single token candidate with its probability/logit for sampler operations.
+/// Matches `llama_token_data` in llama.cpp.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct LlamaTokenData {
+    /// Token ID.
+    pub id: LlamaToken,
+    /// Log-odds (logit) for this token.
+    pub logit: f32,
+    /// Probability (may be 0.0 before softmax).
+    pub p: f32,
+}
+
+/// Array of token candidates passed to sampler functions.
+/// Matches `llama_token_data_array` in llama.cpp.
+#[repr(C)]
+pub struct LlamaTokenDataArray {
+    /// Pointer to the array of candidates.
+    pub data: *mut LlamaTokenData,
+    /// Number of candidates.
+    pub size: usize,
+    /// Whether the array is already sorted by logit (descending).
+    pub sorted: bool,
+}
+
 /// Batch of tokens for the modern llama.cpp batch API.
 ///
 /// Corresponds to `struct llama_batch` in llama.cpp (post-0.x batch API).
@@ -1078,6 +1147,43 @@ extern "C" {
     fn llama_n_vocab(model: *mut LlamaModel) -> i32;
     fn llama_token_eos(model: *mut LlamaModel) -> LlamaToken;
     fn llama_token_bos(model: *mut LlamaModel) -> LlamaToken;
+
+    // ── Grammar-constrained sampling (GBNF Layer 0) ────────────────────
+    //
+    // These functions integrate llama.cpp's grammar-constrained sampling,
+    // allowing GBNF grammars to mask invalid tokens BEFORE softmax/sampling.
+    //
+    // Flow: compile grammar → init sampler → for each token: apply grammar
+    //       mask to logits → sample → accept token into sampler → loop.
+    //
+    // Phase 3 wiring: these are available in llama.cpp ≥ b2200.
+    // If the linked version is older, the build will fail at link time,
+    // which is the correct failure mode (compile-time, not runtime).
+
+    /// Create a grammar-constrained sampler from a GBNF grammar string.
+    ///
+    /// `model`       — the loaded model (needed for vocab mapping).
+    /// `grammar_str` — null-terminated GBNF grammar string.
+    /// `grammar_root`— null-terminated name of the root rule (usually "root").
+    ///
+    /// Returns an opaque `*mut LlamaSampler` that must be freed with
+    /// `llama_sampler_free()`.
+    fn llama_sampler_init_grammar(
+        model: *mut LlamaModel,
+        grammar_str: *const std::ffi::c_char,
+        grammar_root: *const std::ffi::c_char,
+    ) -> *mut LlamaSampler;
+
+    /// Apply all samplers in the chain (including grammar) to modify logits
+    /// in-place. Call this BEFORE reading logits for manual sampling.
+    fn llama_sampler_apply(smpl: *mut LlamaSampler, cur: *mut LlamaTokenDataArray);
+
+    /// Notify the grammar sampler that a token was accepted, advancing its
+    /// internal state machine so the next `apply` call masks correctly.
+    fn llama_sampler_accept(smpl: *mut LlamaSampler, token: LlamaToken);
+
+    /// Free a sampler chain (including grammar state).
+    fn llama_sampler_free(smpl: *mut LlamaSampler);
 }
 
 /// Statically-linked llama.cpp backend for Android.
@@ -1094,8 +1200,22 @@ pub struct FfiBackend {
     /// so multi-turn conversations advance the position instead of
     /// always overwriting position 0.
     n_past: std::sync::Mutex<i32>,
+    /// Active grammar sampler for constrained decoding (Layer 0).
+    ///
+    /// Set by `set_grammar()` before generation begins, cleared after
+    /// generation completes. When `Some`, `sample_next()` applies the
+    /// grammar mask to logits BEFORE temperature/top-k/top-p, ensuring
+    /// every emitted token satisfies the GBNF grammar.
+    grammar_sampler: std::sync::Mutex<Option<*mut LlamaSampler>>,
 }
 
+// SAFETY: FfiBackend is Send + Sync because every field containing a raw pointer
+// (model_ptr, ctx_ptr, grammar_sampler) is wrapped in a std::sync::Mutex, which
+// provides both interior mutability and cross-thread synchronization. The Mutex
+// guards ensure that only one thread can dereference the C pointers at a time,
+// and the remaining fields (n_past) are also Mutex-wrapped. The underlying
+// llama.cpp library is safe for single-threaded per-context use, which the Mutex
+// guards enforce.
 #[cfg(target_os = "android")]
 unsafe impl Send for FfiBackend {}
 #[cfg(target_os = "android")]
@@ -1109,14 +1229,68 @@ impl FfiBackend {
             model_ptr: std::sync::Mutex::new(None),
             ctx_ptr: std::sync::Mutex::new(None),
             n_past: std::sync::Mutex::new(0),
+            grammar_sampler: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Compile and activate a GBNF grammar for constrained decoding.
+    ///
+    /// Must be called BEFORE the generation loop. The grammar sampler remains
+    /// active until `clear_grammar()` is called (typically after generation).
+    ///
+    /// # Safety
+    /// Requires a loaded model (model_ptr must be Some).
+    pub fn set_grammar(&self, grammar_gbnf: &str) -> BackendResult<()> {
+        let model_guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
+        let model = model_guard
+            .ok_or_else(|| BackendError::Generation("no model loaded for grammar init".into()))?;
+
+        let grammar_cstr = std::ffi::CString::new(grammar_gbnf)
+            .map_err(|e| BackendError::Generation(format!("grammar contains null byte: {}", e)))?;
+        let root_cstr = std::ffi::CString::new("root")
+            .map_err(|e| BackendError::Generation(format!("root rule CString failed: {}", e)))?;
+
+        let sampler = unsafe {
+            llama_sampler_init_grammar(model, grammar_cstr.as_ptr(), root_cstr.as_ptr())
+        };
+
+        if sampler.is_null() {
+            return Err(BackendError::Generation(
+                "llama_sampler_init_grammar returned null — grammar compilation failed".into(),
+            ));
+        }
+
+        let mut grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+        // Free any existing grammar sampler before replacing
+        if let Some(old) = grammar_guard.take() {
+            unsafe { llama_sampler_free(old) };
+        }
+        *grammar_guard = Some(sampler);
+
+        debug!("GBNF grammar sampler activated for constrained decoding");
+        Ok(())
+    }
+
+    /// Clear the active grammar sampler, freeing its resources.
+    ///
+    /// Called after generation completes (success or failure) to avoid
+    /// leaking the grammar state.
+    pub fn clear_grammar(&self) {
+        let mut grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(sampler) = grammar_guard.take() {
+            unsafe { llama_sampler_free(sampler) };
+            debug!("GBNF grammar sampler cleared");
+        }
     }
 }
 
 #[cfg(target_os = "android")]
 impl Drop for FfiBackend {
     fn drop(&mut self) {
-        // Free context FIRST — it references the model internally,
+        // Free grammar sampler FIRST — it may reference model internals.
+        self.clear_grammar();
+
+        // Free context NEXT — it references the model internally,
         // so freeing the model first would leave a dangling pointer
         // in the context during llama_free().
         let mut ctx_guard = self.ctx_ptr.lock().unwrap_or_else(|e| e.into_inner());
@@ -1266,6 +1440,44 @@ impl LlamaBackend for FfiBackend {
             return Err(BackendError::Generation("logits pointer is null".into()));
         }
 
+        // ── Layer 0: Grammar-constrained logit masking ──────────────────
+        //
+        // If a GBNF grammar sampler is active, apply it to the raw logits
+        // BEFORE temperature scaling. This zeroes out logits for tokens
+        // that would violate the grammar, ensuring structural correctness
+        // at the token level — not post-hoc validation.
+        {
+            let grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(grammar) = *grammar_guard {
+                let logits_slice = unsafe { std::slice::from_raw_parts_mut(logits_ptr, n_vocab) };
+                let mut candidates: Vec<LlamaTokenData> = logits_slice
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &logit)| LlamaTokenData {
+                        id: i as LlamaToken,
+                        logit,
+                        p: 0.0,
+                    })
+                    .collect();
+                let mut candidates_array = LlamaTokenDataArray {
+                    data: candidates.as_mut_ptr(),
+                    size: candidates.len(),
+                    sorted: false,
+                };
+                unsafe {
+                    llama_sampler_apply(grammar, &mut candidates_array);
+                }
+                // Write masked logits back so temperature/top-k/top-p
+                // operate on grammar-constrained values.
+                for candidate in &candidates {
+                    let idx = candidate.id as usize;
+                    if idx < n_vocab {
+                        logits_slice[idx] = candidate.logit;
+                    }
+                }
+            }
+        }
+
         let logits = unsafe { std::slice::from_raw_parts(logits_ptr, n_vocab) };
 
         // Apply temperature
@@ -1339,15 +1551,16 @@ impl LlamaBackend for FfiBackend {
             }
         }
 
-        // Sample from distribution (simple linear scan)
-        // Use a basic xorshift for determinism in tests
-        let r = {
-            let time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos() as f64
-                / 1_000_000_000.0;
-            time
+        // Sample from distribution (simple linear scan).
+        // Use a proper CSPRNG-seeded PRNG via the `rand` crate so that:
+        //   1. Rapid sequential calls don't produce identical tokens
+        //      (the old SystemTime::subsec_nanos() was deterministic within
+        //       the same nanosecond, which is common under batch decode).
+        //   2. The distribution is uniform in [0, 1), not biased by clock
+        //      quantization artifacts.
+        let r: f64 = {
+            use rand::Rng;
+            rand::thread_rng().gen()
         };
 
         let mut cumulative = 0.0;
@@ -1392,10 +1605,17 @@ impl LlamaBackend for FfiBackend {
         // Modern batch API: use llama_batch_get_one to construct the batch,
         // then pass it to llama_decode. The old 4-argument llama_decode
         // (ctx, tokens_ptr, n_tokens, n_past) no longer exists in modern llama.cpp.
+        //
+        // SAFETY: llama_batch_get_one expects `*mut LlamaToken`. We must pass
+        // a mutable buffer because the C API may write through the pointer.
+        // Casting `&[T].as_ptr()` to `*mut T` is undefined behavior — the
+        // compiler is free to place the slice in read-only memory. Instead we
+        // copy into a mutable Vec and hand over `as_mut_ptr()`.
+        let mut token_buf = tokens.to_vec();
         let result = unsafe {
             let batch = llama_batch_get_one(
-                tokens.as_ptr() as *mut LlamaToken,
-                tokens.len() as i32,
+                token_buf.as_mut_ptr(),
+                token_buf.len() as i32,
                 past, // pos_0: starting position for multi-turn context
                 0,    // seq_id: single sequence
             );
@@ -1456,6 +1676,23 @@ impl LlamaBackend for FfiBackend {
 
         let log_softmax = (logits[token_idx] - max_logit) as f64 - sum_exp.ln();
         Some(log_softmax as f32)
+    }
+
+    fn set_grammar(&self, grammar_gbnf: &str) -> BackendResult<()> {
+        // Delegate to the inherent method on FfiBackend
+        FfiBackend::set_grammar(self, grammar_gbnf)
+    }
+
+    fn clear_grammar(&self) {
+        // Delegate to the inherent method on FfiBackend
+        FfiBackend::clear_grammar(self)
+    }
+
+    fn accept_grammar_token(&self, token: LlamaToken) {
+        let grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(grammar) = *grammar_guard {
+            unsafe { llama_sampler_accept(grammar, token) };
+        }
     }
 }
 
@@ -1544,7 +1781,7 @@ pub mod stubs {
         ensure_init();
         // The backend load_model already creates both — return sentinel ctx
         let _ = (model, params);
-        0x2 as *mut LlamaContext
+        std::ptr::dangling_mut::<LlamaContext>()
     }
 
     /// Stub: free model.

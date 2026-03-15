@@ -213,7 +213,7 @@ impl PolicyGate {
         }
 
         req.state = ApprovalState::Approved;
-        Ok(self.requests.get(&id).unwrap())
+        Ok(self.requests.get(&id).expect("request was just modified via get_mut; key must exist"))
     }
 
     /// Reject a pending request.
@@ -229,7 +229,7 @@ impl PolicyGate {
         }
 
         req.state = ApprovalState::Rejected;
-        Ok(self.requests.get(&id).unwrap())
+        Ok(self.requests.get(&id).expect("request was just modified via get_mut; key must exist"))
     }
 
     /// Expire all timed-out requests.

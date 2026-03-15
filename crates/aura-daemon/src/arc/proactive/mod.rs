@@ -614,8 +614,8 @@ mod tests {
         assert!(result.is_ok());
         // No triggers registered, so no actions.
         let actions = result.expect("should be ok");
-        // Morning won't trigger at hour 0 (default hour is 7)
-        assert!(actions.is_empty() || !actions.is_empty()); // valid either way
+        // Morning won't trigger at hour 0 (default hour is 7), and no triggers registered.
+        assert!(actions.is_empty(), "expected no actions at hour 0 with no triggers, got {actions:?}");
     }
 
     #[test]

@@ -134,7 +134,7 @@ impl HnswState {
         Ok(node_id)
     }
 
-    fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<(u64, f32)>, MemError> {
+    fn search(&mut self, query: &[f32], k: usize, ef: usize) -> Result<Vec<(u64, f32)>, MemError> {
         let results = self
             .index
             .search(query, k, ef)
@@ -302,6 +302,19 @@ impl EpisodicMemory {
     /// 2. Applies pattern separation if too similar to recent episodes
     /// 3. Inserts with WAL-safe atomic write
     /// 4. Indexes embedding in HNSW for fast similarity search
+    ///
+    /// ## Lock ordering (PERF-HIGH-7)
+    ///
+    /// This method acquires two mutexes: `conn` (tokio::Mutex<Connection>) and
+    /// `hnsw` (std::sync::Mutex<HnswState>). To prevent deadlocks, locks are
+    /// acquired in a defined order and released as soon as possible:
+    ///
+    /// 1. `hnsw` lock — read HNSW state for pattern separation, then release
+    /// 2. `conn` lock — SQLite insert, then release
+    /// 3. `hnsw` lock — insert new embedding into HNSW index
+    ///
+    /// All code paths across EpisodicMemory MUST acquire `hnsw` before `conn`
+    /// when both are needed. Never hold both simultaneously.
     pub async fn store(
         &self,
         content: String,
@@ -314,24 +327,50 @@ impl EpisodicMemory {
         let hnsw = self.hnsw.clone();
 
         let id = tokio::task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            let mut hnsw_state = hnsw.lock().map_err(|_| {
-                MemError::DatabaseError("HNSW lock poisoned".into())
-            })?;
-            let (id, embedding) = store_episode_sync(
-                &conn,
-                &hnsw_state,
-                &content,
-                emotional_valence,
-                base_importance,
-                &context_tags,
-                now_ms,
-            )?;
+            // Step 1: Compute embedding and apply pattern separation under HNSW lock.
+            // Release HNSW lock before touching SQLite to avoid holding both.
+            let mut embedding = embed(&content);
+            {
+                let mut hnsw_state = hnsw.lock().map_err(|_| {
+                    MemError::DatabaseError("HNSW lock poisoned".into())
+                })?;
+                apply_pattern_separation(&mut hnsw_state, &mut embedding)?;
+            } // hnsw lock released here
 
-            // Add to HNSW index
-            hnsw_state.insert(id, &embedding)?;
+            // Step 2: SQLite insert under conn lock only (HNSW not held).
+            let embedding_bytes = embedding_to_bytes(&embedding);
+            let tags_json =
+                serde_json::to_string(&context_tags).unwrap_or_else(|_| "[]".to_string());
 
-            Ok::<_, MemError>(id)
+            let sqlite_id = {
+                let conn = conn.blocking_lock();
+                conn.execute(
+                    "INSERT INTO episodes (content, emotional_valence, importance, context_tags,
+                                           timestamp_ms, access_count, last_access_ms, embedding)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 0, ?5, ?6)",
+                    params![
+                        content,
+                        emotional_valence,
+                        base_importance,
+                        tags_json,
+                        now_ms as i64,
+                        embedding_bytes,
+                    ],
+                )
+                .map_err(|e| MemError::DatabaseError(format!("episode insert failed: {}", e)))?;
+                conn.last_insert_rowid() as u64
+            }; // conn lock released here
+
+            // Step 3: Re-acquire HNSW lock to index the new embedding.
+            {
+                let mut hnsw_state = hnsw.lock().map_err(|_| {
+                    MemError::DatabaseError("HNSW lock poisoned".into())
+                })?;
+                hnsw_state.insert(sqlite_id, &embedding)?;
+            }
+
+            debug!("stored episode {} ({} chars)", sqlite_id, content.len());
+            Ok::<_, MemError>(sqlite_id)
         })
         .await
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))??;
@@ -639,7 +678,7 @@ fn store_episode_sync(
 /// The only episode that could exceed the 0.9 threshold is the nearest
 /// neighbor, so k=1 search is sufficient.
 fn apply_pattern_separation(
-    hnsw_state: &HnswState,
+    hnsw_state: &mut HnswState,
     embedding: &mut Vec<f32>,
 ) -> Result<(), MemError> {
     // HNSW search for nearest neighbor: O(log n)
@@ -694,7 +733,7 @@ fn query_episodes_hnsw(
     let query_embedding = embed(query_text);
 
     // Check if HNSW index has any entries
-    let hnsw_state = hnsw
+    let mut hnsw_state = hnsw
         .lock()
         .map_err(|_| MemError::QueryFailed("HNSW lock poisoned".into()))?;
 
@@ -892,7 +931,7 @@ fn find_similar_sync(
 ) -> Result<Vec<Episode>, MemError> {
     let query_embedding = embed(content);
 
-    let hnsw_state = hnsw
+    let mut hnsw_state = hnsw
         .lock()
         .map_err(|_| MemError::QueryFailed("HNSW lock poisoned".into()))?;
 

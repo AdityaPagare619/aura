@@ -92,9 +92,14 @@ mod jni_bridge {
     use jni::objects::JClass;
     use jni::sys::jlong;
     use jni::JNIEnv;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
 
     use aura_types::config::AuraConfig;
+
+    /// Global cancel flag shared between JNI init and shutdown.
+    /// Set during `init()`, read during `shutdown()`.
+    static CANCEL_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
     /// `JNI_OnLoad` equivalent — called when the Kotlin shell loads
     /// `libaura_core.so`.
@@ -112,6 +117,8 @@ mod jni_bridge {
 
         match crate::startup(config) {
             Ok((state, _report)) => {
+                // Store cancel_flag globally so shutdown() can signal it
+                let _ = CANCEL_FLAG.set(state.cancel_flag.clone());
                 let boxed = Box::new(state);
                 Box::into_raw(boxed) as jlong
             }
@@ -140,10 +147,17 @@ mod jni_bridge {
 
         let state = unsafe { *Box::from_raw(state_ptr as *mut crate::DaemonState) };
 
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("tokio runtime should initialize");
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                // Panic across FFI is undefined behavior — log and bail instead.
+                tracing::error!("FATAL: tokio runtime failed to initialize in JNI run(): {e}");
+                return;
+            }
+        };
 
         rt.block_on(async {
             crate::daemon_core::main_loop::run(state).await;
@@ -159,13 +173,15 @@ mod jni_bridge {
     pub unsafe extern "system" fn Java_dev_aura_core_NativeBridge_shutdown(
         _env: JNIEnv,
         _class: JClass,
-        state_ptr: jlong,
+        _state_ptr: jlong,
     ) {
-        // We can't safely dereference state_ptr here because `run` consumed it.
-        // Instead, shutdown is triggered via the cancel_flag which is shared
-        // between the DaemonState and an Arc stored in a global.
-        // For now, log — the real mechanism uses a static AtomicBool.
         tracing::info!("JNI shutdown requested");
+        if let Some(flag) = CANCEL_FLAG.get() {
+            flag.store(true, Ordering::Release);
+            tracing::info!("cancel_flag set — daemon will shut down gracefully");
+        } else {
+            tracing::warn!("shutdown called but cancel_flag was never initialized (init not called?)");
+        }
     }
 }
 

@@ -1,4 +1,46 @@
-//! Main event loop — `tokio::select!` over 7 channels.
+//! # Main Event Loop — `main_loop.rs`
+//!
+//! **ARCH-MED-1 (Architecture Documentation)**
+//!
+//! This is the central nervous system of the AURA v4 daemon.  It owns the
+//! `tokio::select!` event loop that multiplexes 7+ channels and drives every
+//! subsystem in the process.
+//!
+//! ## Why this file is large (~7 300 lines)
+//!
+//! `main_loop.rs` is intentionally a "god file."  The daemon's event loop
+//! must see — and coordinate — every subsystem in a single `select!` block.
+//! Splitting it across modules would force shared mutable state behind
+//! `Arc<Mutex<_>>`, which conflicts with the single-writer `&mut self`
+//! memory model (see ARCH-MED-3 below).  The trade-off is a large file with
+//! clear section headers rather than scattered state synchronisation.
+//!
+//! ### Future refactoring direction
+//!
+//! If this file grows past ~10 000 lines, consider extracting pure-logic
+//! helpers (scoring, enrichment, formatting) into companion modules while
+//! keeping the `select!` loop and `&mut self` receiver here.
+//!
+//! ## Concurrency model — ARCH-MED-3 (Single-Writer `&mut self`)
+//!
+//! The daemon's mutable state lives in [`DaemonState`] (and its subsystem
+//! struct [`LoopSubsystems`]).  **Only the main loop holds `&mut self`
+//! references to these structs.**  Every other subsystem communicates via
+//! message-passing channels; none hold a shared reference to daemon state.
+//!
+//! This guarantees:
+//! - **No data races** — Rust's borrow checker enforces single-writer at
+//!   compile time.
+//! - **No hidden locking** — There are zero `Mutex<DaemonState>` patterns
+//!   in the codebase.
+//! - **Predictable ordering** — All state mutations happen on the select
+//!   loop's task, so operations within a single tick are sequential.
+//!
+//! The cost is that subsystems cannot directly query daemon state; they must
+//! send a request through a channel and wait for the main loop to respond.
+//! This is an intentional design choice, not an oversight.
+//!
+//! ## Event flow
 //!
 //! The loop runs until a cancellation signal is received or all producer
 //! channels close.  Each select branch has independent error handling;
@@ -7,7 +49,7 @@
 //! A checkpoint timer fires every `config.checkpoint_interval_secs` to
 //! persist state to disk.
 //!
-//! ## Wiring
+//! ### Wiring
 //!
 //! All 15+ subsystem connections are wired in this module through the
 //! [`LoopSubsystems`] struct, which holds every subsystem not already
@@ -23,6 +65,15 @@
 //!   →anti-sycophancy→response, Error→feedback_loop, MemoryWarning→unload
 //! - **Cron tick** → memory consolidation, health report, token reset,
 //!   stale request sweep
+//!
+//! ## IPC channel capacity note — GAP-CRIT-003
+//!
+//! The bridge command channel is created with capacity 64.  All `.send()`
+//! call sites in this file handle errors with `if let Err(e)` + `warn!()`
+//! logging (verified via audit, 2026-03).  The router uses `try_send()`
+//! with explicit `Full` / `Closed` handling.  If 64 proves too small under
+//! production load, increase the constant — do **not** switch to unbounded
+//! channels (memory-leak risk under back-pressure).
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -34,7 +85,7 @@ use tokio::time::{interval, Duration};
 use tracing::instrument;
 
 use aura_types::events::{DaemonEvent, EventSource, GateDecision, Intent, ParsedEvent, ScoredEvent};
-use aura_types::ipc::{ContextPackage, DaemonToNeocortex, FailureContext, InferenceMode, NeocortexToDaemon};
+use aura_types::ipc::{ContextPackage, DaemonToNeocortex, FailureContext, IdentityTendencies, InferenceMode, NeocortexToDaemon, SelfKnowledge};
 
 use crate::bridge::router::ResponseRouter;
 use crate::bridge::spawn_bridge;
@@ -1180,8 +1231,16 @@ pub async fn run(mut state: DaemonState) {
     // After this swap, state.subsystems.memory is an unused in-memory dummy;
     // all real memory access goes through subs.memory.
     let loop_memory = {
-        let placeholder = AuraMemory::new_in_memory()
-            .expect("in-memory placeholder must not fail");
+        let placeholder = match AuraMemory::new_in_memory() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!(
+                    "FATAL: failed to create in-memory AuraMemory placeholder \
+                     for memory swap — daemon loop cannot continue: {e}"
+                );
+                return;
+            }
+        };
         std::mem::replace(&mut state.subsystems.memory, placeholder)
     };
     let mut subs = LoopSubsystems::new(response_tx, data_dir, loop_memory);
@@ -1989,7 +2048,11 @@ async fn handle_user_command(
             // Truncate excessively long messages (guard against abuse).
             let text = if text.len() > 4096 {
                 tracing::warn!(len = text.len(), "truncating oversized chat message");
-                text[..4096].to_string()
+                let mut end = 4096;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text[..end].to_string()
             } else {
                 text
             };
@@ -3176,6 +3239,7 @@ async fn handle_user_command(
                                         neuroticism: t.neuroticism,
                                         current_mood_valence: mood.valence,
                                         current_mood_arousal: mood.arousal,
+                                        current_mood_dominance: mood.dominance,
                                         trust_level: aura_types::ipc::PersonalitySnapshot::default().trust_level,
                                     }
                                 };
@@ -3630,8 +3694,8 @@ async fn dispatch_system1(
 /// are threaded into the `ContextPackage` sent to the neocortex. This
 /// ensures the LLM has full conversational context for high-quality responses.
 ///
-/// Personality influence is computed and threaded into the context,
-/// providing OCEAN-modulated tone, response style, and prompt directives.
+/// Raw personality data (OCEAN scores, mood, trust level) is included as
+/// structured data for the LLM to interpret — no Rust-side directives.
 ///
 /// If the neocortex is unreachable, falls back to System1.
 async fn dispatch_system2(
@@ -3651,6 +3715,12 @@ async fn dispatch_system2(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "System2 prepare failed — falling back to System1");
+            // Let the user know this is a quick response, not deep reasoning.
+            send_response(
+                &subs.response_tx,
+                source.clone(),
+                "💭 My deep reasoning is warming up — here's a quick response:".into(),
+            ).await;
             dispatch_system1(scored, &scored.parsed.content, source, state, subs).await;
             return;
         }
@@ -3674,6 +3744,12 @@ async fn dispatch_system2(
     if !ensure_ipc_connected(&mut subs.neocortex).await {
         tracing::warn!("neocortex unreachable — falling back to System1");
         subs.system2.complete_request(request.request_id);
+        // Let the user know this is a quick response, not deep reasoning.
+        send_response(
+            &subs.response_tx,
+            source.clone(),
+            "💭 My reasoning engine isn't available right now — here's a quick response:".into(),
+        ).await;
         dispatch_system1(scored, &scored.parsed.content, source, state, subs).await;
         return;
     }
@@ -3954,6 +4030,33 @@ fn enrich_system2_message(
         // the inference pipeline.
         let _ = &enriched.personality_context; // suppress unused-field warning
 
+        // ── Tier 1: Identity Core fields ────────────────────────────────
+        //
+        // These three fields give the LLM grounding in who AURA is, what
+        // the user prefers, and what AURA can/cannot do. The neocortex
+        // `prompts.rs` injects them into the system prompt in order:
+        //   Self-Knowledge → Identity Tendencies → Personality → User Preferences → Rules
+
+        // T1-1: Constitutional tendencies — ALWAYS present.
+        // These are AURA's innate character principles (first-person statements).
+        // The user shapes how they EXPRESS, but they cannot be removed.
+        pkg.identity_tendencies = Some(IdentityTendencies::constitutional());
+
+        // T1-2: User preferences — from daemon-side UserProfile conversion.
+        // None if no user profile is available (graceful degradation).
+        if let Some(ref prefs) = enriched.ipc_user_preferences {
+            pkg.user_preferences = Some(prefs.clone());
+        }
+
+        // T1-3: Self-knowledge — factual grounding about AURA's state.
+        // Prevents confabulation about capabilities AURA doesn't have.
+        let mode_str = match pkg.inference_mode {
+            InferenceMode::Conversational => "conversational",
+            InferenceMode::Planner => "planning",
+            InferenceMode::Composing => "composing",
+        };
+        pkg.self_knowledge = Some(SelfKnowledge::for_mode(mode_str));
+
         // Enforce size limit — if the package is too large, trim memory snippets.
         while pkg.estimated_size() > aura_types::ipc::ContextPackage::MAX_SIZE
             && !pkg.memory_snippets.is_empty()
@@ -4089,6 +4192,18 @@ async fn handle_ipc_inbound(
                 0.5,
                 now_ms(),
             );
+            // Notify the user — AURA's brain is ready for deep thinking.
+            if let Some(&primary_chat) = state.config.telegram.allowed_chat_ids.first() {
+                send_response(
+                    &subs.response_tx,
+                    InputSource::Telegram { chat_id: primary_chat },
+                    format!(
+                        "🧠 My reasoning engine is ready — {} loaded ({}MB). \
+                         I can think deeply now.",
+                        model_name, memory_used_mb
+                    ),
+                ).await;
+            }
         }
 
         NeocortexToDaemon::LoadFailed { reason } => {
@@ -4099,6 +4214,18 @@ async fn handle_ipc_inbound(
                 "neocortex",
                 now_ms(),
             );
+            // Notify the user — AURA's deep reasoning is unavailable.
+            if let Some(&primary_chat) = state.config.telegram.allowed_chat_ids.first() {
+                send_response(
+                    &subs.response_tx,
+                    InputSource::Telegram { chat_id: primary_chat },
+                    format!(
+                        "⚠️ My reasoning engine failed to load: {}. \
+                         I'll work with quick responses for now.",
+                        reason
+                    ),
+                ).await;
+            }
         }
 
         NeocortexToDaemon::Unloaded => {

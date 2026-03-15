@@ -286,12 +286,26 @@ impl PolicyGate {
         }
     }
 
-    /// Create an empty PolicyGate that allows everything by default, intended
-    /// as a builder starting point where hardened rules are added immediately
-    /// after construction (see [`build_hardened_policy_gate`]).
+    /// Create an empty PolicyGate that **allows everything** by default.
     ///
-    /// Prefer [`PolicyGate::deny_by_default`] for new code.
+    /// # ⚠️ Security Warning
+    ///
+    /// This is **only** intended as a builder starting point for
+    /// [`build_hardened_policy_gate`], which immediately adds 20+ deny/confirm
+    /// rules on top. **Never** use the returned gate for policy evaluation
+    /// without first adding hardened rules — doing so bypasses all security.
+    ///
+    /// Prefer [`PolicyGate::deny_by_default`] for all new code paths.
+    ///
+    /// Audited: 2026-03-14 — courtroom verdict LOW (intentional builder pattern,
+    /// single production caller in `build_hardened_policy_gate`).
     pub(crate) fn allow_all_builder() -> Self {
+        // Debug-mode tripwire: if someone calls evaluate() on an empty
+        // allow-all gate, it's almost certainly a mistake.
+        #[cfg(debug_assertions)]
+        tracing::warn!(
+            "PolicyGate::allow_all_builder() called — ensure hardened rules are added before evaluate()"
+        );
         Self {
             rules: Vec::new(),
             default_effect: RuleEffect::Allow,

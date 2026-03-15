@@ -182,9 +182,8 @@ impl RateLimiter {
 
 /// Argon2id PIN hash storage.
 ///
-/// We store a 32-byte hash and 16-byte salt. On Android we use a minimal
-/// Argon2id implementation; for now we use a simplified PBKDF-style hash
-/// that can be swapped for the `argon2` crate when added to Cargo.toml.
+/// Stores a 32-byte Argon2id hash and 16-byte CSPRNG salt.
+/// Parameters: time_cost=3, mem_cost=65536 (64 MB), parallelism=1.
 #[derive(Debug, Clone)]
 pub struct PinStore {
     hash: Option<[u8; 32]>,
@@ -246,47 +245,30 @@ impl PinStore {
     // -- Internal helpers --
 
     fn generate_salt() -> [u8; 16] {
-        // In production, use a CSPRNG. For compilation without extra deps,
-        // we derive from system time + a counter. Replace with `rand` or
-        // `getrandom` when available.
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
         let mut salt = [0u8; 16];
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let nanos = now.as_nanos();
-        salt[..16].copy_from_slice(&nanos.to_le_bytes()[..16]);
+        rng.fill(&mut salt);
         salt
     }
 
-    /// Simplified Argon2id-style hash.
+    /// Hash a PIN using Argon2id (memory-hard KDF resistant to GPU/ASIC attacks).
     ///
-    /// TODO: Replace with `argon2` crate (time_cost=3, mem_cost=65536, p=1).
-    /// For now, we use iterated SHA-256-style mixing that compiles without
-    /// extra dependencies. The interface is correct — only the hash function
-    /// needs upgrading.
+    /// Parameters: time_cost=3, mem_cost=65536 (64 MB), parallelism=1.
     fn hash_pin(pin: &str, salt: &[u8; 16]) -> [u8; 32] {
-        let mut state = [0u8; 32];
-        // Mix in salt.
-        for (i, &b) in salt.iter().enumerate() {
-            state[i % 32] ^= b;
-        }
-        // Mix in PIN bytes.
-        for (i, &b) in pin.as_bytes().iter().enumerate() {
-            state[i % 32] ^= b;
-            state[(i + 1) % 32] = state[(i + 1) % 32].wrapping_add(b);
-        }
-        // Iterate to add work factor (placeholder for Argon2id).
-        for _ in 0..10_000 {
-            let mut next = [0u8; 32];
-            for j in 0..32 {
-                next[j] = state[j]
-                    .wrapping_mul(31)
-                    .wrapping_add(state[(j + 1) % 32])
-                    .wrapping_add(state[(j + 7) % 32]);
-            }
-            state = next;
-        }
-        state
+        use argon2::{Algorithm, Argon2, Params, Version};
+        let params = Params::new(
+            65536, // 64 MB memory cost
+            3,     // 3 iterations
+            1,     // 1 thread (mobile-friendly)
+            Some(32),
+        )
+        .expect("valid argon2 params");
+        let mut hash = [0u8; 32];
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+            .hash_password_into(pin.as_bytes(), salt, &mut hash)
+            .expect("argon2 hash_password_into");
+        hash
     }
 }
 

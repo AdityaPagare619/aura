@@ -6,11 +6,11 @@ links = "llama"
 
 [dependencies]
 libloading = "0.8"
-tracing = "0.1"
+tracing = { workspace = true }
 rand = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
 # Build without real llama.cpp (for CI, testing, or host builds).

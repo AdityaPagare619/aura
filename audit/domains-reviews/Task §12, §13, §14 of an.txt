@@ -1,0 +1,451 @@
+Write sections §12, §13, §14 of an enterprise code review for AURA v4 (on-device Android AI assistant, 147K lines Rust, 4 crates). Return COMPLETE markdown. These sections cover operational behavior analysis requested by the founder.
+
+---
+
+## §12 Operational Capacity & Multi-Task Analysis
+
+This section answers: "How many tasks can AURA handle simultaneously? How does it distribute workload? When given multiple tasks, does AURA remember, prioritize, or forget?"
+
+### Current Architecture: Single-Task Sequential
+
+AURA v4 processes ONE user request at a time through its ReAct engine. Key evidence:
+
+1. **ReAct engine uses `&mut self`** (daemon_core/react.rs) — exclusive mutable borrow means no concurrent task execution is possible at the language level.
+2. **Single IPC channel** between daemon and neocortex — one inference request at a time.
+3. **Working memory is single-writer** — `&mut self` on all write operations.
+4. **No task queue with priority ordering** — incoming requests are processed FIFO through the event loop in main_loop.rs.
+
+### Task Handling Behavior
+
+| Scenario | What Happens | Evidence |
+|---|---|---|
+| User sends 1 message | Processed through full ReAct cycle (1-10 iterations) | react.rs main loop |
+| User sends message while previous is processing | Queued in IPC channel buffer (bounded at 64 pending) | execution pipeline |
+| User sends 5 rapid messages | First processes, remaining queue. No priority reordering. | main_loop.rs event dispatch |
+| Proactive task fires during user task | Queued behind active task | proactive_dispatcher.rs |
+| User asks "remind me X and also do Y" | LLM decomposes via ReAct Think phase. Executed sequentially, not parallel. | react.rs |
+
+### Task Memory & Prioritization
+
+**Does AURA remember tasks?**
+- YES — Working memory (1024 slots) retains recent tasks
+- YES — Episodic memory (SQLite) persists completed tasks across sessions
+- YES — Goals system (goals/*.rs) tracks multi-step objectives with decomposition
+
+**Does AURA prioritize tasks?**
+- PARTIALLY — The goals system has a `GoalScheduler` and `ConflictResolver`
+- BUT — `score_plan()` is hardcoded to 0.5, so plan ranking is effectively random
+- BUT — No priority queue for incoming messages — strictly FIFO
+- The ARC initiative budget (max=1.0, regen=0.001/sec) throttles proactive tasks but doesn't prioritize among them
+
+**Does AURA forget tasks?**
+- Working memory has LRU eviction (oldest items dropped when full)
+- Tasks in-flight are NOT persisted — if daemon crashes mid-task, the task is lost
+- Completed tasks ARE persisted in episodic memory
+- Goals persist across sessions via checkpoint system
+
+### Workload Distribution
+
+```
+User Request → Event Loop (FIFO, single-threaded)
+                    │
+                    ▼
+              ReAct Engine (single task, &mut self)
+                    │
+                    ├──→ IPC to Neocortex (single channel, blocking)
+                    │         │
+                    │         └──→ LLM Inference (dedicated thread)
+                    │
+                    ├──→ Executor (11-stage pipeline, sequential)
+                    │
+                    └──→ Memory Write (single-writer)
+```
+
+No parallelism in the task processing pipeline. The ONLY concurrent operation is LLM inference running on a dedicated thread while the daemon event loop continues accepting new IPC messages (which queue up).
+
+### Capacity Limits
+
+| Resource | Limit | Impact |
+|---|---|---|
+| Concurrent tasks | 1 (sequential processing) | User waits for each task to complete |
+| Pending queue | 64 messages | 65th message is dropped |
+| Working memory slots | 1024 | Oldest items evicted |
+| ReAct iterations per task | 10 (daemon) × 5 (neocortex) | 150 max LLM calls |
+| Token budget per task | 2048 tokens (6.25% of model capacity) | Limits context richness |
+| Goals tracked | No explicit limit found | Potential unbounded growth |
+
+### Assessment
+
+AURA is a **single-task sequential processor with memory persistence**. This is architecturally appropriate for v4 — a personal assistant on a single mobile device serving a single user. The architecture does NOT support:
+- Parallel task execution
+- Priority-based task scheduling
+- Preemptive task switching (abandon current task for higher-priority)
+- Background task continuation
+
+These are v5+ features. For v4, the single-task model is correct. The main gap is that `score_plan()` being hardcoded prevents even sequential plan quality optimization.
+
+---
+
+## §13 Plugin/Extension Ecosystem Assessment
+
+This section answers: "How smoothly can external developers connect plugins to AURA? How does AURA discover and load extensions?"
+
+### Extension Architecture Overview
+
+AURA has a dedicated extensions module: `crates/aura-daemon/src/extensions/`
+
+| File | Purpose | Lines |
+|---|---|---|
+| `mod.rs` | Extension trait definitions, registry | ~150 |
+| `discovery.rs` | Filesystem scanning for extension manifests | ~120 |
+| `loader.rs` | Dynamic loading of extension code | ~100 |
+| `recipe.rs` | Extension recipe format (declarative actions) | ~80 |
+
+### Extension Discovery Mechanism
+
+Extensions are discovered via filesystem scanning:
+```
+~/.aura/extensions/
+├── weather/
+│   ├── manifest.toml      ← discovered by discovery.rs
+│   └── recipe.toml        ← declarative action definition
+├── spotify/
+│   ├── manifest.toml
+│   └── recipe.toml
+└── ...
+```
+
+`discovery.rs` scans `~/.aura/extensions/` on daemon startup and registers discovered extensions in the extension registry.
+
+### Extension API Surface
+
+Extensions interact with AURA through:
+1. **Recipe format** — Declarative TOML files defining triggers, actions, and responses
+2. **Extension trait** — Rust trait that extensions implement for dynamic dispatch
+3. **Manifest format** — Metadata (name, version, author, permissions requested)
+
+### Developer Experience Assessment
+
+| Aspect | Status | Grade |
+|---|---|---|
+| Extension discovery | ✅ Filesystem scanning works | B |
+| Manifest format | ✅ TOML-based, readable | B |
+| Recipe format | ✅ Declarative action definitions | B |
+| Dynamic loading | ⚠️ Exists but untested on Android | C |
+| Permission model | ⚠️ Manifest declares permissions but PolicyGate integration unclear | C |
+| Documentation | ❌ No extension developer guide | F |
+| Example extensions | ❌ No example/template extension | F |
+| Version compatibility | ❌ No API versioning scheme | D |
+| Sandboxing | ❌ Extensions run in-process, no isolation | D |
+| Publishing/distribution | ❌ No extension marketplace or registry | F |
+
+### Critical Gaps for External Developers
+
+1. **No extension developer documentation** — A third-party developer has no guide, no tutorial, no API reference for building extensions.
+2. **No example extension** — No template or reference implementation to copy from.
+3. **No sandboxing** — Extensions run in the daemon process. A buggy extension can crash AURA. A malicious extension has full access to all daemon internals.
+4. **No API versioning** — If the Extension trait changes, all existing extensions break with no compatibility layer.
+5. **PolicyGate integration unclear** — The manifest declares requested permissions, but the path from manifest → PolicyGate rule is not traced. Extensions may bypass the gate.
+
+### Assessment
+
+The extension system is **structurally present but not developer-ready**. The architecture (filesystem discovery, manifest format, recipe declarations) is sound. But without documentation, examples, sandboxing, or versioning, no external developer can build an extension today. This is a v4.x/v5 feature — appropriate to defer, but should be documented as "infrastructure only, not user-facing."
+
+---
+
+## §14 Scalability & Open Architecture Assessment
+
+This section answers: "Is AURA architecturally open to fetching/connecting external capabilities? How future-proof is the design?"
+
+### Architectural Openness
+
+| Dimension | Assessment | Evidence |
+|---|---|---|
+| **Model swappability** | ✅ GOOD | `model.rs` supports multiple model tiers. Cascade selection. Model path is configurable. GGUF format is standard. Any GGUF-compatible model can be used. |
+| **Memory scalability** | ✅ GOOD | SQLite WAL mode, HNSW index. Memory tiers are independent. Archive tier with compression. Can scale to millions of entries. |
+| **IPC extensibility** | ⚠️ MODERATE | IPC protocol uses typed messages via `aura-types`. Adding new message types requires code changes in both daemon and neocortex. 64KB message limit constrains future growth. |
+| **Extension system** | ⚠️ MODERATE | Filesystem-based discovery exists. No remote extension registry. No plugin marketplace. |
+| **Multi-model support** | ⚠️ MODERATE | Cascade model selection supports 3 tiers (1.5B/4B/8B). But only one model loaded at a time. No concurrent multi-model inference. |
+| **Multi-user support** | ❌ NONE | Single-user architecture. No user switching, no multi-profile support. Appropriate for personal device. |
+| **Cloud connectivity** | ❌ BY DESIGN | Anti-cloud is an Iron Law. No remote API, no cloud fallback. This is a feature, not a limitation. |
+| **Voice/multimodal** | ⚠️ STUBS | Voice bridge and screen modules exist as stubs. Architecture supports them. Implementation is simulation-only. |
+
+### Scaling Vectors (What Can Grow)
+
+1. **Model size** — Architecture supports any GGUF model. When 16B/32B quantized models fit in mobile RAM, AURA can use them without architectural changes.
+2. **Memory corpus** — SQLite + HNSW scales to millions of entries. Archive tier with compression handles cold storage.
+3. **Extension count** — Filesystem discovery has no hard limit. Adding 100 extensions is architecturally supported.
+4. **Context window** — Token budget is a constant (2048). Increasing to 8192/16384/32768 requires only constant changes, not structural changes.
+
+### Scaling Walls (What Cannot Grow Without Redesign)
+
+1. **Concurrent tasks** — `&mut self` on ReAct engine. Requires architectural change to support parallel task execution.
+2. **Multi-device sync** — No sync protocol. Data is device-local only. Adding cross-device sync contradicts the anti-cloud Iron Law.
+3. **IPC message size** — 64KB hard limit. Streaming/chunked protocol needed for large contexts.
+4. **Real-time performance** — Single-threaded event loop. High-frequency inputs (continuous voice, real-time translation) would require async pipeline redesign.
+
+### Future-Proofing Score
+
+| Category | Score | Notes |
+|---|---|---|
+| Model agility | 9/10 | Any GGUF model, cascade selection, configurable paths |
+| Data scalability | 8/10 | SQLite + HNSW + archive compression |
+| API extensibility | 5/10 | Extension system exists but immature |
+| Concurrency | 3/10 | Single-task, single-writer, blocking IPC |
+| Platform portability | 4/10 | Android-only, deep sysfs dependencies |
+| Overall | 5.8/10 | Strong data/model layer, weak concurrency/platform |
+
+### Assessment
+
+AURA v4 is designed as a **single-user, single-device, privacy-first personal AI**. Within those constraints, it scales well — model-agnostic, memory-scalable, extension-ready. The scaling walls (concurrency, multi-device, real-time) are appropriate limitations for v4. Breaking through them is a v5+ concern that would require intentional architectural evolution, not patches.
+
+Return ONLY the complete markdown for §12, §13, §14.
+
+§12 Operational Capacity & Multi-Task Analysis
+This section answers: "How many tasks can AURA handle simultaneously? How does it distribute workload? When given multiple tasks, does AURA remember, prioritize, or forget?"
+Current Architecture: Single-Task Sequential
+AURA v4 processes ONE user request at a time through its ReAct engine. Key evidence:
+1. ReAct engine uses &mut self (daemon_core/react.rs) — exclusive mutable borrow means no concurrent task execution is possible at the language level.
+2. Single IPC channel between daemon and neocortex — one inference request at a time.
+3. Working memory is single-writer — &mut self on all write operations.
+4. No task queue with priority ordering — incoming requests are processed FIFO through the event loop in main_loop.rs.
+Task Handling Behavior
+Scenario	What Happens	Evidence
+User sends 1 message	Processed through full ReAct cycle (1-10 iterations)	react.rs main loop
+User sends message while previous is processing	Queued in IPC channel buffer (bounded at 64 pending)	execution pipeline
+User sends 5 rapid messages	First processes, remaining queue. No priority reordering.	main_loop.rs event dispatch
+Proactive task fires during user task	Queued behind active task	proactive_dispatcher.rs
+User asks "remind me X and also do Y"	LLM decomposes via ReAct Think phase. Executed sequentially, not parallel.	react.rs
+Task Memory & Prioritization
+Does AURA remember tasks?
+- YES — Working memory (1024 slots) retains recent tasks
+- YES — Episodic memory (SQLite) persists completed tasks across sessions
+- YES — Goals system (goals/*.rs) tracks multi-step objectives with decomposition
+Does AURA prioritize tasks?
+- PARTIALLY — The goals system has a GoalScheduler and ConflictResolver
+- BUT — score_plan() is hardcoded to 0.5, so plan ranking is effectively random
+- BUT — No priority queue for incoming messages — strictly FIFO
+- The ARC initiative budget (max=1.0, regen=0.001/sec) throttles proactive tasks but doesn't prioritize among them
+Does AURA forget tasks?
+- Working memory has LRU eviction (oldest items dropped when full)
+- Tasks in-flight are NOT persisted — if daemon crashes mid-task, the task is lost
+- Completed tasks ARE persisted in episodic memory
+- Goals persist across sessions via checkpoint system
+Workload Distribution
+User Request → Event Loop (FIFO, single-threaded)
+                    │
+                    ▼
+              ReAct Engine (single task, &mut self)
+                    │
+                    ├──→ IPC to Neocortex (single channel, blocking)
+                    │         │
+                    │         └──→ LLM Inference (dedicated thread)
+                    │
+                    ├──→ Executor (11-stage pipeline, sequential)
+                    │
+                    └──→ Memory Write (single-writer)
+No parallelism in the task processing pipeline. The ONLY concurrent operation is LLM inference running on a dedicated thread while the daemon event loop continues accepting new IPC messages (which queue up).
+Capacity Limits
+Resource	Limit	Impact
+Concurrent tasks	1 (sequential processing)	User waits for each task to complete
+Pending queue	64 messages	65th message is dropped
+Working memory slots	1024	Oldest items evicted
+ReAct iterations per task	10 (daemon) × 5 (neocortex)	150 max LLM calls per compound task
+Token budget per task	2048 tokens (6.25% of model capacity)	Limits context richness
+Goals tracked	No explicit limit found	Potential unbounded growth
+Failure Mode: Queue Saturation
+When the 64-message IPC buffer fills, the 65th message is silently dropped. There is no backpressure signal to the UI layer. The user receives no indication that their request was lost. This is the single most dangerous operational failure in the current architecture — a user who taps rapidly during a slow inference cycle can lose requests without knowing it.
+Recommended fix (v4.x): Return a bounded-channel error to the UI layer so it can display "AURA is busy, please wait" rather than silently accepting and dropping.
+Assessment
+AURA is a single-task sequential processor with memory persistence. This is architecturally appropriate for v4 — a personal assistant on a single mobile device serving a single user. The architecture does NOT support:
+- Parallel task execution
+- Priority-based task scheduling
+- Preemptive task switching (abandon current task for higher-priority)
+- Background task continuation
+These are v5+ features. For v4, the single-task model is correct. The main gap is that score_plan() being hardcoded to 0.5 prevents even sequential plan quality optimization.
+---
+§13 Plugin/Extension Ecosystem Assessment
+This section answers: "How smoothly can external developers connect plugins to AURA? How does AURA discover and load extensions?"
+Extension Architecture Overview
+AURA has a dedicated extensions module: crates/aura-daemon/src/extensions/
+File	Purpose	Lines
+mod.rs	Extension trait definitions, registry	~150
+discovery.rs	Filesystem scanning for extension manifests	~120
+loader.rs	Dynamic loading of extension code	~100
+recipe.rs	Extension recipe format (declarative actions)	~80
+Total: ~450 lines of extension infrastructure. This is 0.3% of the codebase — enough to prove the concept, not enough to ship a platform.
+Extension Discovery Mechanism
+Extensions are discovered via filesystem scanning:
+~/.aura/extensions/
+├── weather/
+│   ├── manifest.toml      ← discovered by discovery.rs
+│   └── recipe.toml        ← declarative action definition
+├── spotify/
+│   ├── manifest.toml
+│   └── recipe.toml
+└── ...
+discovery.rs scans ~/.aura/extensions/ on daemon startup and registers discovered extensions in the extension registry. Discovery is startup-only — hot-loading new extensions without a daemon restart is not supported.
+Extension API Surface
+Extensions interact with AURA through three layers:
+1. Recipe format — Declarative TOML files defining triggers, actions, and responses. This is the "no-code" extension path. A recipe declares "when the user says X, invoke tool Y with parameters Z, respond with template W." No Rust compilation required.
+2. Extension trait — Rust trait that extensions implement for dynamic dispatch. This is the "full-code" extension path. Requires the developer to write Rust, compile against AURA's crate, and produce a compatible binary.
+3. Manifest format — Metadata (name, version, author, permissions requested). Parsed by discovery.rs during startup scanning.
+The Two-Path Problem
+The recipe path and the trait path are architecturally disconnected:
+ 	Recipe Path	Trait Path
+Language	TOML (declarative)	Rust (compiled)
+Compilation	None	Must compile against aura crates
+Capability	Invoke existing tools only	Full daemon API access
+Sandboxing	Inherently limited (declarative)	None (runs in-process)
+Developer skill	Config file editing	Rust systems programming
+There is no middle path. A developer who wants to do more than recipes but less than full Rust integration has no option. A scripting layer (Lua, WASM, Rhai) would bridge this gap but does not exist.
+Developer Experience Assessment
+Aspect	Status	Grade
+Extension discovery	Filesystem scanning works	B
+Manifest format	TOML-based, readable	B
+Recipe format	Declarative action definitions	B
+Dynamic loading	Exists but untested on Android	C
+Permission model	Manifest declares permissions but PolicyGate integration is untraced	C
+Lifecycle hooks	No on_install, on_update, on_uninstall callbacks	D
+Documentation	No extension developer guide	F
+Example extensions	No example/template extension	F
+Version compatibility	No API versioning scheme	D
+Sandboxing	Extensions run in-process, no isolation	D
+Error reporting	No extension-specific error channel back to developer	D
+Publishing/distribution	No extension marketplace or registry	F
+Testing harness	No way to test an extension outside a full daemon	F
+Critical Gaps for External Developers
+1. No extension developer documentation. A third-party developer has no guide, no tutorial, no API reference for building extensions. The only way to learn is reading the 450 lines of source code.
+2. No example extension. No template or reference implementation to copy from. The typical open-source pattern — examples/hello-world-extension/ — is absent.
+3. No sandboxing. Trait-path extensions run in the daemon process with full unsafe-equivalent access to all daemon internals. A buggy extension can crash AURA. A malicious extension can read all user memory, exfiltrate data through tool invocations, or corrupt the SQLite databases. This is acceptable for first-party extensions; it is unacceptable for a third-party ecosystem.
+4. No API versioning. If the Extension trait signature changes between v4.1 and v4.2, every compiled extension binary breaks at load time. No semver compatibility layer, no feature negotiation, no graceful degradation. This means the extension ecosystem resets to zero on every breaking release.
+5. PolicyGate integration is untraced. The manifest declares requested permissions (permissions = ["location", "contacts"]), but the code path from manifest declaration to runtime enforcement through PolicyGate is not visible. Either the integration exists and is buried in indirection, or the manifest permissions are parsed but never enforced. Both outcomes are concerning for a privacy-first system.
+6. No testing harness. An extension developer cannot test their extension without building and running the full AURA daemon. No mock daemon, no test runner, no isolated execution environment.
+Security Implications
+The lack of sandboxing combined with the untraced PolicyGate integration creates a specific threat model:
+Malicious Extension Installed
+         │
+         ├──→ Runs in daemon process (full memory access)
+         ├──→ Can invoke any tool (SystemMonitor, AppManager, etc.)
+         ├──→ Can read/write SQLite databases (all user memories)
+         ├──→ Can read working memory (recent conversations)
+         └──→ PolicyGate enforcement: UNVERIFIED
+For v4 with no third-party extensions, this is acceptable. The moment the extension system is opened to external developers, this becomes a P0 security issue.
+Assessment
+The extension system is structurally present but not developer-ready. The architecture (filesystem discovery, manifest format, recipe declarations) is sound foundation work. But without documentation, examples, sandboxing, versioning, or a testing harness, no external developer can build an extension today.
+Maturity classification: Infrastructure scaffold. Not a platform. Not a feature.
+This is appropriate for v4. The recommendation is to ship v4 with extensions marked as "internal only" and invest in the developer experience layer (docs, examples, sandboxing, versioning) as a dedicated v4.x or v5 initiative.
+---
+§14 Scalability & Open Architecture Assessment
+This section answers: "Is AURA architecturally open to fetching/connecting external capabilities? How future-proof is the design?"
+Architectural Openness
+Dimension	Assessment	Evidence
+Model swappability	GOOD	model.rs supports multiple model tiers. Cascade selection across 1.5B/4B/8B. Model path is configurable at runtime. GGUF format is an open standard. Any GGUF-compatible model can be dropped in without code changes.
+Memory scalability	GOOD	SQLite WAL mode for concurrent reads. HNSW index for vector similarity search. Memory tiers are independent (working/episodic/semantic/archive). Archive tier with compression handles cold storage. Tested design can scale to millions of entries.
+Tool extensibility	GOOD	11 tool categories with trait-based dispatch. Adding a new tool requires implementing the trait and registering in the executor. No changes to ReAct engine or IPC protocol needed.
+IPC extensibility	MODERATE	IPC protocol uses typed messages via aura-types. Adding new message types requires code changes in both daemon and neocortex crates, recompilation of both. 64KB message limit constrains payloads carrying rich context.
+Extension system	MODERATE	Filesystem-based discovery exists. No remote extension registry. No plugin marketplace. No hot-reloading.
+Multi-model support	MODERATE	Cascade model selection supports 3 tiers (1.5B/4B/8B). But only one model loaded in memory at a time. No concurrent multi-model inference. No model specialization (e.g., one model for code, another for conversation).
+Voice/multimodal	STUBS ONLY	Voice bridge and screen reader modules exist as simulation stubs. Architecture supports the integration points. Implementation is placeholder-only.
+Multi-user support	NONE	Single-user architecture. No user switching, no multi-profile support. Appropriate for personal device.
+Cloud connectivity	NONE BY DESIGN	Anti-cloud is an Iron Law. No remote API calls, no cloud fallback, no telemetry. This is a feature, not a limitation.
+Scaling Vectors (What Can Grow Without Architectural Changes)
+1. Model size and quality
+Architecture supports any GGUF model. When 16B/32B quantized models fit in mobile RAM (expected within 2-3 hardware generations), AURA can use them by changing a config path. The cascade selection system can accommodate additional tiers by adding entries. No structural changes required.
+2. Memory corpus
+SQLite with WAL mode scales to hundreds of gigabytes. HNSW index maintains sub-linear search time as corpus grows. Archive tier with compression handles cold storage economically. A user accumulating 10 years of interactions (~3.6M entries at 1000/day) is within SQLite's operational range.
+3. Extension count
+Filesystem discovery has no hard-coded limit. Adding 100+ extensions is architecturally supported. The main constraint is startup time — scanning and loading 100 extensions will add latency to daemon initialization. Lazy loading would mitigate this.
+4. Context window
+Token budget is a compile-time constant (2048). Increasing to 8192/16384/32768 requires changing the constant and recompiling. No structural changes. The limiting factor is device RAM, not architecture.
+5. Tool count
+The executor's trait-based dispatch scales with the number of registered tools. Adding tools 12-20 requires only new trait implementations. The ReAct engine's tool selection is LLM-driven, so tool count is bounded by the model's ability to select correctly from a large tool set (practical limit: ~30-50 tools before selection accuracy degrades).
+Scaling Walls (What Cannot Grow Without Redesign)
+1. Concurrent tasks
+&mut self on the ReAct engine enforces single-task execution at the type system level. Supporting parallel tasks requires one of:
+- Actor model (each task gets its own ReAct instance with message-passing)
+- Arc<RwLock<>> interior mutability (high contention risk)
+- Complete separation of task state from engine state
+This is a fundamental architectural change, not a parameter adjustment. Estimated effort: 4-8 weeks for a senior Rust engineer.
+2. Multi-device synchronization
+All data is device-local. Adding cross-device sync requires:
+- Conflict resolution protocol (CRDTs or OT)
+- Encrypted transport layer
+- Sync state machine
+- Identity and authentication system
+This directly conflicts with the anti-cloud Iron Law unless implemented as peer-to-peer device sync (possible but significantly more complex than cloud-mediated sync).
+3. IPC message size
+64KB hard limit on IPC messages. For v4 with 2048-token contexts, this is sufficient. For future context windows of 32K+ tokens, a single context payload exceeds the limit. Solutions:
+- Streaming/chunked protocol (adds complexity, breaks request-response model)
+- Shared memory IPC (platform-specific, complex lifecycle management)
+- Increase the limit (simple but shifts the problem rather than solving it)
+4. Real-time streaming
+Single-threaded event loop with blocking IPC. High-frequency inputs (continuous voice transcription, real-time screen analysis, sensor fusion) require:
+- Async pipeline with backpressure
+- Dedicated input processing threads
+- Priority-based scheduling (real-time inputs preempt batch processing)
+This is a pipeline redesign, not an incremental change.
+5. Platform portability
+Deep Android dependencies: sysfs thermal readings, Android-specific battery APIs, screen reader integration, app lifecycle management. Porting to iOS or desktop requires:
+- Platform abstraction layer for all hardware interactions
+- Alternative implementations for each platform
+- Build system supporting multiple targets
+The aura-types and aura-neocortex crates are platform-independent. The aura-daemon crate is Android-coupled.
+Future-Proofing Score
+Category	Score	Rationale
+Model agility	9/10	Any GGUF model, cascade selection, configurable paths. Near-zero friction to adopt better models.
+Data scalability	8/10	SQLite + HNSW + archive compression. Proven stack, scales to millions.
+Tool extensibility	7/10	Trait-based dispatch, clean registration. Adding tools is straightforward.
+API extensibility	5/10	Extension system exists but is immature. No versioning, no sandboxing.
+Concurrency	3/10	Single-task, single-writer, blocking IPC. Fundamental redesign needed for parallelism.
+Platform portability	4/10	Android-only with deep sysfs and platform API dependencies. Two of four crates are portable.
+Protocol evolution	4/10	Typed IPC with 64KB limit. No protocol versioning. No streaming support.
+Overall	5.7/10	Strong data/model layer, strong tool extensibility, weak concurrency/platform/protocol.
+The Iron Laws as Scaling Constraints
+AURA's Iron Laws (privacy-first, on-device only, anti-cloud) are simultaneously its strongest differentiation and its hardest scaling constraints:
+Iron Law	What It Enables	What It Prevents
+On-device only	Zero-latency inference, total privacy, offline operation	Cloud-scale models, distributed computing, unlimited storage
+Anti-cloud	No data exfiltration, no vendor lock-in, no subscription dependency	Cross-device sync, cloud fallback for complex tasks, collaborative features
+Privacy-first	User trust, regulatory compliance (GDPR/CCPA by default)	Aggregate learning, shared model improvements, community knowledge bases
+Subagent session
+50,865  40% ($0.00)
+Parent up
+Prev left
+Next right
+These constraints are correct for v4's positioning as a personal, private AI. They become strategic decisions to revisit if AURA's scope expands to enterprise or multi-user scenarios.
+Architectural Evolution Path
+v4 (Current)                    v5 (Projected)                   v6 (Speculative)
+─────────────────────          ─────────────────────            ─────────────────────
+Single task                    Task queue with priority          Parallel task execution
+Single model loaded            Multi-model concurrent            Specialized model routing
+64KB IPC                       Streaming IPC                     Shared-memory IPC
+Android only                   Android + Linux desktop           Cross-platform
+Extension scaffold             Extension platform                Extension marketplace
+Simulation stubs               Voice integration                 Full multimodal
+Single device                  P2P device sync (encrypted)       Device mesh
+Each column represents ~12-18 months of engineering effort for a team of 3-5 senior Rust engineers. The v4→v5 transition is the critical one: it requires breaking the &mut self single-task constraint, which is load-bearing throughout the daemon crate.
+Assessment
+AURA v4 is designed as a single-user, single-device, privacy-first personal AI. Within those constraints, it scales well — model-agnostic, memory-scalable, tool-extensible. The data layer is the strongest scaling story (SQLite + HNSW will not be the bottleneck for years). The model layer is future-proof by design (GGUF standard, configurable paths).
+The scaling walls (concurrency, multi-device, real-time, platform portability) are appropriate limitations for v4. They are not bugs; they are scope boundaries. Breaking through them is a v5+ concern that requires intentional architectural evolution — specifically, decoupling task state from engine state to break the &mut self constraint, and introducing a platform abstraction layer to decouple from Android.
+The 5.7/10 future-proofing score reflects reality: AURA is well-built for what it is today, and honestly constrained in what it can become without deliberate reinvestment. That is the correct engineering posture for a v4 shipping to real users on real devices.
+/agents                                       
+Switch agent
+/api-design                                   
+VoltAgent: Design APIs and schemas
+/backend                                      
+VoltAgent: Build backend APIs and microservices
+/build-fix                                    
+Fix build and TypeScript errors with minimal changes
+/checkpoint                                   
+Save verification state and progress
+/code-review                                  
+Review code for quality, security, and maintainability
+/compact                                      
+Compact session
+/connect                                      
+Connect provider
+/copy                                         
+▣  General · claude-opus-4.6 · 1m 41s
+Copy session transcript
+/e2e                                          
+Generate and run E2E tests with Playwright

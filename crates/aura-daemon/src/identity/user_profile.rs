@@ -306,7 +306,11 @@ impl UserProfile {
                 .iter()
                 .enumerate()
                 .filter(|(_, p)| !p.user_stated)
-                .min_by(|(_, a), (_, b)| a.confidence.partial_cmp(&b.confidence).unwrap())
+                .min_by(|(_, a), (_, b)| {
+                    a.confidence
+                        .partial_cmp(&b.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|(i, _)| i)
             {
                 self.daily_patterns.remove(idx);

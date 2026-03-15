@@ -540,6 +540,13 @@ fn cluster_episodes(
         return Vec::new();
     }
 
+    // PERF-HIGH-4 / PERF-MED-5: Sequential embed() calls — each item is embedded
+    // one-by-one in this iterator. For Phase 3 optimisation, batch these through
+    // embed_batch() or, when the neocortex is available, a single batched IPC
+    // call to amortise per-call overhead and enable SIMD-parallel tokenisation.
+    // The loop structure should NOT be restructured now; the batching belongs in
+    // the embedding layer itself (embed_batch already exists but doesn't batch
+    // the neural path). Tracked as Phase 3 optimisation target.
     let embeddings: Vec<Vec<f32>> = contents.iter().map(|c| embed(c)).collect();
     let n = embeddings.len();
     let actual_k = k.min(n);
@@ -566,6 +573,12 @@ fn cluster_episodes(
     centroids.push(embeddings[(first_seed as usize) % n].clone());
 
     // Subsequent centroids: pick proportional to D² (squared min-distance).
+    // PERF-HIGH-5 / PERF-MED-6: The cosine_similarity inner loop below is a
+    // hot path during clustering. Phase 3 should add NEON SIMD intrinsics
+    // for aarch64 targets (`#[cfg(target_arch = "aarch64")]` with
+    // `std::arch::aarch64::*` vfmaq_f32 / vaddvq_f32) to accelerate the
+    // dot-product and magnitude computations inside cosine_similarity.
+    // Expected speedup: 4-8× on Apple Silicon / Snapdragon for 384-dim vectors.
     for _ in 1..actual_k {
         let mut distances: Vec<f32> = embeddings
             .iter()

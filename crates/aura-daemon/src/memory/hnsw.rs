@@ -123,6 +123,11 @@ pub struct HnswIndex {
     count: usize,
     /// Simple LCG state for deterministic level generation.
     rng_state: u64,
+    /// Reusable visited buffer — avoids O(n) allocation per search.
+    /// Each entry stores the generation when it was last visited.
+    /// PERF-MED-2: generation counter replaces `vec![false; n]` per search.
+    visited: Vec<u64>,
+    visited_gen: u64,
 }
 
 impl HnswIndex {
@@ -145,6 +150,8 @@ impl HnswIndex {
             deleted: Vec::new(),
             count: 0,
             rng_state: 42,
+            visited: Vec::new(),
+            visited_gen: 0,
         }
     }
 
@@ -249,7 +256,7 @@ impl HnswIndex {
     /// pairs sorted by similarity descending (highest similarity first).
     #[instrument(skip(self, query))]
     pub fn search(
-        &self,
+        &mut self,
         query: &[f32],
         k: usize,
         ef: usize,
@@ -384,6 +391,8 @@ impl HnswIndex {
         self.deleted = fresh.deleted;
         self.count = fresh.count;
         self.rng_state = fresh.rng_state;
+        self.visited = Vec::new();
+        self.visited_gen = 0;
 
         id_map
     }
@@ -533,6 +542,8 @@ impl HnswIndex {
             deleted,
             count,
             rng_state,
+            visited: Vec::new(),
+            visited_gen: 0,
         })
     }
 
@@ -585,8 +596,12 @@ impl HnswIndex {
 
     /// Standard HNSW search_layer: returns up to `ef` closest nodes at the given
     /// level, as (NodeId, distance) sorted by distance ascending.
+    ///
+    /// PERF-MED-2: Uses a generation counter instead of allocating a fresh
+    /// `vec![false; n]` on every call. The `self.visited` buffer is reused
+    /// across searches — only `self.visited_gen` is incremented (O(1) reset).
     fn search_layer(
-        &self,
+        &mut self,
         query: &[f32],
         entry: NodeId,
         ef: usize,
@@ -597,7 +612,17 @@ impl HnswIndex {
         // candidates: min-heap (closest first to pop), results: max-heap (farthest first to pop).
         let mut candidates = BinaryHeap::new();
         let mut results = BinaryHeap::new();
-        let mut visited = vec![false; self.nodes.len()];
+
+        // Bump generation counter; extend visited buffer if index grew.
+        self.visited_gen = self.visited_gen.wrapping_add(1);
+        if self.visited_gen == 0 {
+            // Wrapped around — clear the buffer to avoid false positives.
+            self.visited.iter_mut().for_each(|v| *v = 0);
+            self.visited_gen = 1;
+        }
+        if self.visited.len() < self.nodes.len() {
+            self.visited.resize(self.nodes.len(), 0);
+        }
 
         candidates.push(MinEntry {
             id: entry,
@@ -607,7 +632,7 @@ impl HnswIndex {
             id: entry,
             distance: ep_dist,
         });
-        visited[entry as usize] = true;
+        self.visited[entry as usize] = self.visited_gen;
 
         while let Some(MinEntry {
             id: c_id,
@@ -625,8 +650,8 @@ impl HnswIndex {
             if level < conns.len() {
                 for &neighbor in &conns[level] {
                     let n_idx = neighbor as usize;
-                    if n_idx < self.nodes.len() && !visited[n_idx] {
-                        visited[n_idx] = true;
+                    if n_idx < self.nodes.len() && self.visited[n_idx] != self.visited_gen {
+                        self.visited[n_idx] = self.visited_gen;
                         let d = cosine_distance(query, &self.nodes[n_idx].embedding);
 
                         let should_add = if results.len() < ef {
@@ -761,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_empty_index_search() {
-        let idx = HnswIndex::new(8);
+        let mut idx = HnswIndex::new(8);
         let query = vec![0.5; 8];
         let results = idx.search(&query, 5, 50).expect("search empty");
         assert!(results.is_empty());

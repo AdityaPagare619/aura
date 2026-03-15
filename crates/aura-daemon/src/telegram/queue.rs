@@ -31,6 +31,15 @@ pub enum MessageContent {
         text: String,
         parse_mode: Option<String>,
     },
+    /// OGG/Opus voice message (Telegram voice format).
+    Voice {
+        /// OGG/Opus encoded audio bytes.
+        data: Vec<u8>,
+        /// Duration in seconds (for Telegram API).
+        duration_secs: u32,
+        /// Optional caption to accompany the voice message.
+        caption: Option<String>,
+    },
 }
 
 /// Status of a queued message.

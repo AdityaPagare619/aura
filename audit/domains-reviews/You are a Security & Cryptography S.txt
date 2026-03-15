@@ -1,0 +1,250 @@
+You are a **Security & Cryptography Specialist** conducting an enterprise-grade security audit of the AURA v4 project — an on-device Android AI assistant.
+
+## Your Mission
+READ-ONLY deep security review. Do NOT modify any files.
+
+## Codebase Location
+`C:\Users\Lenovo\aura-v3\aura-v4\`
+
+## Security-Critical Files
+- `crates/aura-daemon/src/persistence/vault.rs` — AES-256-GCM + Argon2id vault
+- `crates/aura-daemon/src/persistence/integrity.rs` — data integrity checks
+- `crates/aura-daemon/src/persistence/safe_mode.rs` — safe mode
+- `crates/aura-daemon/src/policy/wiring.rs` — deny-by-default PolicyGate
+- `crates/aura-daemon/src/policy/boundaries.rs` — policy boundaries
+- `crates/aura-daemon/src/identity/` — trust tiers, personality, user profile
+- `crates/aura-daemon/src/daemon_core/react.rs` — ReAct engine (prompt injection vectors?)
+- `crates/aura-neocortex/src/inference.rs` — LLM inference (prompt injection?)
+- `crates/aura-neocortex/src/context.rs` — context management (data leakage?)
+- `crates/aura-types/src/ipc.rs` — IPC protocol (spoofing?)
+- `install.sh` — installation script (supply chain?)
+- `docs/architecture/AURA-V4-SECURITY-MODEL.md` — security doc
+
+## Security Claims to Verify
+1. **Vault**: AES-256-GCM encryption + Argon2id KDF (64MB memory, 3 iterations, 4 parallelism)
+2. **4-tier data classification**: Public, Internal, Confidential, Restricted
+3. **15 absolute ethics rules** hardcoded in binary (no runtime override)
+4. **Deny-by-default PolicyGate** (ADR-007)
+5. **Anti-sycophancy**: 20-response window, block threshold 0.4
+6. **Trust tiers**: STRANGER → ACQUAINTANCE → TRUSTED → INTIMATE
+7. **GDPR compliance**: Export/delete capabilities
+8. **Anti-cloud absolute**: No telemetry, no cloud fallback
+
+## Review Criteria
+1. **Cryptographic correctness**: Is AES-256-GCM used correctly? Nonce generation? Key derivation? Are there hardcoded keys/salts?
+2. **Prompt injection**: Can malicious user input escape the ReAct loop? Can it override ethics rules? Can it access vault data?
+3. **Policy gate**: Is deny-by-default truly enforced? Any bypass paths?
+4. **Data classification**: Is sensitive data (passwords, personal info) actually encrypted at rest?
+5. **IPC security**: Can the IPC channel be spoofed or injected into?
+6. **Install script**: Are downloads verified? Could MITM attacks succeed?
+7. **Supply chain**: Are dependencies trustworthy? Any known CVEs?
+8. **Information leakage**: Could LLM context windows leak sensitive data between conversations?
+9. **Ethics enforcement**: Can the 15 rules truly not be overridden at runtime?
+
+## Output Format
+Return a structured report with:
+- **Summary**: Overall security posture (2-3 sentences)
+- **Threat Model**: Key attack surfaces identified
+- **Findings**: Each with file:line, severity (CRITICAL/HIGH/MEDIUM/LOW/INFO), CWE number if applicable, description, exploitation scenario
+- **Cryptographic Assessment**: Specific review of vault implementation
+- **Prompt Injection Assessment**: Specific review of LLM interaction safety
+- **Top 5 Security Recommendations** prioritized by risk
+
+Be BRUTALLY HONEST. Security reviews that miss real issues are dangerous. Flag everything.
+
+Goal
+Conduct an enterprise-grade READ-ONLY security audit of the AURA v4 project — an on-device Android AI assistant. The audit must produce a structured report covering cryptographic correctness, prompt injection risks, policy gate enforcement, data classification, IPC security, install script supply chain risks, dependency trustworthiness, information leakage, and ethics enforcement.
+Instructions
+- READ-ONLY: Do NOT modify any files. This is a deep security review only.
+- The codebase is at C:\Users\Lenovo\aura-v3\aura-v4\
+- Review must be BRUTALLY HONEST — flag everything, security reviews that miss real issues are dangerous.
+- Verify 8 specific security claims (listed below) against the actual code.
+- Output a structured report with: Summary, Threat Model, Findings (with file:line, severity, CWE), Cryptographic Assessment, Prompt Injection Assessment, and Top 5 Security Recommendations.
+Security Claims to Verify:
+1. Vault: AES-256-GCM + Argon2id (64MB memory, 3 iterations, 4 parallelism)
+2. 4-tier data classification: Public, Internal, Confidential, Restricted
+3. 15 absolute ethics rules hardcoded (no runtime override)
+4. Deny-by-default PolicyGate (ADR-007)
+5. Anti-sycophancy: 20-response window, block threshold 0.4
+6. Trust tiers: STRANGER → ACQUAINTANCE → TRUSTED → INTIMATE
+7. GDPR compliance: Export/delete capabilities
+8. Anti-cloud absolute: No telemetry, no cloud fallback
+Review Criteria (9 areas):
+1. Cryptographic correctness (AES-256-GCM usage, nonce generation, key derivation, hardcoded keys/salts)
+2. Prompt injection (ReAct loop escape, ethics override, vault data access)
+3. Policy gate (deny-by-default enforcement, bypass paths)
+4. Data classification (sensitive data encrypted at rest)
+5. IPC security (spoofing/injection)
+6. Install script (download verification, MITM)
+7. Supply chain (dependency trustworthiness, CVEs)
+8. Information leakage (LLM context windows leaking between conversations)
+9. Ethics enforcement (15 rules truly non-overridable at runtime)
+Discoveries
+Cryptographic Findings (vault.rs):
+- AES-256-GCM implemented correctly: Uses aes_gcm crate with OsRng CSPRNG for 12-byte nonce generation per encryption. Nonce prepended to ciphertext (nonce || ciphertext).
+- Argon2id parameters: Memory 65,536 KiB (64MB) ✓, 3 iterations ✓, but parallelism is 4, not 1 as claimed in the security doc (doc says p=1, code at line 772 says Params::new(65_536, 3, 4, Some(32)) with p=4). The security model doc at §6.2 says parallelism=1 — discrepancy.
+- PIN verification timing attack concern: Line 812 uses hash_output == expected_hash[..32] — standard == comparison, NOT constant-time. The code comment on line 811 says "Constant-time comparison" but uses standard ==. This is a potential timing side-channel (CWE-208).
+- Encryption key stored as Option<[u8; 32]> in memory (line 693). No Zeroize trait used — key material may persist in memory after drop. Confirmed via grep: zeroize crate is in Cargo.lock as a transitive dependency but is NOT imported or used anywhere in the crate source code (use.*zeroize|Zeroize|zeroize:: returns 0 matches across all crates).
+- Vault can operate without encryption key: If encryption_key is None and tier >= 1, it returns an error. But Tier 0 (Ephemeral) stores plaintext. This is by design.
+- Secure delete (line 1020-1033): Manual zero-overwrite of encrypted_value bytes before remove(). But Rust's allocator may have already copied data; zeroize crate would be more reliable.
+Policy Gate Findings (gate.rs, wiring.rs, boundaries.rs):
+- Deny-by-default confirmed: PolicyGate::deny_by_default() at gate.rs line 279 sets default_effect: RuleEffect::Deny. Used in production via wiring.rs line 33.
+- allow_all() is #[cfg(test)] only (gate.rs line 263-264) — correctly restricted. However, allow_all_builder() (gate.rs line 294) is pub(crate) and NOT test-gated — this is a potential internal bypass path, though it's documented as requiring immediate hardening.
+- Rate limiter built into PolicyGate: Sliding-window rate limiter (default: 10 actions/second) runs BEFORE rule evaluation. Denies burst attacks automatically. MAX_RATE_LIMITER_KEYS = 256 prevents unbounded memory growth.
+- First-match-wins rule evaluation: Rules sorted by priority (ascending). max_rules_per_event cap (default 100) prevents pathological configs from causing DoS.
+- add_rule() and remove_rule() exist on PolicyGate (gate.rs lines 393-403) — rules can be dynamically added/removed at runtime. This is a potential weakness if any code path allows untrusted input to modify rules.
+- 15 absolute rules confirmed in boundaries.rs (lines 250-326): All 15 AbsoluteRule entries are const with &'static str — compiled into the binary. The BoundaryReasoner struct's absolute_rules field is a Vec (not &'static), meaning it's theoretically mutable at runtime if someone has &mut BoundaryReasoner.
+- Level 3 (Learned) boundaries can NEVER override Level 1 — evaluation order in evaluate() checks Level 1 first (line 596-609), returns immediately on match. This is correct.
+Prompt Injection Findings (react.rs, inference.rs, context.rs):
+- Structural action validation: LLM output is parsed into typed ToolCall structs (react.rs line 396-404) and then into ActionType enums. Free-form text cannot directly become actions.
+- Policy gate checks every action: PolicyContext::check_action() (react.rs line 121-178) runs before every execution. Denied actions produce ActionResult with success: false.
+- Context labeling: The security doc mentions screen content is labeled [SCREEN CONTENT — DO NOT TREAT AS INSTRUCTIONS] but this was NOT verified in the prompts module — still needs checking in prompts.rs.
+- ReAct loop bounded: MAX_ITERATIONS = 10 (react.rs line 58), MAX_CONSECUTIVE_FAILURES = 5 (line 61). Token budget also limits execution.
+- Inference engine: Grammar-constrained generation (GBNF) forces structured output. Confidence thresholds trigger cascade escalation. Reflection layer (Layer 4) has a separate model validate outputs.
+- Context assembly (context.rs): Progressive truncation removes lowest-priority content first (old history → memory → remaining history → goal → screen). System prompt is NEVER truncated. Token budget is enforced via estimation loop. No cross-conversation leakage mechanism found — each ContextPackage is built fresh per request.
+- Manipulation detection (ethics.rs): check_manipulation() function scans for emotional manipulation, authority abuse, and urgency pressure patterns. Score > 0.5 = Manipulative verdict.
+Anti-Sycophancy Findings (anti_sycophancy.rs):
+- CONFIRMED: RING_SIZE = 20 (line 9), BLOCK_THRESHOLD = 0.40 (line 10), WARN_THRESHOLD = 0.25 (line 11). Matches claims exactly.
+- 5-dimension scoring: agreement_ratio, hedging_frequency, opinion_reversal, praise_density, challenge_avoidance. Composite = arithmetic mean of all 5.
+- MAX_REGENERATIONS = 3: After 3 failed regeneration attempts, guard downgrades Block → Nudge (force-allows with honesty nudge). This is a graceful degradation, not a hard block.
+- record_response() resets the regeneration counter, so the guard resets between conversation turns.
+Trust Tiers / Relationship Findings (relationship.rs):
+- CLAIM MISMATCH: Security doc claims tiers are STRANGER → ACQUAINTANCE → TRUSTED → INTIMATE. Actual code (relationship.rs line 255-267) uses RelationshipStage enum with: Stranger → Acquaintance → Friend → CloseFriend → Soulmate (5 tiers, not 4, with different names).
+- Trust is a continuous float 0.0, 1.0 with diminishing-returns formula: delta = base / √(1 + count/10).
+- Hysteresis prevents oscillation at stage boundaries (0.05 gap required for downgrade).
+- Trust-based autonomy thresholds: τ < 0.25 = ask everything, 0.25-0.50 = Low risk auto, 0.50-0.75 = Medium auto, ≥ 0.75 = High auto. Critical actions ALWAYS require permission regardless of trust.
+Ethics Gate Findings (ethics.rs):
+- Two separate policy systems: identity::ethics::PolicyGate (pattern-based action blocking) and policy::gate::PolicyGate (rule-based policy evaluation). These are different structs in different modules.
+- Ethics PolicyGate has check_with_trust() that adjusts verdicts based on trust level: low trust escalates Audit→Block, high trust downgrades Audit→Allow. Block verdicts are never downgraded regardless of trust — this is correct.
+- TRUTH Framework validates responses against 5 principles (Truthful, Relevant, Unbiased, Transparent, Helpful) with pattern-based scoring and epistemic awareness integration.
+- validate_with_epistemic() penalizes confident assertions about domains where AURA has low epistemic confidence — anti-hallucination mechanism.
+- ConsentTracker with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied.
+Install Script Findings (install.sh):
+- CRITICAL: SHA256 checksums are ALL PLACEHOLDERS (lines 39, 44, 49): PLACEHOLDER_UPDATE_AT_RELEASE_TIME_*. The verify_checksum() function (line 577-602) skips verification when checksum starts with "PLACEHOLDER". This means model downloads are completely unverified — vulnerable to MITM.
+- Checksum bypass on missing tool: If sha256sum is not installed, verification is silently skipped (line 588-591).
+- User can continue on checksum mismatch: Line 567 asks confirm "Checksum mismatch. Continue anyway?" — allows proceeding with tampered files.
+- PIN hashed with SHA256 in install script (line 884): echo -n "$pin1" | sha256sum — no salt, no KDF. The comment says "Real bcrypt would be done by the daemon on first run" but this creates a window where a weak hash is stored in plaintext config.
+- Rustup install piped to shell: Line 401-402 uses curl | sh pattern, though it uses --proto '=https' --tlsv1.2.
+- Git clone uses HTTPS without commit hash pinning for stable channel (uses tag).
+IPC Findings (ipc.rs):
+- IPC uses serde Serialize/Deserialize with typed enums (DaemonToNeocortex, NeocortexToDaemon). No authentication tokens in the IPC protocol visible in the types.
+- ContextPackage has bounded fields: MAX_SIZE = 64KB, MAX_CONVERSATION_HISTORY = 64, MAX_MEMORY_SNIPPETS = 32, and screen elements are bounded (128 interactive elements, 64 visible text). Prevents unbounded allocation DoS.
+- The security doc mentions Unix socket with UID isolation and PID validation, but the actual IPC transport implementation code was not read (only the type definitions in aura-types/src/ipc.rs).
+Data Classification:
+- 4 tiers implemented: Ephemeral(0), Personal(1), Sensitive(2), Critical(3) — different naming than claimed "Public, Internal, Confidential, Restricted" in the security doc.
+- Tier 3 (Critical) entries are NEVER returned in search results (vault.rs line 1067-1069).
+- is_safe_for_llm() returns false for Tier 2+ (line 1099-1104) — prevents sensitive data reaching the LLM.
+Information Leakage (context.rs):
+- Each ContextPackage is constructed fresh per request — no shared mutable state between conversations visible in the context assembly layer.
+- Progressive truncation removes content by priority but never truncates the system prompt.
+- Memory snippets are injected with tier labels ([working r=0.9], [episodic r=0.8]) — the relevance scores and tier names are exposed to the LLM, which is minor information leakage about the memory system's internals.
+- PersonalitySnapshot (OCEAN traits, mood valence/arousal, trust_level) is injected into every prompt — the LLM sees the user's trust level as a float, which could theoretically be used in a prompt injection to craft trust-aware manipulation.
+Security Doc (AURA-V4-SECURITY-MODEL.md):
+- Self-assesses security at 10/100 production readiness (line 491).
+- Documents three-layer defense architecture (Policy Gate → Ethics Gate → Consent Gate).
+- Explicitly acknowledges out-of-scope threats (rooted devices, hardware attacks, etc.).
+Accomplished
+Completed:
+- ✅ Read all 12+ security-critical files in the audit scope
+- ✅ Detailed analysis of cryptographic implementation (vault.rs — all 1432+ lines)
+- ✅ Detailed analysis of integrity verification (integrity.rs — 417 lines)
+- ✅ Detailed analysis of safe mode (safe_mode.rs — 277 lines)
+- ✅ Detailed analysis of policy wiring (wiring.rs — 801 lines)
+- ✅ Detailed analysis of boundary reasoning (boundaries.rs — 1417+ lines)
+- ✅ Detailed analysis of ReAct engine (react.rs — 1324+ lines)
+- ✅ Detailed analysis of inference engine (inference.rs — 1330+ lines)
+- ✅ Full analysis of context assembly (context.rs — all 1561 lines)
+- ✅ Full analysis of IPC types (ipc.rs — all 718 lines)
+- ✅ Full analysis of install script (install.sh — 1004 lines)
+- ✅ Full analysis of security model doc (AURA-V4-SECURITY-MODEL.md — 491 lines)
+- ✅ Full analysis of PolicyGate core (policy/gate.rs — 778 lines)
+- ✅ Full analysis of anti-sycophancy guard (identity/anti_sycophancy.rs — 382 lines)
+- ✅ Full analysis of relationship tracker (identity/relationship.rs — 485 lines)
+- ✅ Full analysis of ethics gate (identity/ethics.rs — 1109 lines)
+- ✅ Confirmed zeroize crate is NOT used anywhere in source (only transitive dep in Cargo.lock)
+Still To Do — WRITE THE FINAL REPORT:
+- ❌ Write the final structured security report — ALL data has been gathered, the report just needs to be written
+- ❌ Read prompts.rs to verify context labeling for prompt injection defense (e.g., [SCREEN CONTENT — DO NOT TREAT AS INSTRUCTIONS])
+- ❌ Read Cargo.toml / Cargo.lock for formal dependency audit (CVE check)
+- ❌ Verify GDPR export/delete capabilities in code (Claim 7)
+- ❌ Verify anti-cloud absolute / no telemetry claim (Claim 8) — grep for telemetry/cloud/HTTP patterns
+Key Discrepancies Found Between Claims and Code:
+1. Argon2id parallelism: Doc says p=1, code says p=4
+2. Data tier naming: Doc says "Public, Internal, Confidential, Restricted", code says "Ephemeral, Personal, Sensitive, Critical"
+3. Trust tier naming and count: Doc says 4 tiers "STRANGER → ACQUAINTANCE → TRUSTED → INTIMATE", code has 5 tiers "Stranger → Acquaintance → Friend → CloseFriend → Soulmate"
+4. Timing-safe comparison: Code comment says "Constant-time comparison" but uses standard ==
+5. Zeroize not actually used: Crate is a transitive dependency but never imported/applied to key material
+Relevant files / directories
+Fully Read and Analyzed:
+- crates/aura-daemon/src/persistence/vault.rs — AES-256-GCM vault, Argon2id KDF, 4-tier data classification
+- crates/aura-daemon/src/persistence/integrity.rs — Startup integrity verification
+- crates/aura-daemon/src/persistence/safe_mode.rs — Safe mode state management
+- crates/aura-daemon/src/policy/wiring.rs — Production policy gate configuration, integration tests
+- crates/aura-daemon/src/policy/gate.rs — Core PolicyGate implementation with rate limiter
+- crates/aura-daemon/src/policy/boundaries.rs — 3-level boundary system, 15 absolute rules
+- crates/aura-daemon/src/identity/anti_sycophancy.rs — Sycophancy guard (20-window, 0.4 threshold)
+- crates/aura-daemon/src/identity/relationship.rs — Trust tiers, relationship progression, trust-based autonomy
+- crates/aura-daemon/src/identity/ethics.rs — Ethics PolicyGate, TRUTH Framework, manipulation detection, consent tracker
+- crates/aura-daemon/src/daemon_core/react.rs — Bi-cameral execution engine, policy context
+- crates/aura-neocortex/src/inference.rs — LLM inference pipeline, teacher stack
+- crates/aura-neocortex/src/context.rs — Context assembly, truncation, builder, reflection/retry/BoN contexts
+- crates/aura-types/src/ipc.rs — IPC protocol types, ContextPackage, message enums
+- install.sh — Termux installer with placeholder checksums
+- docs/architecture/AURA-V4-SECURITY-MODEL.md — Security model documentation
+Not Yet Read (optional for completeness, not blocking report):
+- crates/aura-neocortex/src/prompts.rs — Prompt templates (verify context labeling for prompt injection defense)
+- crates/aura-daemon/src/identity/mod.rs — Identity module root
+- crates/aura-daemon/src/identity/affective.rs — Affective system
+- crates/aura-daemon/src/identity/behavior_modifiers.rs — Behavior modifiers
+- crates/aura-daemon/src/identity/epistemic.rs — Epistemic awareness
+- crates/aura-daemon/src/identity/personality.rs — Personality engine
+- crates/aura-daemon/src/identity/proactive_consent.rs — Proactive consent
+- crates/aura-daemon/src/identity/prompt_personality.rs — Prompt personality injection
+- crates/aura-daemon/src/identity/thinking_partner.rs — Thinking partner mode
+- crates/aura-daemon/src/identity/user_profile.rs — User profile (GDPR export/delete may be here)
+- Cargo.toml / Cargo.lock — Dependency audit
+Subagent session
+95,612  75% ($0.00)
+Parent up
+Prev left
+Next right
+▣  Compaction · claude-opus-4.6 · 2m 36s
+Let me complete the remaining audit items and then write the final report.
+~ Updating todos...
+Let me complete the remaining audit items in parallel.
+✱ Glob "**/prompts.rs" in aura-v3\aura-v4 (1 match)
+✱ Glob "**/user_profile.rs" in aura-v3\aura-v4 (1 match)
+✱ Grep "telemetry|analytics|cloud.*fallback|phone.*home|tracking|upload.*data|http[s]?://" in aura-v3\aura-v4\crates (128 matches)
+✱ Grep "export|gdpr|delete.*data|erase|right.*forget|data.*portability" in aura-v3\aura-v4\crates (89 matches)
+→ Read aura-v3\aura-v4\crates\aura-daemon\Cargo.toml 
+Key findings. Now let me read the critical files — prompts.rs for injection defense, the telemetry module, and the user_profile for GDPR:
+→ Read aura-v3\aura-v4\crates\aura-neocortex\src\prompts.rs 
+→ Read aura-v3\aura-v4\crates\aura-daemon\src\telemetry\mod.rs 
+→ Read aura-v3\aura-v4\crates\aura-daemon\src\identity\user_profile.rs 
+Now let me check main_loop.rs for the telemetry DB write and the telegram API usage to assess the "no cloud" claim:
+→ Read aura-v3\aura-v4\crates\aura-daemon\src\daemon_core\main_loop.rs [offset=4900, limit=50]
+✱ Grep "reqwest|hyper|reqwest::Client|HttpClient|http_client" in aura-v3\aura-v4\crates (11 matches)
+/agents                                       
+Switch agent
+/api-design                                   
+~ Preparing write...
+VoltAgent: Design APIs and schemas
+/backend                                      
+Tool execution aborted
+VoltAgent: Build backend APIs and microservices
+/build-fix                                    
+Fix build and TypeScript errors with minimal changes
+/checkpoint                                   
+Save verification state and progress
+/code-review                                  
+Error: SSE read timed out
+Review code for quality, security, and maintainability
+/compact                                      
+Compact session
+/connect                                      
+Connect provider
+/copy                                         
+▣  Security-Reviewer · claude-opus-4.6
+Copy session transcript
+/e2e                                          
+Generate and run E2E tests with Playwright

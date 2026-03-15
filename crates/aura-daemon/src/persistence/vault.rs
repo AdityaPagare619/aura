@@ -32,6 +32,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -662,6 +663,32 @@ impl DataClassifier {
 }
 
 // ---------------------------------------------------------------------------
+// SecretKey — zeroize-on-drop wrapper for encryption key material
+// ---------------------------------------------------------------------------
+
+/// A 32-byte secret that is zeroed from memory on drop.
+///
+/// The `ZeroizeOnDrop` derive ensures the compiler cannot optimise away
+/// the zeroing write, preventing the key from lingering in RAM after the
+/// owning struct is dropped.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+struct SecretKey([u8; 32]);
+
+impl SecretKey {
+    /// View the raw key bytes (borrows; does NOT move out of the wrapper).
+    fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+// Intentionally omit Debug to avoid accidental key logging.
+impl std::fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretKey(***)")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CriticalVault
 // ---------------------------------------------------------------------------
 
@@ -690,7 +717,10 @@ pub struct CriticalVault {
     /// caller must call [`CriticalVault::set_encryption_key`] before storing
     /// sensitive data.  In production, this is derived from the Android
     /// Keystore or from the user's PIN via Argon2id.
-    encryption_key: Option<[u8; 32]>,
+    ///
+    /// Wrapped in [`SecretKey`] so the raw bytes are guaranteed to be
+    /// zeroed from memory when the vault (or the key) is dropped.
+    encryption_key: Option<SecretKey>,
 }
 
 // ---------------------------------------------------------------------------
@@ -793,6 +823,19 @@ fn hash_pin(pin: &[u8]) -> Result<Vec<u8>, VaultError> {
     Ok(out)
 }
 
+/// Constant-time byte comparison to prevent timing attacks.
+/// XOR-accumulates differences; the final `== 0` check happens once.
+fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Verify a PIN against a stored `salt || hash` blob produced by [`hash_pin`].
 fn verify_pin(pin: &[u8], stored: &[u8]) -> Result<bool, VaultError> {
     if stored.len() < 48 {
@@ -809,7 +852,165 @@ fn verify_pin(pin: &[u8], stored: &[u8]) -> Result<bool, VaultError> {
         .map_err(|e| VaultError::HashFailed(format!("argon2id verify: {e}")))?;
 
     // Constant-time comparison to prevent timing attacks.
-    Ok(hash_output == expected_hash[..32])
+    Ok(constant_time_eq_bytes(&hash_output, &expected_hash[..32]))
+}
+
+// ---------------------------------------------------------------------------
+// Legacy PIN Hash Migration (SEC-MED-7 / SEC-CRIT-004)
+// ---------------------------------------------------------------------------
+//
+// The install.sh creates an initial PIN hash in one of two legacy formats:
+//
+//   1. Unsalted:  "sha256:<64 hex chars>"                  (71 bytes)
+//   2. Salted:    "sha256:<32 hex salt>:<64 hex hash>"     (104 bytes)
+//      Hash = SHA-256(salt_hex || pin_plaintext)
+//
+// On daemon first start, we detect these legacy formats and transparently
+// upgrade to Argon2id. The legacy hash is verified ONCE, then replaced.
+//
+// Legacy unsalted: UTF-8 string "sha256:<64 hex chars>" (71 bytes)
+// Legacy salted:   UTF-8 string "sha256:<32 hex>:<64 hex>" (104 bytes)
+// New format:      48 raw bytes [salt(16) || argon2id_hash(32)]
+// ---------------------------------------------------------------------------
+
+/// Check if a stored PIN blob is in the legacy unsalted `sha256:<hex>` format.
+fn is_legacy_sha256_format(stored: &[u8]) -> bool {
+    stored.len() == 71
+        && stored.starts_with(b"sha256:")
+        && stored[7..].iter().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Check if a stored PIN blob is in the salted `sha256:<salt>:<hash>` format
+/// written by install.sh (salt = 32 hex chars, hash = 64 hex chars → 104 bytes).
+fn is_salted_sha256_format(stored: &[u8]) -> bool {
+    // "sha256:" (7) + salt_hex (32) + ":" (1) + hash_hex (64) = 104
+    if stored.len() != 104 || !stored.starts_with(b"sha256:") {
+        return false;
+    }
+    // salt_hex: bytes 7..39, separator: byte 39 == ':', hash_hex: bytes 40..104
+    stored[7..39].iter().all(|b| b.is_ascii_hexdigit())
+        && stored[39] == b':'
+        && stored[40..].iter().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Verify a PIN against the legacy unsalted SHA-256 format.
+///
+/// SECURITY: This function exists ONLY for one-time migration. After
+/// successful verification, callers MUST immediately re-hash with
+/// `hash_pin()` and persist the new Argon2id blob. The legacy hash
+/// is constant-time compared to prevent timing side-channels even
+/// during migration.
+fn verify_legacy_sha256_pin(pin: &[u8], stored: &[u8]) -> bool {
+    use sha2::{Sha256, Digest};
+
+    if !is_legacy_sha256_format(stored) {
+        return false;
+    }
+
+    let expected_hex = std::str::from_utf8(&stored[7..]).unwrap_or("");
+    let mut hasher = Sha256::new();
+    hasher.update(pin);
+    let computed = hasher.finalize();
+    // Encode to hex without pulling in `hex` crate.
+    let computed_hex: String = computed.iter().map(|b| format!("{:02x}", b)).collect();
+
+    // Constant-time comparison of hex strings.
+    constant_time_eq_bytes(computed_hex.as_bytes(), expected_hex.as_bytes())
+}
+
+/// Verify a PIN against the salted SHA-256 format `sha256:<salt_hex>:<hash_hex>`.
+///
+/// install.sh computes: `echo -n "${salt_hex}${pin}" | sha256sum`
+/// So we replicate: SHA-256(salt_hex_string || pin_bytes).
+///
+/// SECURITY: Same one-time migration semantics as `verify_legacy_sha256_pin`.
+fn verify_salted_sha256_pin(pin: &[u8], stored: &[u8]) -> bool {
+    use sha2::{Sha256, Digest};
+
+    if !is_salted_sha256_format(stored) {
+        return false;
+    }
+
+    let salt_hex = match std::str::from_utf8(&stored[7..39]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let expected_hex = match std::str::from_utf8(&stored[40..104]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let mut hasher = Sha256::new();
+    // install.sh does: echo -n "${salt_hex}${pin}" — salt is the hex STRING, not raw bytes
+    hasher.update(salt_hex.as_bytes());
+    hasher.update(pin);
+    let computed = hasher.finalize();
+    let computed_hex: String = computed.iter().map(|b| format!("{:02x}", b)).collect();
+
+    constant_time_eq_bytes(computed_hex.as_bytes(), expected_hex.as_bytes())
+}
+
+/// Attempt to verify a PIN, transparently migrating legacy formats.
+///
+/// Returns `Ok((true, Some(new_blob)))` if legacy PIN verified and needs
+/// re-persisting with the new Argon2id blob. Returns `Ok((true, None))`
+/// if the PIN verified against an already-modern hash. Returns `Ok((false, None))`
+/// if the PIN is incorrect.
+///
+/// SECURITY [SEC-MED-7]: Implements the migration plan from the comment block
+/// at line 775. Legacy verification happens AT MOST ONCE per stored hash — the
+/// caller must persist the returned `new_blob` to complete the upgrade.
+///
+/// Supported formats (checked in order):
+///   1. Argon2id  — 48 raw bytes `[salt(16) || hash(32)]`
+///   2. Salted    — `sha256:<32-hex-salt>:<64-hex-hash>` (104 bytes, install.sh v2)
+///   3. Unsalted  — `sha256:<64-hex-hash>` (71 bytes, install.sh v1)
+pub fn verify_pin_with_migration(
+    pin: &[u8],
+    stored: &[u8],
+) -> Result<(bool, Option<Vec<u8>>), VaultError> {
+    // Try modern Argon2id format first (48-byte blob).
+    if stored.len() == 48 {
+        let valid = verify_pin(pin, stored)?;
+        return Ok((valid, None));
+    }
+
+    // Try salted SHA-256 format ("sha256:<salt>:<hex>") — install.sh v2.
+    if is_salted_sha256_format(stored) {
+        if verify_salted_sha256_pin(pin, stored) {
+            tracing::warn!(
+                target: "SECURITY",
+                "Migrating salted SHA-256 PIN hash to Argon2id"
+            );
+            let new_blob = hash_pin(pin)?;
+            return Ok((true, Some(new_blob)));
+        } else {
+            return Ok((false, None));
+        }
+    }
+
+    // Try legacy unsalted SHA-256 format ("sha256:<hex>") — install.sh v1.
+    if is_legacy_sha256_format(stored) {
+        if verify_legacy_sha256_pin(pin, stored) {
+            // PIN correct under legacy hash — upgrade to Argon2id immediately.
+            tracing::warn!(
+                target: "SECURITY",
+                "Migrating legacy unsalted SHA-256 PIN hash to Argon2id"
+            );
+            let new_blob = hash_pin(pin)?;
+            return Ok((true, Some(new_blob)));
+        } else {
+            return Ok((false, None));
+        }
+    }
+
+    // Unknown format — reject.
+    Err(VaultError::HashFailed(
+        format!(
+            "unrecognized PIN hash format (len={}, expected 48/Argon2id, 104/salted-SHA256, or 71/unsalted-SHA256)",
+            stored.len()
+        ),
+    ))
 }
 
 impl CriticalVault {
@@ -830,7 +1031,7 @@ impl CriticalVault {
     /// user PIN via Argon2id key derivation.  Must be called before
     /// storing or retrieving encrypted data.
     pub fn set_encryption_key(&mut self, key: [u8; 32]) {
-        self.encryption_key = Some(key);
+        self.encryption_key = Some(SecretKey(key));
     }
 
     /// Hash a user PIN for secure storage (Argon2id + CSPRNG salt).
@@ -878,7 +1079,7 @@ impl CriticalVault {
         // Encrypt value for Tier 1+ entries (Tier 0 = ephemeral/RAM only).
         let encrypted_value = if tier.as_u8() >= 1 {
             match &self.encryption_key {
-                Some(key) => vault_encrypt(key, value)?,
+                Some(sk) => vault_encrypt(sk.as_bytes(), value)?,
                 None => {
                     tracing::warn!(
                         target: "VAULT",
@@ -1002,7 +1203,7 @@ impl CriticalVault {
         let tier = self.entries[key].tier;
         if tier.as_u8() >= 1 {
             match &self.encryption_key {
-                Some(ek) => vault_decrypt(ek, raw),
+                Some(sk) => vault_decrypt(sk.as_bytes(), raw),
                 None => Err(VaultError::DecryptionFailed(
                     "vault encryption key not configured".into(),
                 )),
@@ -1270,6 +1471,16 @@ impl CriticalVault {
 impl Default for CriticalVault {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for CriticalVault {
+    fn drop(&mut self) {
+        // `encryption_key` is `Option<SecretKey>` — `SecretKey` derives
+        // `ZeroizeOnDrop`, so the 32-byte key material is securely zeroed
+        // when this struct is dropped.  Nothing extra needed here, but the
+        // explicit `Drop` impl serves as documentation and a hook for
+        // future sensitive fields.
     }
 }
 
@@ -1718,5 +1929,83 @@ mod tests {
     fn test_access_operation_display() {
         assert_eq!(AccessOperation::Read.to_string(), "Read");
         assert_eq!(AccessOperation::Export.to_string(), "Export");
+    }
+
+    // --- TEST-HIGH-3: Property-based crypto tests ---
+
+    #[test]
+    fn test_vault_roundtrip() {
+        // Encrypt-then-decrypt must return the original plaintext.
+        // This is the fundamental correctness property of the vault crypto layer.
+        let key = [0xBB_u8; 32];
+        let test_cases: Vec<&[u8]> = vec![
+            b"hello world",
+            b"",
+            b"\x00\x01\x02\x03",
+            &[0xFF; 1024],      // 1KB payload
+            b"sensitive data: password123!@#",
+        ];
+
+        for plaintext in &test_cases {
+            let encrypted = vault_encrypt(&key, plaintext)
+                .expect("encryption should not fail");
+
+            // Ciphertext must differ from plaintext (unless empty — AES-GCM
+            // still produces a 16-byte auth tag for empty input).
+            if !plaintext.is_empty() {
+                assert_ne!(
+                    &encrypted[12..], // skip nonce prefix
+                    *plaintext,
+                    "ciphertext must not equal plaintext"
+                );
+            }
+
+            // Ciphertext must be nonce(12) + ciphertext(len + 16 tag).
+            assert!(
+                encrypted.len() >= 12 + 16,
+                "encrypted output too short: {} bytes",
+                encrypted.len()
+            );
+
+            let decrypted = vault_decrypt(&key, &encrypted)
+                .expect("decryption should not fail");
+            assert_eq!(
+                decrypted.as_slice(),
+                *plaintext,
+                "roundtrip failed for plaintext of length {}",
+                plaintext.len()
+            );
+        }
+
+        // Wrong key must fail decryption (integrity check).
+        let wrong_key = [0xCC_u8; 32];
+        let encrypted = vault_encrypt(&key, b"secret").unwrap();
+        let result = vault_decrypt(&wrong_key, &encrypted);
+        assert!(
+            matches!(result, Err(VaultError::DecryptionFailed(_))),
+            "decryption with wrong key must fail"
+        );
+    }
+
+    #[test]
+    fn test_constant_time_eq_works() {
+        // Equal slices must compare as equal.
+        assert!(constant_time_eq_bytes(b"hello", b"hello"));
+        assert!(constant_time_eq_bytes(b"", b""));
+        assert!(constant_time_eq_bytes(&[0u8; 32], &[0u8; 32]));
+
+        // Different slices must compare as unequal.
+        assert!(!constant_time_eq_bytes(b"hello", b"world"));
+        assert!(!constant_time_eq_bytes(b"hello", b"hellp"));
+
+        // Single-bit difference must be detected.
+        let a = [0b10101010u8; 16];
+        let mut b = a;
+        b[15] ^= 0x01; // flip lowest bit of last byte
+        assert!(!constant_time_eq_bytes(&a, &b));
+
+        // Different lengths must compare as unequal.
+        assert!(!constant_time_eq_bytes(b"short", b"longer"));
+        assert!(!constant_time_eq_bytes(b"abc", b"ab"));
     }
 }

@@ -490,7 +490,7 @@ mod tests {
         let (_resp_tx, resp_rx) = mpsc::channel::<DaemonResponse>(16);
 
         let result = bridge.run(cmd_tx, resp_rx).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "bridge.run with pre-cancelled token failed: {:?}", result.err());
     }
 
     #[tokio::test]
@@ -506,7 +506,7 @@ mod tests {
         drop(_resp_tx);
 
         let result = bridge.run(cmd_tx, resp_rx).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "bridge.run with closed response channel failed: {:?}", result.err());
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
 
         // Should succeed (just logs).
         let result = bridge.deliver_response(42, "hello");
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "deliver_response with no queue failed: {:?}", result.err());
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod tests {
         let bridge = TelegramBridge::new(config, cancel, Some(queue));
 
         let result = bridge.deliver_response(42, "response text");
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "deliver_response with queue failed: {:?}", result.err());
 
         // Verify the message was enqueued.
         let pending = bridge.queue.as_ref().unwrap().pending_count().expect("count");

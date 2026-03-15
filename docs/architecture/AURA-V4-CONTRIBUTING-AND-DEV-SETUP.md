@@ -1,7 +1,7 @@
 # AURA v4 — Contributing and Development Setup
 
 > **Audience:** Engineers contributing code to AURA v4.  
-> **Prerequisites:** Read [README.md](README.md) and all six ADRs before writing any code.  
+> **Prerequisites:** Read [README.md](README.md) and all seven ADRs before writing any code.  
 > **Status:** Living document.
 
 ---
@@ -339,11 +339,10 @@ crates/
 │       ├── prompts.rs             # System prompt builder
 │       └── model_capabilities.rs  # Tier-specific parameter tables
 │
-├── aura-llama-sys/                # FFI bindings to llama.cpp
-│   └── src/lib.rs                 # ❌ Outdated — needs batch API update
-│
-└── aura-gguf/                     # GGUF metadata parser
-    └── src/lib.rs                  # ✅ Production quality
+├── aura-llama-sys/                # FFI bindings to llama.cpp + GGUF metadata parser
+│   └── src/
+│       ├── lib.rs                 # ❌ Outdated — needs batch API update
+│       └── gguf_meta.rs           # ✅ GGUF metadata parser (production quality)
 ```
 
 ---
@@ -450,28 +449,28 @@ Reviewers check in this order:
 
 ### 8.1 Adding a New ARC Life Domain
 
-ARC domains are defined in `crates/aura-daemon/src/arc/life_arc.rs`.
+ARC domains are defined in `crates/aura-daemon/src/arc/mod.rs`.
 
-1. Add a new variant to the `LifeDomain` enum
-2. Add a scoring weight to the `LifeArc::domain_weights()` function
-3. Add context mode transitions involving the new domain to `ArcContextMode`
+1. Add a new variant to the `DomainId` enum
+2. Add a scoring weight to the domain weights configuration
+3. Add context mode transitions involving the new domain to `ContextMode`
 4. Add proactive trigger conditions in `proactive.rs` if needed
 5. Update `AURA-V4-ARC-BEHAVIORAL-INTELLIGENCE.md` §2 with the new domain
 6. Add tests: domain scoring, transition conditions, LQI formula impact
 
 ```rust
-// Example: adding a new domain
-pub enum LifeDomain {
-    Health,
-    Finance,
-    Relationships,
-    Career,
-    Learning,
-    Creativity,
-    Mindfulness,
-    Environment,
-    Social,
-    Leisure,
+// Example: adding a new domain (see arc/mod.rs)
+pub enum DomainId {
+    Health = 0,
+    Social = 1,
+    Productivity = 2,
+    Finance = 3,
+    Lifestyle = 4,
+    Entertainment = 5,
+    Learning = 6,
+    Communication = 7,
+    Environment = 8,
+    PersonalGrowth = 9,
     YourNewDomain,  // ← add here
 }
 ```

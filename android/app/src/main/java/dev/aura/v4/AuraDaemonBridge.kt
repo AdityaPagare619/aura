@@ -45,8 +45,17 @@ object AuraDaemonBridge {
     private const val TAG = "AuraDaemonBridge"
 
     init {
-        System.loadLibrary("aura_daemon")
-        Log.i(TAG, "libaura_daemon.so loaded")
+        // AND-MED-5: Wrap native library load in try/catch. If the .so is
+        // missing (wrong ABI, corrupted APK, sideload failure), this prevents
+        // a hard crash of the entire process. The daemon simply won't start,
+        // and all external fun calls will throw UnsatisfiedLinkError at the
+        // call site — which callers already handle via try/catch.
+        try {
+            System.loadLibrary("aura_daemon")
+            Log.i(TAG, "libaura_daemon.so loaded")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "FATAL: Failed to load libaura_daemon.so — native layer unavailable", e)
+        }
     }
 
     // ── Accessibility Service Reference ─────────────────────────────────
@@ -220,13 +229,35 @@ object AuraDaemonBridge {
     /**
      * Device temperature in degrees Celsius.
      *
-     * Uses `ACTION_BATTERY_CHANGED` intent as a rough proxy; the actual
-     * thermal framework (`PowerManager.THERMAL_STATUS_*`) requires API 29+
-     * and isn't always reliable on OEM ROMs.
+     * AND-HIGH-1: API 29+ provides PowerManager.getCurrentThermalStatus()
+     * which is the canonical thermal framework. We map the status enum to
+     * approximate Celsius values. For API 28-, fall back to the battery
+     * temperature sticky broadcast (rough proxy but universally available).
      */
     @JvmStatic
     fun getThermalStatus(): Float {
         val ctx = context() ?: return 35.0f
+
+        // API 29+: Use the thermal framework for a meaningful status.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm != null) {
+                // Map THERMAL_STATUS_* to approximate °C. These are rough
+                // estimates for the Rust side's thermal throttling logic.
+                return when (pm.currentThermalStatus) {
+                    PowerManager.THERMAL_STATUS_NONE      -> 30.0f
+                    PowerManager.THERMAL_STATUS_LIGHT     -> 37.0f
+                    PowerManager.THERMAL_STATUS_MODERATE   -> 42.0f
+                    PowerManager.THERMAL_STATUS_SEVERE     -> 48.0f
+                    PowerManager.THERMAL_STATUS_CRITICAL   -> 55.0f
+                    PowerManager.THERMAL_STATUS_EMERGENCY  -> 65.0f
+                    PowerManager.THERMAL_STATUS_SHUTDOWN   -> 75.0f
+                    else -> 35.0f
+                }
+            }
+        }
+
+        // API 28-: Fall back to battery temperature as a rough proxy.
         return try {
             val intent = ctx.registerReceiver(
                 null,
@@ -251,7 +282,12 @@ object AuraDaemonBridge {
         return pm.isDeviceIdleMode
     }
 
-    @Volatile
+    // AND-CRIT-005: WakeLock race condition fix. The previous code used
+    // @Volatile with check-then-act (read isHeld → release), which is a
+    // classic TOCTOU race. Two threads calling acquireWakelock/releaseWakelock
+    // concurrently could double-release or leak the lock. Using a dedicated
+    // lock object ensures atomicity of the read-check-modify sequence.
+    private val wakeLockMutex = Any()
     private var managedWakeLock: PowerManager.WakeLock? = null
 
     /** Acquire a partial wake-lock with the given tag and timeout. */
@@ -260,14 +296,16 @@ object AuraDaemonBridge {
         val ctx = context() ?: return
         val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
 
-        // Release any existing lock first.
-        releaseWakelock()
+        synchronized(wakeLockMutex) {
+            // Release any existing lock first.
+            managedWakeLock?.let { if (it.isHeld) it.release() }
 
-        managedWakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "aura:$tag"
-        ).apply {
-            acquire(timeoutMs)
+            managedWakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "aura:$tag"
+            ).apply {
+                acquire(timeoutMs)
+            }
         }
         Log.d(TAG, "WakeLock acquired: tag=$tag timeout=${timeoutMs}ms")
     }
@@ -275,13 +313,15 @@ object AuraDaemonBridge {
     /** Release the previously acquired wake-lock. */
     @JvmStatic
     fun releaseWakelock() {
-        managedWakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-                Log.d(TAG, "WakeLock released")
+        synchronized(wakeLockMutex) {
+            managedWakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                    Log.d(TAG, "WakeLock released")
+                }
             }
+            managedWakeLock = null
         }
-        managedWakeLock = null
     }
 
     // ── Notifications ───────────────────────────────────────────────────
@@ -358,13 +398,27 @@ object AuraDaemonBridge {
 
     // ── Sensors ───────────────────────────────────────────────────────
 
-    /** Cached sensor readings — updated by a background listener. */
-    @Volatile private var lastAccelX = 0.0f
-    @Volatile private var lastAccelY = 0.0f
-    @Volatile private var lastAccelZ = 9.81f
-    @Volatile private var lastLightLux = 100.0f
-    @Volatile private var lastProximityNear = false
-    @Volatile private var lastStepCount = 0
+    /**
+     * AND-HIGH-4: Atomic sensor snapshot. Individual @Volatile fields cause
+     * torn reads — a reader could see accelX from time T₁ but accelZ from T₂.
+     * By packing all readings into an immutable data class and swapping the
+     * reference atomically, every reader gets a consistent snapshot.
+     */
+    private data class SensorSnapshot(
+        val accelX: Float = 0.0f,
+        val accelY: Float = 0.0f,
+        val accelZ: Float = 9.81f,
+        val lightLux: Float = 100.0f,
+        val proximityNear: Boolean = false,
+        val stepCount: Int = 0
+    )
+
+    @Volatile private var sensorData = SensorSnapshot()
+
+    // AND-CRIT-003: Store the listener as a class field so we can unregister it.
+    // Previously, the listener was a local variable inside startSensorListeners(),
+    // making it impossible to unregister — a guaranteed memory/battery leak.
+    private var sensorListener: SensorEventListener? = null
     @Volatile private var sensorListenerRegistered = false
 
     /** Start listening to sensors. Called once at daemon init. */
@@ -376,21 +430,22 @@ object AuraDaemonBridge {
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
-                when (event.sensor.type) {
-                    Sensor.TYPE_ACCELEROMETER -> {
-                        lastAccelX = event.values[0]
-                        lastAccelY = event.values[1]
-                        lastAccelZ = event.values[2]
-                    }
-                    Sensor.TYPE_LIGHT -> {
-                        lastLightLux = event.values[0]
-                    }
-                    Sensor.TYPE_PROXIMITY -> {
-                        lastProximityNear = event.values[0] < event.sensor.maximumRange
-                    }
-                    Sensor.TYPE_STEP_COUNTER -> {
-                        lastStepCount = event.values[0].toInt()
-                    }
+                // AND-HIGH-4: Copy-on-write into immutable snapshot.
+                val current = sensorData
+                sensorData = when (event.sensor.type) {
+                    Sensor.TYPE_ACCELEROMETER -> current.copy(
+                        accelX = event.values[0],
+                        accelY = event.values[1],
+                        accelZ = event.values[2]
+                    )
+                    Sensor.TYPE_LIGHT -> current.copy(lightLux = event.values[0])
+                    Sensor.TYPE_PROXIMITY -> current.copy(
+                        proximityNear = event.values[0] < event.sensor.maximumRange
+                    )
+                    Sensor.TYPE_STEP_COUNTER -> current.copy(
+                        stepCount = event.values[0].toInt()
+                    )
+                    else -> current
                 }
             }
             override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
@@ -406,25 +461,46 @@ object AuraDaemonBridge {
                 sm.registerListener(listener, sensor, AndroidSensorManager.SENSOR_DELAY_NORMAL)
             }
         }
+        sensorListener = listener
         sensorListenerRegistered = true
         Log.i(TAG, "Sensor listeners registered")
     }
 
+    /**
+     * AND-CRIT-003: Unregister all sensor listeners and release resources.
+     * Must be called when the daemon shuts down, otherwise the SensorManager
+     * holds a strong reference to the listener, preventing GC of the entire
+     * AuraDaemonBridge singleton's captured context.
+     */
+    @JvmStatic
+    fun stopSensorListeners() {
+        if (!sensorListenerRegistered) return
+        val ctx = context() ?: return
+        val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as? AndroidSensorManager ?: return
+        sensorListener?.let { sm.unregisterListener(it) }
+        sensorListener = null
+        sensorListenerRegistered = false
+        Log.i(TAG, "Sensor listeners unregistered")
+    }
+
     /** Get latest accelerometer reading as float[3] (x, y, z in m/s²). */
     @JvmStatic
-    fun getAccelerometer(): FloatArray = floatArrayOf(lastAccelX, lastAccelY, lastAccelZ)
+    fun getAccelerometer(): FloatArray {
+        val snap = sensorData
+        return floatArrayOf(snap.accelX, snap.accelY, snap.accelZ)
+    }
 
     /** Get latest ambient light level in lux. */
     @JvmStatic
-    fun getLightLevel(): Float = lastLightLux
+    fun getLightLevel(): Float = sensorData.lightLux
 
     /** Is an object near the proximity sensor? */
     @JvmStatic
-    fun isProximityNear(): Boolean = lastProximityNear
+    fun isProximityNear(): Boolean = sensorData.proximityNear
 
     /** Cumulative step count since boot. */
     @JvmStatic
-    fun getStepCount(): Int = lastStepCount
+    fun getStepCount(): Int = sensorData.stepCount
 
     // ── Connectivity ────────────────────────────────────────────────────
 
@@ -453,10 +529,29 @@ object AuraDaemonBridge {
         return cm.isActiveNetworkMetered
     }
 
-    /** Get WiFi RSSI (signal strength) in dBm. Returns -100 if unavailable. */
+    /**
+     * Get WiFi RSSI (signal strength) in dBm. Returns -100 if unavailable.
+     *
+     * AND-HIGH-2: WifiManager.connectionInfo is deprecated in API 31+.
+     * Use NetworkCapabilities.getTransportInfo() for modern devices, with
+     * fallback to the deprecated API for API 30-.
+     */
     @JvmStatic
     fun getWifiRssi(): Int {
         val ctx = context() ?: return -100
+
+        // API 31+: Use ConnectivityManager → NetworkCapabilities → WifiInfo
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return -100
+            val net = cm.activeNetwork ?: return -100
+            val caps = cm.getNetworkCapabilities(net) ?: return -100
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return -100
+            val wifiInfo = caps.transportInfo as? android.net.wifi.WifiInfo ?: return -100
+            return wifiInfo.rssi
+        }
+
+        // API 30-: Fall back to deprecated WifiManager API.
         val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             ?: return -100
         @Suppress("DEPRECATION")

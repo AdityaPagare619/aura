@@ -49,7 +49,9 @@ pub struct ActionPlanner {
 /// A reusable plan template for common actions.
 #[derive(Debug, Clone)]
 pub struct PlanTemplate {
-    /// Pattern to match against goal description (case-insensitive substring).
+    /// VESTIGIAL — template matching is disabled (plan_from_template returns None).
+    /// Kept for struct compatibility; will be removed when templates are fully
+    /// replaced by LLM plan generation. See IRON LAW: LLM classifies intent.
     pub trigger_pattern: String,
     /// Optional app package filter — template only applies if the goal involves
     /// this package.
@@ -197,9 +199,8 @@ impl ActionPlanner {
             return Err(PlanError::TemplateCapacityExceeded { max: MAX_TEMPLATES });
         }
         debug!(
-            pattern = %template.trigger_pattern,
             steps = template.steps.len(),
-            "registered plan template"
+            "registered plan template (trigger matching disabled — IRON LAW)"
         );
         self.templates.push(template);
         Ok(())
@@ -762,6 +763,12 @@ impl EnhancedPlanner {
             }
         };
 
+        // TODO(ARCH-MED-2): `block_on()` inside a sync fn called from an async
+        // context risks deadlocking the Tokio runtime if all worker threads are
+        // saturated.  Phase 3 should convert `score_plan` to `async fn` and
+        // propagate the async boundary up to the caller.  See also: retry.rs
+        // `classify_failure_via_llm()` which wraps with `block_in_place()` as
+        // a safer interim pattern.
         handle.block_on(async {
                 let mut client = match crate::ipc::NeocortexClient::connect().await {
                     Ok(c) => c,
@@ -1311,7 +1318,7 @@ mod tests {
             source: PlanSource::LlmGenerated,
         };
         let result = planner.validate_plan(&plan, &goal);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "validate_plan failed: {:?}", result.err());
     }
 
     #[test]
@@ -1607,44 +1614,54 @@ mod tests {
         assert!(low_cost.cost_score() < high_cost.cost_score());
     }
 
+    // ── score_plan fallback tests ──────────────────────────────────────
+    //
+    // score_plan() delegates scoring to the Neocortex LLM via IPC.
+    // In unit tests, IPC is unavailable, so we can only verify the
+    // fallback behaviour.  When a mock IPC layer is added, these tests
+    // should be extended to verify actual scoring differentiation
+    // (ETG > UserDefined > Hybrid > LLM, fewer steps better, etc.).
+
     #[test]
-    fn test_score_plan_etg_higher_than_llm() {
+    fn test_score_plan_returns_neutral_without_runtime() {
+        // Explicitly test the no-Tokio-runtime fallback path.
+        // This is the ONE test where asserting 0.5 is the correct intent.
         let ep = EnhancedPlanner::with_defaults();
+        let plan = make_plan("test", 0.9, PlanSource::EtgLookup);
+
+        let score = ep.score_plan(&plan);
+
+        assert_eq!(
+            score, 0.5,
+            "without Tokio runtime, score_plan must return neutral 0.5"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_score_plan_returns_neutral_with_runtime_no_ipc() {
+        // With a Tokio runtime present but no Neocortex IPC server,
+        // score_plan should still fall back to 0.5 (IPC connect fails).
+        let ep = EnhancedPlanner::with_defaults();
+
         let etg_plan = make_plan("test", 0.9, PlanSource::EtgLookup);
         let llm_plan = make_plan("test", 0.9, PlanSource::LlmGenerated);
-
-        let etg_score = ep.score_plan(&etg_plan);
-        let llm_score = ep.score_plan(&llm_plan);
-
-        // No Tokio runtime in unit-test context → score_plan returns neutral 0.5.
-        assert_eq!(etg_score, 0.5);
-        assert_eq!(llm_score, 0.5);
-    }
-
-    #[test]
-    fn test_score_plan_fewer_steps_better() {
-        let ep = EnhancedPlanner::with_defaults();
         let short_plan = make_multi_step_plan("test", 2, 0.8, PlanSource::Hybrid);
         let long_plan = make_multi_step_plan("test", 10, 0.8, PlanSource::Hybrid);
+        let high_conf = make_plan("test", 0.95, PlanSource::Hybrid);
+        let low_conf = make_plan("test", 0.3, PlanSource::Hybrid);
 
-        let short_score = ep.score_plan(&short_plan);
-        let long_score = ep.score_plan(&long_plan);
-
-        // IRON LAW: score_plan defers to LLM.  No Tokio runtime in unit-test
-        // context → neutral fallback 0.5 for both.
-        assert_eq!(short_score, 0.5);
-        assert_eq!(long_score, 0.5);
-    }
-
-    #[test]
-    fn test_score_plan_higher_confidence_better() {
-        let ep = EnhancedPlanner::with_defaults();
-        let high = make_plan("test", 0.95, PlanSource::Hybrid);
-        let low = make_plan("test", 0.3, PlanSource::Hybrid);
-
-        // IRON LAW: score_plan defers to LLM.  No Tokio runtime → 0.5 neutral.
-        assert_eq!(ep.score_plan(&high), 0.5);
-        assert_eq!(ep.score_plan(&low), 0.5);
+        // All should return neutral fallback because IPC is not available.
+        // TODO(TEST-HIGH-1): When mock IPC is implemented, replace these
+        // with differentiated assertions:
+        //   - ETG plans should score higher than LLM plans
+        //   - Shorter plans should score higher than longer ones
+        //   - Higher confidence should score higher than lower
+        assert_eq!(ep.score_plan(&etg_plan), 0.5, "ETG plan: expected IPC-failure fallback");
+        assert_eq!(ep.score_plan(&llm_plan), 0.5, "LLM plan: expected IPC-failure fallback");
+        assert_eq!(ep.score_plan(&short_plan), 0.5, "short plan: expected IPC-failure fallback");
+        assert_eq!(ep.score_plan(&long_plan), 0.5, "long plan: expected IPC-failure fallback");
+        assert_eq!(ep.score_plan(&high_conf), 0.5, "high confidence: expected IPC-failure fallback");
+        assert_eq!(ep.score_plan(&low_conf), 0.5, "low confidence: expected IPC-failure fallback");
     }
 
     #[test]
@@ -1658,9 +1675,8 @@ mod tests {
         let etg = EtgStore::in_memory();
 
         let result = ep.plan_best_of_n(&goal, &etg, None, None, 3);
-        assert!(result.is_ok());
 
-        let scored = result.unwrap();
+        let scored = result.expect("plan_best_of_n should produce at least one candidate plan");
         // No Tokio runtime in unit-test context → score_plan returns 0.5 for all.
         assert_eq!(scored.score, 0.5);
         assert!(!scored.plan.steps.is_empty() || scored.plan.source == PlanSource::LlmGenerated);
@@ -1692,7 +1708,7 @@ mod tests {
 
         let result = ep.plan_best_of_n(&goal, &etg, None, None, 3);
         // Base planner always returns LLM fallback, so should succeed.
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "plan_best_of_n should not fail even without templates: {:?}", result.err());
     }
 
     #[test]
@@ -1708,9 +1724,8 @@ mod tests {
 
         // Fail at step index 3 — steps 0,1,2 are completed.
         let result = ep.replan_from(&original, 3, &goal, &etg, None, None);
-        assert!(result.is_ok());
 
-        let new_plan = result.unwrap();
+        let new_plan = result.expect("replan_from should succeed when preserving completed steps");
         // First 3 steps should be from the original plan.
         assert_eq!(new_plan.steps[0].label, Some("step_0".to_string()));
         assert_eq!(new_plan.steps[1].label, Some("step_1".to_string()));
@@ -1729,9 +1744,8 @@ mod tests {
         let etg = EtgStore::in_memory();
 
         let result = ep.replan_from(&original, 1, &goal, &etg, None, None);
-        assert!(result.is_ok());
 
-        let new_plan = result.unwrap();
+        let new_plan = result.expect("replan_from should succeed for confidence penalty test");
         // Confidence should have the 0.9 penalty multiplier.
         assert!(new_plan.confidence < 0.9);
     }
@@ -1745,9 +1759,8 @@ mod tests {
 
         // Fail at step 0 — no completed steps preserved.
         let result = ep.replan_from(&original, 0, &goal, &etg, None, None);
-        assert!(result.is_ok());
 
-        let new_plan = result.unwrap();
+        let new_plan = result.expect("replan_from at step 0 should produce a fresh plan");
         // No steps from original should be preserved.
         // New plan steps come entirely from replanning.
         // (Can't check exact content since LLM fallback gives empty steps,
@@ -1827,19 +1840,29 @@ mod tests {
         assert_eq!(ep.cache_size(), 0);
     }
 
-    #[test]
-    fn test_score_plan_user_defined_between_etg_and_hybrid() {
+    #[tokio::test]
+    async fn test_score_plan_all_sources_return_neutral_without_ipc() {
+        // Verifies all PlanSource variants produce the same neutral fallback
+        // when IPC is unavailable, confirming the fallback is source-agnostic.
         let ep = EnhancedPlanner::with_defaults();
-        let etg_plan = make_plan("test", 0.9, PlanSource::EtgLookup);
-        let user_plan = make_plan("test", 0.9, PlanSource::UserDefined);
-        let hybrid_plan = make_plan("test", 0.9, PlanSource::Hybrid);
 
-        let etg_score = ep.score_plan(&etg_plan);
-        let user_score = ep.score_plan(&user_plan);
-        let hybrid_score = ep.score_plan(&hybrid_plan);
+        let sources = [
+            PlanSource::EtgLookup,
+            PlanSource::UserDefined,
+            PlanSource::Hybrid,
+            PlanSource::LlmGenerated,
+        ];
 
-        // score_plan() defers to LLM; no Tokio runtime → 0.5 neutral for all.
-        assert_eq!(etg_score, user_score);
-        assert_eq!(user_score, hybrid_score);
+        for source in &sources {
+            let plan = make_plan("test", 0.9, *source);
+            assert_eq!(
+                ep.score_plan(&plan),
+                0.5,
+                "source {:?}: expected neutral fallback without IPC",
+                source,
+            );
+        }
+        // TODO(TEST-HIGH-1): When mock IPC is available, verify ordering:
+        // EtgLookup > UserDefined > Hybrid > LlmGenerated
     }
 }

@@ -544,7 +544,9 @@ pub struct BoundaryStats {
 /// can NEVER override Level 1.
 pub struct BoundaryReasoner {
     /// Hardcoded absolute rules (~15 rules, compiled in).
-    absolute_rules: Vec<AbsoluteRule>,
+    /// SECURITY: &'static slice — compile-time immutable, cannot be mutated at runtime.
+    /// GAP-CRIT-001: Vec allowed runtime mutation of ethical bedrock rules.
+    absolute_rules: &'static [AbsoluteRule],
     /// Configurable conditional rules (bounded).
     conditional_rules: BoundedVec<ConditionalRule>,
     /// Learned user preferences (bounded).
@@ -563,7 +565,7 @@ impl BoundaryReasoner {
     /// and a default set of conditional rules.
     pub fn new() -> Self {
         let mut reasoner = Self {
-            absolute_rules: ABSOLUTE_RULES.to_vec(),
+            absolute_rules: ABSOLUTE_RULES,
             conditional_rules: BoundedVec::new(MAX_CONDITIONAL_RULES),
             learned_boundaries: BoundedVec::new(MAX_LEARNED_BOUNDARIES),
             decision_log: BoundedVec::new(MAX_DECISION_LOG_ENTRIES),

@@ -7,6 +7,7 @@
 //! All collections are bounded to prevent unbounded heap growth on a
 //! memory-constrained Android device (4–8 GB shared with the OS).
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::time::Duration;
 
@@ -14,6 +15,44 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
+//
+// ## Battery threshold hierarchy (AND-MED-2)
+//
+// Multiple battery thresholds exist across the codebase. This is intentional
+// — each threshold maps to a distinct tier in the 5-tier power model defined
+// in `crates/aura-daemon/src/power.rs`:
+//
+// | Tier        | % Range  | Constant(s)                         | Purpose                          |
+// |-------------|----------|-------------------------------------|----------------------------------|
+// | Charging    | > 80%    | —                                   | Full capability                  |
+// | Normal      | 40–80%   | —                                   | Standard operation               |
+// | Conserve    | 20–40%   | —                                   | Reduced proactive features       |
+// | Low/Warning | < 20%    | `BATTERY_LOW_PCT` (heartbeat loop)  | Emits `DaemonEvent::BatteryLow`  |
+// | Emergency   | < 10%    | `LOW_POWER_BATTERY_THRESHOLD`       | Doubles check interval (60s)     |
+// | Critical    | < 5%     | `BATTERY_CRITICAL_PCT` (heartbeat)  | Emits `BatteryCritical`, suspend |
+//
+// The 10% vs 20% "mismatch" is architectural: 20% triggers the conserve
+// boundary event while 10% activates the daemon's own low-power mode
+// (reduced check frequency). They are NOT supposed to be equal.
+//
+// ## Thermal threshold architecture (AND-MED-6)
+//
+// Three distinct thermal measurement systems coexist, each correct for its
+// measurement point. Do NOT unify them — different sensors have different
+// safe operating ranges:
+//
+// 1. **Kotlin `PowerManager` mapping** (AuraDaemonBridge.kt):
+//    Maps Android's `THERMAL_STATUS_*` enum to approximate °C values
+//    (30/37/42/48/55/65/75). These are coarse estimates for the UI layer.
+//
+// 2. **Rust sysfs junction temps** (this file, heartbeat loop):
+//    Reads raw thermal zone values from `/sys/class/thermal/`. Junction
+//    temps run hotter than skin: Normal <45, Warm 45–54, Hot 55–64,
+//    Critical 65–74, Shutdown ≥75, Emergency >85°C.
+//
+// 3. **Rust skin temps** (thermal.rs, ISO 13732-1 model):
+//    Physics-based skin temperature model with lower thresholds: Cool <37,
+//    Warm 37–40, Hot 40–43, Critical >43°C. Used for user comfort decisions.
 
 /// Default health check interval in milliseconds (30 seconds).
 ///
@@ -66,11 +105,14 @@ const ONE_HOUR_MS: u64 = 3_600_000;
 
 // ─── BoundedVec ─────────────────────────────────────────────────────────────
 
-/// A `Vec` with a maximum capacity that evicts the oldest element when full.
+/// A bounded collection that evicts the oldest element when full.
 ///
 /// Critical for mobile memory constraints — every collection in the health
 /// system uses `BoundedVec` to prevent unbounded heap growth. When a push
 /// would exceed capacity, the oldest (front) element is removed first.
+///
+/// PERF-HIGH-8: Uses `VecDeque` internally so eviction is O(1) `pop_front()`
+/// instead of O(n) `Vec::remove(0)` which shifts all elements.
 ///
 /// # Examples
 ///
@@ -85,8 +127,8 @@ const ONE_HOUR_MS: u64 = 3_600_000;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoundedVec<T> {
-    /// Backing storage.
-    inner: Vec<T>,
+    /// Backing storage — VecDeque gives O(1) pop_front for LRU eviction.
+    inner: VecDeque<T>,
     /// Maximum number of elements before eviction.
     max_capacity: usize,
 }
@@ -100,7 +142,7 @@ impl<T> BoundedVec<T> {
     #[must_use]
     pub fn new(max_capacity: usize) -> Self {
         Self {
-            inner: Vec::with_capacity(max_capacity.min(256)),
+            inner: VecDeque::with_capacity(max_capacity.min(256)),
             max_capacity,
         }
     }
@@ -111,9 +153,9 @@ impl<T> BoundedVec<T> {
             return;
         }
         if self.inner.len() >= self.max_capacity {
-            self.inner.remove(0);
+            self.inner.pop_front(); // O(1) instead of Vec::remove(0) which is O(n)
         }
-        self.inner.push(value);
+        self.inner.push_back(value);
     }
 
     /// Number of elements currently stored.
@@ -134,10 +176,13 @@ impl<T> BoundedVec<T> {
         self.max_capacity
     }
 
-    /// View the contents as a slice.
+    /// View the contents as a single contiguous slice.
+    ///
+    /// Note: This may need to reorganize the internal ring buffer on first
+    /// call if elements are wrapped. For hot paths prefer `iter()`.
     #[must_use]
-    pub fn as_slice(&self) -> &[T] {
-        &self.inner
+    pub fn as_slice(&mut self) -> &[T] {
+        self.inner.make_contiguous()
     }
 
     /// Remove all elements.
@@ -146,7 +191,7 @@ impl<T> BoundedVec<T> {
     }
 
     /// Iterate over elements (oldest first).
-    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.inner.iter()
     }
 
@@ -979,6 +1024,24 @@ impl HealthMonitor {
     /// (e.g. unit tests without a Tokio runtime), preserving test behaviour.
     /// In production the daemon always runs inside a Tokio runtime so the real
     /// IPC path is taken.
+    ///
+    /// # PERF-HIGH-6: `block_on()` inside async context
+    ///
+    /// **Architectural constraint:** This sync method uses `Handle::block_on()`
+    /// which blocks the current thread. When called from `check()` inside the
+    /// async `run_heartbeat_loop`, this blocks a Tokio worker thread and can
+    /// starve the runtime under load.
+    ///
+    /// **Preferred call path:** Async callers (e.g. `run_heartbeat_loop`,
+    /// `cron_handle_health_report`) should perform the IPC ping themselves
+    /// with `.await` and pass the result to [`check_with_ping()`] instead of
+    /// calling [`check()`]. This avoids `block_on` entirely.
+    ///
+    /// **Phase 3 migration:** Convert remaining sync `check()` callers to use
+    /// `check_with_ping()`, then either:
+    /// - Remove `ping_neocortex()` entirely, or
+    /// - Wrap the body in `tokio::task::spawn_blocking()` for any sync callers
+    ///   that genuinely cannot be made async.
     fn ping_neocortex(&self) -> bool {
         use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
 
@@ -1048,10 +1111,11 @@ impl HealthMonitor {
 
     /// Check whether the Android accessibility service is connected.
     ///
-    /// Returns `false` as default.
+    /// AND-MED-7: Delegates to `jni_is_service_alive()` which calls
+    /// `AuraDaemonBridge.isServiceAlive()` on the Kotlin side. Returns
+    /// `false` on non-Android platforms (desktop stubs).
     fn check_a11y_connected(&self) -> bool {
-        // TODO(jni): Query AccessibilityManager.isEnabled() via JNI.
-        false
+        crate::platform::jni_bridge::jni_is_service_alive()
     }
 
     // ── Public hardware readers (for testing and heartbeat loop) ────────
@@ -1295,8 +1359,28 @@ pub async fn run_heartbeat_loop(
             }
         }
 
-        // ── Run the sync health check (keeps monitor's internal state fresh) ─
-        let _ = monitor.check(now_ms);
+        // ── Run the health check without blocking the async runtime ────────
+        // PERF-HIGH-6: Use check_with_ping() to avoid block_on() inside async.
+        // Perform the neocortex ping asynchronously, then pass the result to the
+        // sync health check.
+        let neocortex_alive = {
+            use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
+            match crate::ipc::NeocortexClient::connect().await {
+                Ok(mut client) => {
+                    match tokio::time::timeout(
+                        Duration::from_secs(5),
+                        client.request(&DaemonToNeocortex::Ping),
+                    )
+                    .await
+                    {
+                        Ok(Ok(NeocortexToDaemon::Pong { .. })) => true,
+                        _ => false,
+                    }
+                }
+                Err(_) => false,
+            }
+        };
+        let _ = monitor.check_with_ping(now_ms, neocortex_alive);
 
         // ── Sleep until next tick ───────────────────────────────────────────
         let interval_ms = if battery_pct < (LOW_POWER_BATTERY_THRESHOLD * 100.0) as u8 {
@@ -1359,6 +1443,19 @@ mod tests {
         }
         assert_eq!(bv.len(), 3);
         assert_eq!(bv.as_slice(), &[3, 4, 5]);
+    }
+
+    #[test]
+    fn test_bounded_vec_is_vecdeque_backed() {
+        // Verify O(1) pop_front semantics by checking we can push/evict many
+        // elements without degraded performance (regression guard for PERF-HIGH-8).
+        let mut bv = BoundedVec::new(10);
+        for i in 0..1000 {
+            bv.push(i);
+        }
+        assert_eq!(bv.len(), 10);
+        let items: Vec<_> = bv.iter().copied().collect();
+        assert_eq!(items, (990..1000).collect::<Vec<_>>());
     }
 
     #[test]

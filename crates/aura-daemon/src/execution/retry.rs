@@ -1434,6 +1434,11 @@ impl StrategicRecovery {
             Err(_) => return None,
         };
 
+        // TODO(ARCH-MED-2): `block_in_place` + `block_on` is the safer pattern
+        // (compared to bare `block_on`), but still blocks a Tokio worker thread
+        // for the duration of the LLM round-trip.  Phase 3 should convert
+        // `classify_failure_via_llm` to `async fn` so the caller can `.await`
+        // directly.  See also: planner.rs `score_plan()`.
         tokio::task::block_in_place(|| {
             handle.block_on(async {
                 let mut client = match crate::ipc::NeocortexClient::connect().await {

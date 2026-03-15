@@ -1,0 +1,282 @@
+{
+  "status": "ok",
+  "personas_simulated": 2,
+  "scenarios_traced": 7,
+  "result_summary": "Traced Raj (Hindi/emoji power user) and Alex (privacy-paranoid journalist) through AURA v4 Rust code paths across 7 scenarios. Found 2 CRITICAL bugs (String::truncate panic on multi-byte chars, cohesion formula uses hardcoded placeholders), 3 HIGH issues (token overestimation for non-ASCII, missing explicit on-device privacy statement, personality prompt injection entirely stubbed), 5 MEDIUM issues, and 2 LOW observations. The codebase is architecturally sound but has concrete UTF-8 safety gaps and incomplete wiring that would affect real non-English and privacy-sensitive users.",
+
+  "findings": [
+    {
+      "id": "F-001",
+      "persona": "Raj",
+      "scenario": "1A — First Hindi message",
+      "severity": "CRITICAL",
+      "finding": "String::truncate(half) in context.rs lines 404 and 412 can PANIC if 'half' lands in the middle of a multi-byte UTF-8 character. Devanagari characters are 3 bytes each; emoji are 4 bytes. If the byte-budget 'half' value happens to bisect a character, Rust's String::truncate() panics with 'byte index N is not a char boundary'. This affects goal_text and screen_text truncation during context assembly.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/context.rs",
+        "lines": [404, 412],
+        "function": "build_slots_extended() — goal_text.truncate(half) and screen_text.truncate(half)"
+      },
+      "recommendation": "Replace String::truncate(half) with the safe truncate_str() function already defined in prompts.rs:1068-1077, which walks backwards to find a valid char boundary. Example: goal_text = truncate_str(&goal_text, half).to_string();"
+    },
+    {
+      "id": "F-002",
+      "persona": "Raj",
+      "scenario": "1A — First Hindi message",
+      "severity": "HIGH",
+      "finding": "Token estimation in estimate_tokens() uses text.len() / 4 (byte length divided by 4). For Hindi (Devanagari = 3 bytes/char) and emoji (4 bytes/char), this systematically overestimates token count. A 100-character Hindi string = 300 bytes estimates 75 tokens, but actual LLM tokenization yields ~30-50 tokens. Result: Hindi/emoji users get 33-50% LESS effective context budget than English users for equivalent semantic content.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/prompts.rs",
+        "lines": [1263, 1265],
+        "function": "estimate_tokens(text: &str) -> usize"
+      },
+      "recommendation": "Use chars().count() / 2 as baseline for non-ASCII text, or detect script and apply per-script ratios. At minimum, use (text.chars().count() + text.len()) / 8 as a blended heuristic that's fairer across scripts."
+    },
+    {
+      "id": "F-003",
+      "persona": "Raj",
+      "scenario": "1B — 500+ emoji message exceeding context budget",
+      "severity": "MEDIUM",
+      "finding": "truncate_str() in prompts.rs:1068-1077 is safe (uses is_char_boundary() backward walk) and will NOT split emoji. However, combined with F-002, a 500-emoji message (2000 bytes) estimates at 500 tokens — wildly overestimated. The message may be truncated much more aggressively than needed, potentially cutting meaningful content. The function operates on byte budgets, so the user's effective character limit is 4x lower for emoji-heavy content vs ASCII.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/prompts.rs",
+        "lines": [1068, 1077],
+        "function": "truncate_str(s: &str, max_bytes: usize) -> &str"
+      },
+      "recommendation": "Consider adding a char-count-based budget alongside byte budget, or at least document that emoji/CJK/Devanagari users get proportionally less context space. The truncation itself is safe; the budget allocation is the issue."
+    },
+    {
+      "id": "F-004",
+      "persona": "Raj",
+      "scenario": "1C — Hindi text in tool output boundary tags",
+      "severity": "LOW",
+      "finding": "Boundary tags in format_turn() (context.rs:320-340) wrap tool output in XML-like tags: <tool_result>...</tool_result>. The content is passed through format_snippet() which calls truncate_str(). This is safe for multi-byte characters. However, if Hindi tool output contains characters that look like XML angle brackets (unlikely but possible in generated code snippets), there is no escaping. The LLM must parse these tags correctly despite embedded content.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/context.rs",
+        "lines": [320, 340],
+        "function": "format_turn(), format_snippet()"
+      },
+      "recommendation": "Low priority — XML tag confusion is unlikely with Devanagari script. Monitor for cases where tool outputs containing angle brackets confuse the LLM's tag parsing."
+    },
+    {
+      "id": "F-005",
+      "persona": "Raj",
+      "scenario": "1A — First Hindi message routing",
+      "severity": "MEDIUM",
+      "finding": "The routing classifier (classifier.rs) has zero language awareness. It routes based on EventSource, Intent, and structural score signals from the 10-node cascade. Hindi text passes through identically to English — this is architecturally correct (LLM handles language), but means no fast-path optimization for language-specific patterns. If the LLM misclassifies Hindi input due to tokenization artifacts, there's no fallback or language-hint signal the Rust layer can provide.",
+      "code_location": {
+        "file": "crates/aura-daemon/src/routing/classifier.rs",
+        "lines": [1, 441],
+        "function": "RouteClassifier — entire cascade"
+      },
+      "recommendation": "Consider adding a lightweight language detection signal (even just 'is_ascii' boolean) to the classifier's feature set. This could help the LLM when Hindi text is ambiguously short or emoji-only."
+    },
+    {
+      "id": "F-006",
+      "persona": "Alex",
+      "scenario": "2A — First interaction at Stranger trust",
+      "severity": "HIGH",
+      "finding": "At Stranger trust (tau=0.0), trust_based_autonomy() returns None — AURA must ask permission for EVERYTHING including trivial read-only actions like checking the weather. While security-appropriate, this creates a poor first-run experience. Every single action triggers a confirmation dialog. Combined with F-009 (personality stubbed), Alex gets a robotic, permission-heavy first impression with no warmth or personality adaptation.",
+      "code_location": {
+        "file": "crates/aura-daemon/src/identity/relationship.rs",
+        "lines": [184, 196],
+        "function": "trust_based_autonomy(&self, user_id: &str) -> Option<RiskLevel>"
+      },
+      "recommendation": "Consider a 'safe actions' whitelist (display info, answer questions) that bypass autonomy gating even at Stranger trust. The current threshold of 0.25 for Low autonomy requires ~40 positive interactions — too many for basic usability."
+    },
+    {
+      "id": "F-007",
+      "persona": "Alex",
+      "scenario": "2B — 'Are you sending my data to the cloud?'",
+      "severity": "HIGH",
+      "finding": "The Conversational identity section (prompts.rs:343-348) says 'You are AURA — an autonomous Android assistant that lives on the user's phone and can control it.' It does NOT explicitly state: 'All processing happens on-device', 'No data is sent to any server', or 'No cloud connection'. The SelfKnowledge struct (ipc.rs:516-535) has 'on-device only — no internet access' but this is conditionally included only if self_knowledge is Some(). If the ContextPackage has self_knowledge=None, the LLM has NO grounding to answer Alex's privacy question accurately.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/prompts.rs",
+        "lines": [343, 348],
+        "function": "identity_section()"
+      },
+      "secondary_location": {
+        "file": "crates/aura-types/src/ipc.rs",
+        "lines": [516, 535],
+        "function": "SelfKnowledge::for_mode()"
+      },
+      "recommendation": "Add explicit privacy statement to the core identity section (always included, not conditional): 'All processing happens entirely on this device. No data leaves the phone. No cloud servers are contacted. No telemetry is collected.' This must be unconditional, not dependent on SelfKnowledge being populated."
+    },
+    {
+      "id": "F-008",
+      "persona": "Alex",
+      "scenario": "2C — Vault access at Stranger trust",
+      "severity": "MEDIUM",
+      "finding": "There is no 'vault' action type in sandbox.rs ActionType enum. Vault/password access relies on the BoundaryReasoner (boundaries.rs) conditional rule cond_004 which pattern-matches on the substring 'access_sensitive' in action strings. This means vault protection depends on: (1) the LLM generating an action string containing 'access_sensitive', and (2) substring matching catching it. If the LLM phrases the action differently (e.g., 'open_password_manager', 'read_vault_entry'), the boundary rule won't trigger.",
+      "code_location": {
+        "file": "crates/aura-daemon/src/policy/boundaries.rs",
+        "lines": [1, 1414],
+        "function": "BoundaryReasoner::evaluate() — cond_004 pattern matching"
+      },
+      "secondary_location": {
+        "file": "crates/aura-daemon/src/policy/sandbox.rs",
+        "lines": [434, 455],
+        "function": "ActionType enum — no vault/sensitive variant"
+      },
+      "recommendation": "Add explicit ActionType variants for sensitive data access (Vault, Passwords, PrivateFiles). Make boundary rules match on enum variants, not substring patterns. This is more reliable than hoping the LLM's action string contains the right substring."
+    },
+    {
+      "id": "F-009",
+      "persona": "Alex",
+      "scenario": "2A — Personality adaptation at Stranger trust",
+      "severity": "HIGH",
+      "finding": "The PersonalityPromptInjector is entirely stubbed — ALL functions return empty strings due to Iron Law #3 compliance. The only functional output is serialize_identity_block() which emits raw JSON numbers (OCEAN, VAD, stage, archetype). At Stranger trust, the LLM receives: {\"ocean\":[...], \"vad\":[...], \"relationship_stage\":\"Stranger\", \"archetype\":\"...\"} — raw numbers with NO behavioral guidance. Whether the LLM correctly interprets 'Stranger' stage to be formal, cautious, and privacy-respecting depends entirely on the model's training. There is no structured signal telling it to emphasize privacy, ask permission, or be more formal.",
+      "code_location": {
+        "file": "crates/aura-daemon/src/identity/prompt_personality.rs",
+        "lines": [48, 63],
+        "function": "PersonalityPromptInjector::generate_personality_context() — returns String::new()"
+      },
+      "recommendation": "This is a known Phase N wire-point, but for Alex's scenario it creates real risk: the LLM may not adapt its personality for Stranger trust at all. Consider adding minimal structured signals (not directives) to the identity block: {\"trust_behavior\": \"cautious\", \"permission_mode\": \"always_ask\", \"formality\": \"high\"}"
+    },
+    {
+      "id": "F-010",
+      "persona": "Alex",
+      "scenario": "2D — Trust progression after 30 interactions",
+      "severity": "MEDIUM",
+      "finding": "After 30 positive interactions, computed trust = ~0.2025. Cohesion formula: trust * 0.7 + 0.05 = 0.1918. Stage = Acquaintance (crossed threshold ~0.15 cohesion around interaction 19). However, trust_based_autonomy still returns None because trust 0.2025 < 0.25 threshold. After 30 perfect interactions, Alex STILL cannot get AURA to perform even trivial actions autonomously. This is extremely conservative — reaching Low autonomy requires ~40 interactions, Medium requires ~130, and High requires ~250.",
+      "code_location": {
+        "file": "crates/aura-daemon/src/identity/relationship.rs",
+        "lines": [96, 143],
+        "function": "record_interaction() — trust delta calculation with attenuation"
+      },
+      "math": {
+        "formula": "delta_i = 0.01 / sqrt(1 + i/10)",
+        "trust_at_30": 0.2025,
+        "cohesion_at_30": 0.1918,
+        "stage_at_30": "Acquaintance",
+        "autonomy_at_30": "None (must ask for everything)",
+        "interactions_for_low_autonomy": "~40",
+        "interactions_for_medium_autonomy": "~130",
+        "interactions_for_high_autonomy": "~250"
+      },
+      "recommendation": "The attenuation curve is too aggressive for practical use. Consider increasing POSITIVE_TRUST_BASE from 0.01 to 0.015-0.02, or softening the attenuation divisor from 10 to 20. Alternatively, add a 'quality multiplier' where particularly helpful interactions (user says thanks, accomplishes a goal) give 2-3x trust delta."
+    },
+    {
+      "id": "F-011",
+      "persona": "Alex",
+      "scenario": "2D — Trust progression math",
+      "severity": "CRITICAL",
+      "finding": "The cohesion formula in relationship.rs:130-134 has hardcoded placeholder values: cohesion = (trust * 0.4 + trust * 0.3 + 0.0 * 0.2 + 0.5 * 0.1). The '0.0 * 0.2' and '0.5 * 0.1' are dead terms — they should reference interaction_tensor.diversity and mood.stability (or similar signals) but are hardcoded to constants. This means cohesion = trust * 0.7 + 0.05, reducing a multi-signal cohesion model to a single-variable linear function of trust. The 0.2 and 0.1 weight slots are wasted.",
+      "code_location": {
+        "file": "crates/aura-daemon/src/identity/relationship.rs",
+        "lines": [130, 134],
+        "function": "record_interaction() — cohesion calculation"
+      },
+      "recommendation": "Wire the placeholder slots to actual signals. The InteractionTensor type exists in identity.rs — use its diversity/reciprocity fields for the 0.2 weight. Use DispositionState.stability for the 0.1 weight. Current code: trust*0.4 + trust*0.3 + 0.0*0.2 + 0.5*0.1. Should be: trust*0.4 + trust*0.3 + diversity*0.2 + stability*0.1."
+    },
+    {
+      "id": "F-012",
+      "persona": "Raj",
+      "scenario": "1A — ReActStep token estimation",
+      "severity": "MEDIUM",
+      "finding": "ReActStep::estimate_tokens() in prompts.rs:177-183 uses the same byte-length-based estimation (.len() / 4) as the global estimate_tokens(). For Raj's Hindi reasoning steps in a ReAct chain, each step's token count is overestimated, compounding across multiple steps. A 5-step Hindi ReAct chain could have its total estimated at 1.5-2x the actual token count, causing premature step truncation.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/prompts.rs",
+        "lines": [177, 183],
+        "function": "ReActStep::estimate_tokens()"
+      },
+      "recommendation": "Same fix as F-002 — use a script-aware token estimation or at minimum a blended byte+char heuristic."
+    },
+    {
+      "id": "F-013",
+      "persona": "Both",
+      "scenario": "General — Trust label in prompt",
+      "severity": "LOW",
+      "finding": "Trust is mapped to coarse labels in context.rs:914-918: >=0.8 'established', >=0.4 'developing', <0.4 'new'. A security comment prevents exposing the raw float. Both Raj (potential power user who builds trust fast) and Alex (slow trust builder) see the same 'new' label for a wide range of trust values (0.0 to 0.39). The LLM cannot distinguish between a brand-new Stranger and someone approaching Friend status.",
+      "code_location": {
+        "file": "crates/aura-neocortex/src/context.rs",
+        "lines": [914, 918],
+        "function": "trust level mapping in prompt assembly"
+      },
+      "recommendation": "Add a fourth tier: split 'new' into 'unknown' (<0.15) and 'emerging' (0.15-0.39). This gives the LLM more signal without exposing the raw float."
+    }
+  ],
+
+  "positive_observations": [
+    {
+      "id": "P-001",
+      "observation": "truncate_str() is correctly implemented for UTF-8 safety",
+      "detail": "The backward-walking is_char_boundary() approach in prompts.rs:1068-1077 correctly handles all multi-byte UTF-8 sequences including Devanagari (3 bytes), emoji (4 bytes), and combined sequences. It will never split a character mid-byte. This is the RIGHT implementation — the bug is that it's not used everywhere (see F-001).",
+      "code_location": "crates/aura-neocortex/src/prompts.rs:1068-1077"
+    },
+    {
+      "id": "P-002",
+      "observation": "TRUST_EPSILON prevents f32 accumulation drift",
+      "detail": "relationship.rs:24 defines TRUST_EPSILON = 1e-6 and all threshold comparisons in trust_based_autonomy() use (threshold - TRUST_EPSILON). This correctly handles the fact that repeated f32 addition of 0.01 accumulates roundoff error. Without this, a user at exactly 0.25 trust might fail the >= 0.25 check. Well-engineered.",
+      "code_location": "crates/aura-daemon/src/identity/relationship.rs:24,187-195"
+    },
+    {
+      "id": "P-003",
+      "observation": "Hysteresis prevents trust oscillation",
+      "detail": "classify_relationship_stage() applies a 0.05 hysteresis band for downgrades (relationship.rs:282-303). A user at the Acquaintance/Friend boundary won't oscillate between stages on small trust fluctuations. The eviction policy (lowest trust + oldest interaction) also correctly protects high-trust users.",
+      "code_location": "crates/aura-daemon/src/identity/relationship.rs:282-303"
+    },
+    {
+      "id": "P-004",
+      "observation": "Iron Law #3 architecture is principled",
+      "detail": "The decision to stub personality directives (prompt_personality.rs) and pass only raw OCEAN/VAD numbers to the LLM is architecturally correct. The body (Rust) provides facts; the brain (LLM) generates behavior. While this creates a gap for Alex's Stranger experience (F-009), the principle is sound and prevents the Rust layer from 'putting words in the LLM's mouth'.",
+      "code_location": "crates/aura-daemon/src/identity/prompt_personality.rs:1-19"
+    },
+    {
+      "id": "P-005",
+      "observation": "Critical actions ALWAYS require permission",
+      "detail": "requires_permission() in relationship.rs:202-211 has a hard-coded check: Critical risk always returns true regardless of trust level. Even at Soulmate trust (0.95), factory resets and irreversible actions require explicit user consent. This is a correct safety invariant.",
+      "code_location": "crates/aura-daemon/src/identity/relationship.rs:202-211"
+    },
+    {
+      "id": "P-006",
+      "observation": "Negativity bias in trust correctly models psychology",
+      "detail": "NEGATIVE_TRUST_BASE (-0.015) is 1.5x larger than POSITIVE_TRUST_BASE (0.01), reflecting the well-documented psychological principle that negative experiences erode trust faster than positive ones build it. Combined with the attenuation formula, early negative interactions are especially damaging — which correctly models first-impression effects.",
+      "code_location": "crates/aura-daemon/src/identity/relationship.rs:13-17"
+    }
+  ],
+
+  "scenario_traces": {
+    "1A_raj_first_hindi_message": {
+      "persona": "Raj",
+      "path": "IPC envelope → classifier (no language awareness) → context builder (truncation risk at F-001) → estimate_tokens overcount (F-002) → identity_section (no Hindi-specific signal) → LLM prompt with Hindi in boundary tags (safe via truncate_str) → classification (no language detection, LLM handles)",
+      "bugs_found": ["F-001", "F-002", "F-005"],
+      "verdict": "Hindi text flows correctly through safe paths EXCEPT context.rs String::truncate (F-001). Token overestimation (F-002) silently degrades Raj's experience by giving him less context."
+    },
+    "1B_raj_500_emoji_message": {
+      "persona": "Raj",
+      "path": "IPC → truncate_str (safe, won't split emoji) → estimate_tokens (500 emoji = 2000 bytes → 500 est. tokens, actual ~200) → context budget exhausted prematurely → message truncated more than necessary",
+      "bugs_found": ["F-002", "F-003"],
+      "verdict": "No crash or corruption. The emoji message is safely truncated. But the effective context budget is ~2.5x less than what an English-only user gets for the same semantic content."
+    },
+    "1C_raj_hindi_tool_output": {
+      "persona": "Raj",
+      "path": "Tool output → format_snippet() → truncate_str (safe) → boundary tags <tool_result>Hindi content</tool_result> → LLM parses tags",
+      "bugs_found": ["F-004"],
+      "verdict": "Safe. truncate_str correctly handles Hindi in tool outputs. Minor concern about XML-like content within boundary tags but very low risk with Devanagari script."
+    },
+    "2A_alex_stranger_first_interaction": {
+      "persona": "Alex",
+      "path": "First message → trust=0.0 → trust_based_autonomy=None → every action needs permission → identity_section says 'lives on phone' but no explicit privacy guarantee → personality prompt returns empty string → LLM gets raw {ocean, vad, stage:'Stranger'} with no behavioral guidance",
+      "bugs_found": ["F-006", "F-007", "F-009"],
+      "verdict": "Alex's first experience is permission-heavy, personality-less, and missing the explicit privacy assurance she needs. The LLM may or may not adapt to Stranger trust appropriately — it's entirely up to model training."
+    },
+    "2B_alex_privacy_question": {
+      "persona": "Alex",
+      "path": "Question → Conversational mode → identity_section says 'lives on phone' → SelfKnowledge (if populated) says 'on-device only, no internet' → LLM must synthesize privacy answer from these hints",
+      "bugs_found": ["F-007"],
+      "verdict": "The LLM CAN answer correctly IF SelfKnowledge is populated. But if it's None, the only privacy signal is 'lives on your phone' — which doesn't rule out cloud sync, telemetry, or data exfiltration. A privacy-paranoid journalist would not be reassured."
+    },
+    "2C_alex_vault_access": {
+      "persona": "Alex",
+      "path": "Vault request → no ActionType::Vault variant → depends on LLM generating 'access_sensitive' substring → BoundaryReasoner cond_004 pattern match → if matched: requires biometric auth → if not matched: normal sandbox containment only",
+      "bugs_found": ["F-008"],
+      "verdict": "Vault protection exists but relies on substring matching. If the LLM phrases the action without 'access_sensitive', vault access could bypass the boundary check entirely. At Stranger trust, trust_based_autonomy=None provides a secondary barrier, but the vault-specific protection is fragile."
+    },
+    "2D_alex_trust_after_30": {
+      "persona": "Alex",
+      "path": "30 positive interactions → trust=0.2025 → cohesion=0.1918 → stage=Acquaintance (since ~interaction 19) → trust_based_autonomy=None → still must ask for everything",
+      "bugs_found": ["F-010", "F-011"],
+      "verdict": "After 30 positive interactions over presumably days/weeks of use, Alex still cannot get AURA to perform even trivial actions autonomously. The cohesion formula is partially broken (hardcoded placeholders). Trust progression is extremely conservative — good for security, bad for usability."
+    }
+  }
+}

@@ -148,7 +148,17 @@ mod voice_flow_tests {
         let tts = TtsEngine::new(config.voice.clone());
         
         let result = tts.synthesize("Hello world").await;
-        assert!(result.is_ok() || result.is_err()); // May fail on headless
+        // TODO(integration): requires audio output device
+        match &result {
+            Ok(audio) => assert!(!audio.is_empty(), "synthesized audio should not be empty"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("audio") || msg.contains("not available") || msg.contains("tts"),
+                    "unexpected TTS error: {e}"
+                );
+            }
+        }
     }
 
     /// Test: Voice input source is correctly identified
@@ -225,7 +235,9 @@ mod telegram_flow_tests {
         let security = TelegramSecurity::new();
         
         let valid = security.validate_chat_id(12345);
-        assert!(valid || !valid); // Depends on config
+        // With default config and no allowlist, validation result is deterministic.
+        // TODO(sprint-1): assert expected value once allowlist config is defined
+        let _ = valid;
     }
 
     /// Test: Telegram input source handling
@@ -286,8 +298,9 @@ mod screen_action_tests {
     async fn test_element_selector_basic() {
         let selector = ElementSelector::new();
         
-        // Selector should be creatable
-        assert!(selector.supports_fuzzy_match() || !selector.supports_fuzzy_match());
+        // Selector should be creatable and report its capabilities deterministically.
+        // TODO(sprint-1): pin to expected value once fuzzy matching is stabilized.
+        let _supports_fuzzy = selector.supports_fuzzy_match();
     }
 
     /// Test: Screen action is properly constructed
@@ -309,8 +322,9 @@ mod screen_action_tests {
     async fn test_action_verifier() {
         let verifier = ActionVerifier::new();
         
-        // Verifier should exist
-        assert!(verifier.supports_screenshot_comparison() || !verifier.supports_screenshot_comparison());
+        // Verifier should exist and report capabilities deterministically.
+        // TODO(sprint-1): pin to expected value once screenshot comparison is stabilized.
+        let _supports_screenshot = verifier.supports_screenshot_comparison();
     }
 
     /// Test: Screen action types
@@ -334,9 +348,18 @@ mod screen_action_tests {
         
         let selector = ElementSelector::new();
         
-        // Test with mock element data
+        // TODO(integration): requires accessibility service / Android device
         let element_id = selector.find_element("Instagram").await;
-        assert!(element_id.is_ok() || element_id.is_err());
+        match &element_id {
+            Ok(id) => assert!(!id.is_empty(), "found element ID should not be empty"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("accessibility") || msg.contains("not available") || msg.contains("element"),
+                    "unexpected find_element error: {e}"
+                );
+            }
+        }
     }
 
     /// Test: Screen read returns accessibility tree
@@ -384,8 +407,17 @@ mod open_app_flow_tests {
         let planner = ActionPlanner::new();
         
         let action = planner.plan_open_app("com.instagram.android").await;
-        
-        assert!(action.is_ok() || action.is_err());
+        // TODO(integration): requires Android device to actually open apps
+        match &action {
+            Ok(plan) => assert!(!plan.steps.is_empty(), "action plan should have steps"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("accessibility") || msg.contains("not available") || msg.contains("device"),
+                    "unexpected plan_open_app error: {e}"
+                );
+            }
+        }
     }
 
     /// Test: Open app verification
@@ -394,8 +426,17 @@ mod open_app_flow_tests {
         let verifier = crate::screen::verifier::ActionVerifier::new();
         
         let verified = verifier.verify_app_opened("com.instagram.android").await;
-        
-        assert!(verified.is_ok() || verified.is_err());
+        // TODO(integration): requires running Android device with screen access
+        match &verified {
+            Ok(v) => assert!(v.checked, "verification should have run a check"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("screen") || msg.contains("not available") || msg.contains("accessibility"),
+                    "unexpected verify_app_opened error: {e}"
+                );
+            }
+        }
     }
 
     /// Test: Multiple app opening intents
@@ -410,7 +451,8 @@ mod open_app_flow_tests {
         
         for app in apps {
             let result = parser.parse(&format!("open {}", app)).await;
-            assert!(result.is_ok() || result.is_err());
+            // Parsing text commands should always succeed — no infra dependency.
+            assert!(result.is_ok(), "parse('open {app}') failed: {:?}", result.err());
         }
     }
 }
@@ -456,8 +498,17 @@ mod send_message_flow_tests {
         let planner = crate::execution::planner::ActionPlanner::new();
         
         let action = planner.plan_send_message("WhatsApp", "John", "Hello!").await;
-        
-        assert!(action.is_ok() || action.is_err());
+        // TODO(integration): requires Android device to send messages
+        match &action {
+            Ok(plan) => assert!(!plan.steps.is_empty(), "message plan should have steps"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("accessibility") || msg.contains("not available") || msg.contains("device"),
+                    "unexpected plan_send_message error: {e}"
+                );
+            }
+        }
     }
 
     /// Test: Message delivery verification
@@ -466,8 +517,17 @@ mod send_message_flow_tests {
         let verifier = crate::screen::verifier::ActionVerifier::new();
         
         let verified = verifier.verify_message_sent("John").await;
-        
-        assert!(verified.is_ok() || verified.is_err());
+        // TODO(integration): requires Android device with screen access
+        match &verified {
+            Ok(v) => assert!(v.checked, "verification should have run a check"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("screen") || msg.contains("not available") || msg.contains("accessibility"),
+                    "unexpected verify_message_sent error: {e}"
+                );
+            }
+        }
     }
 }
 
@@ -504,7 +564,8 @@ mod set_alarm_flow_tests {
         
         for time in times {
             let result = parser.parse(&format!("set alarm {}", time)).await;
-            assert!(result.is_ok() || result.is_err());
+            // Parsing text commands should always succeed — no infra dependency.
+            assert!(result.is_ok(), "parse('set alarm {time}') failed: {:?}", result.err());
         }
     }
 
@@ -514,8 +575,17 @@ mod set_alarm_flow_tests {
         let planner = crate::execution::planner::ActionPlanner::new();
         
         let action = planner.plan_set_alarm(7, 0, "weekday").await;
-        
-        assert!(action.is_ok() || action.is_err());
+        // TODO(integration): requires Android device to set alarms
+        match &action {
+            Ok(plan) => assert!(!plan.steps.is_empty(), "alarm plan should have steps"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("accessibility") || msg.contains("not available") || msg.contains("device") || msg.contains("alarm"),
+                    "unexpected plan_set_alarm error: {e}"
+                );
+            }
+        }
     }
 
     /// Test: Alarm verification
@@ -524,8 +594,17 @@ mod set_alarm_flow_tests {
         let verifier = crate::screen::verifier::ActionVerifier::new();
         
         let verified = verifier.verify_alarm_set(7, 0).await;
-        
-        assert!(verified.is_ok() || verified.is_err());
+        // TODO(integration): requires Android device with screen access
+        match &verified {
+            Ok(v) => assert!(v.checked, "verification should have run a check"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("screen") || msg.contains("not available") || msg.contains("accessibility") || msg.contains("alarm"),
+                    "unexpected verify_alarm_set error: {e}"
+                );
+            }
+        }
     }
 }
 
@@ -554,7 +633,8 @@ mod policy_gate_tests {
         
         let decision = gate.evaluate("system settings change").await;
         
-        assert!(!decision.is_allowed() || decision.is_allowed());
+        // A Deny rule with pattern "system.*settings" at priority 100 should block this.
+        assert!(!decision.is_allowed(), "system settings change should be blocked by Deny rule");
     }
 
     /// Test: PolicyGate allows safe actions
@@ -599,8 +679,9 @@ mod policy_gate_tests {
         // Rate limiter should track this
         let rate_limited = gate.is_rate_limited("click");
         
-        // After many rapid actions, should potentially be rate limited
-        assert!(rate_limited || !rate_limited);
+        // After 15 rapid actions, rate limiter should engage.
+        // TODO(sprint-1): once rate-limit threshold is configurable, assert!(rate_limited).
+        let _ = rate_limited;
     }
 
     /// Test: Multiple policy rules evaluation
@@ -660,8 +741,11 @@ mod ethics_tests {
         let response = "I didn't do that";
         let caught = ethics.detect_dishonesty(response, "user accused me of deleting files").await;
         
-        // Should detect potential dishonesty
-        assert!(caught.is_dishonest() || !caught.is_dishonest());
+        // Dishonesty detection should return a result with a confidence score.
+        // TODO(sprint-1): assert!(caught.is_dishonest()) once detection model is calibrated.
+        let _ = caught.is_dishonest();
+        assert!(caught.confidence() >= 0.0 && caught.confidence() <= 1.0,
+            "dishonesty confidence should be in [0.0, 1.0], got {}", caught.confidence());
     }
 
     /// Test: Ethical boundaries are enforced
@@ -681,7 +765,9 @@ mod ethics_tests {
         
         for scenario in scenarios {
             let result = ethics.evaluate_action(scenario).await;
-            assert!(result.is_ethical() || !result.is_ethical());
+            // These are clearly unethical requests — the engine should flag them.
+            assert!(!result.is_ethical(),
+                "expected unethical verdict for '{scenario}', got ethical");
         }
     }
 
@@ -708,7 +794,8 @@ mod ethics_tests {
         let result = ethics.evaluate_action(harmful).await;
         
         // Should flag as harmful
-        assert!(result.is_ethical() == false || result.is_ethical() == true);
+        assert!(!result.is_ethical(),
+            "expected unethical verdict for bomb-making request, got ethical");
     }
 
     /// Test: Privacy protection
@@ -719,8 +806,9 @@ mod ethics_tests {
         let action = "share user's bank details with third party";
         let result = ethics.evaluate_action(action).await;
         
-        // Should protect privacy
-        assert!(result.is_ethical() == false || result.is_ethical() == true);
+        // Should protect privacy — sharing bank details is unethical.
+        assert!(!result.is_ethical(),
+            "expected unethical verdict for sharing bank details, got ethical");
     }
 }
 
@@ -744,8 +832,8 @@ mod memory_episodic_tests {
         let episode = create_test_episode("User opened Instagram", 0.8);
         
         let id = memory.store(episode).await;
-        
-        assert!(id.is_ok() || id.is_err());
+        // Storing into a freshly-opened temp DB should always succeed.
+        assert!(id.is_ok(), "episodic store failed: {:?}", id.err());
     }
 
     /// Test: Episodic memory retrieves episodes
@@ -762,8 +850,8 @@ mod memory_episodic_tests {
         
         // Retrieve similar episodes
         let results = memory.recall("alarm", 5).await;
-        
-        assert!(results.is_ok() || results.is_err());
+        // Recall on a temp DB should succeed (may return empty results).
+        assert!(results.is_ok(), "episodic recall failed: {:?}", results.err());
     }
 
     /// Test: Episode importance scoring
@@ -779,9 +867,9 @@ mod memory_episodic_tests {
         
         let id1 = memory.store(high_importance).await;
         let id2 = memory.store(low_importance).await;
-        
-        assert!(id1.is_ok() || id1.is_err());
-        assert!(id2.is_ok() || id2.is_err());
+        // Storing into a freshly-opened temp DB should always succeed.
+        assert!(id1.is_ok(), "store high_importance failed: {:?}", id1.err());
+        assert!(id2.is_ok(), "store low_importance failed: {:?}", id2.err());
     }
 
     /// Test: Pattern separation for similar memories
@@ -801,7 +889,8 @@ mod memory_episodic_tests {
         
         // Should handle pattern separation
         let results = memory.recall("Instagram", 5).await;
-        assert!(results.is_ok() || results.is_err());
+        // Recall on a temp DB should succeed (may return 0..2 results).
+        assert!(results.is_ok(), "pattern separation recall failed: {:?}", results.err());
     }
 
     /// Test: Memory consolidation (episodic to semantic)
@@ -1073,7 +1162,8 @@ mod regression_tests {
         
         for cmd in commands {
             let result = parser.parse(cmd).await;
-            assert!(result.is_ok() || result.is_err());
+            // Parsing text commands should always succeed — no infra dependency.
+            assert!(result.is_ok(), "parse('{cmd}') failed: {:?}", result.err());
         }
     }
 
@@ -1084,8 +1174,8 @@ mod regression_tests {
         let db_path = temp_dir.path().join("legacy.db");
         
         let memory = EpisodicMemory::open(&db_path);
-        
-        assert!(memory.is_ok() || memory.is_err());
+        // Opening a fresh temp DB should always succeed.
+        assert!(memory.is_ok(), "EpisodicMemory::open failed: {:?}", memory.err());
     }
 
     /// Test: Policy defaults remain safe

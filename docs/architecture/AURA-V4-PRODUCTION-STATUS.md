@@ -27,7 +27,7 @@ a production release is months away.
 | Qwen3 as default model | ✅ FIXED | Fixed 2026-03-13; was pointing to wrong model family |
 | `install.sh` | ✅ WRITTEN | Script complete; needs real download URLs/checksums for release |
 | CI/CD pipeline | ✅ WRITTEN | GitHub Actions pipeline complete |
-| GGUF metadata parser (`aura-gguf`) | ✅ PRODUCTION | v2/v3 support, RAM estimation, quantization detection |
+| GGUF metadata parser (`aura-llama-sys`) | ✅ PRODUCTION | v2/v3 support, RAM estimation, quantization detection |
 | JNI bridge (Rust side) | ✅ PRODUCTION | `platform::jni` fully implemented with real+stub paths |
 | Power/thermal monitoring | ✅ PRODUCTION | Battery, temperature, Doze mode detection |
 | Notifications system | ✅ PRODUCTION | Notification channels, foreground service support |
@@ -45,7 +45,7 @@ a production release is months away.
 | Ethics gate (Layer 2, hardcoded) | ✅ PRODUCTION | Absolute prohibitions — never configurable |
 | IPC protocol design | ✅ DESIGNED | Unix socket, bincode framing, typed variants |
 | Cross-compilation config | ✅ CONFIGURED | `.cargo/config.toml` + `rust-toolchain.toml` correct |
-| Architecture documentation | ✅ WRITTEN | 7 architecture docs + 6 ADRs |
+| Architecture documentation | ✅ WRITTEN | 7 architecture docs + 7 ADRs |
 
 > **Security score note:** The current implementation scores low on automated security audits because several security features (vault encryption, full policy gate enforcement, ethics hardcoding) are architecturally designed but not yet fully implemented end-to-end. The score reflects currently *implemented* security features, not the designed architecture. The full security design (vault encryption, deny-by-default policy gate, ethics hardcoding) scores ~75/100 when fully implemented.
 

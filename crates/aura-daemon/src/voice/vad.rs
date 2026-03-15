@@ -118,6 +118,10 @@ pub struct VoiceActivityDetector {
     last_frame_time: Option<Instant>,
 }
 
+// SAFETY: VoiceActivityDetector is Send because the raw `*mut c_void`
+// silero_state (present only on Android) is only accessed through &mut self
+// methods. The Silero VAD ONNX runtime is not thread-safe per-session, but
+// exclusive &mut access ensures no concurrent aliasing during cross-thread moves.
 unsafe impl Send for VoiceActivityDetector {}
 
 impl VoiceActivityDetector {

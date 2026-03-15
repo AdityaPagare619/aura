@@ -140,7 +140,7 @@ impl HnswState {
     }
 
     /// Search for nearest neighbors, returning (SQLite row ID, similarity) pairs.
-    fn search(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<(u64, f32)>, MemError> {
+    fn search(&mut self, query: &[f32], k: usize, ef: usize) -> Result<Vec<(u64, f32)>, MemError> {
         let results = self
             .index
             .search(query, k, ef)
@@ -805,7 +805,7 @@ fn embedding_search_hnsw(
 ) -> Result<Vec<(u64, f32)>, MemError> {
     let query_embedding = embed(query_text);
 
-    let state = hnsw
+    let mut state = hnsw
         .lock()
         .map_err(|_| MemError::QueryFailed("HNSW lock poisoned".into()))?;
 

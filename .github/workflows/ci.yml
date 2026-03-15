@@ -2,6 +2,9 @@
 # AURA v4 — CI Pipeline
 # Runs on every push and PR to main
 # All jobs run in parallel — fast feedback, no serialization
+#
+# TOOLCHAIN: Must match rust-toolchain.toml (nightly-2026-03-01)
+# FEATURES:  --features stub skips llama.cpp FFI for CI hosts
 # ============================================================
 
 name: CI
@@ -11,33 +14,47 @@ on:
     branches: ["**"]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  # Anti-telemetry: disable Rust/Cargo telemetry and analytics
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   # --------------------------------------------------------
-  # Job 1: cargo check — fast compilation gate
+  # Job 1: cargo check — fast compilation gate (full workspace)
   # --------------------------------------------------------
   check:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins nightly-2026-03-01 — let rustup pick it up
+      # automatically. We explicitly install the same toolchain here to ensure
+      # the action provisions the correct components and targets.
+      - name: Install Rust (nightly-2026-03-01)
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2026-03-01
+          components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install system deps
@@ -47,35 +64,37 @@ jobs:
       - run: cargo check --workspace --features stub
 
   # --------------------------------------------------------
-  # Job 2: cargo test (aura-daemon only — host-compatible)
+  # Job 2: cargo test (full workspace with stub feature)
   # --------------------------------------------------------
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly-2026-03-01)
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2026-03-01
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
 
-      # aura-llama-sys uses stub mode on non-Android hosts (llama_stub cfg)
-      # so testing the full workspace is safe; llama.cpp submodule not needed
-      - run: cargo test -p aura-daemon
+      # Test ALL crates in workspace, not just aura-daemon.
+      # stub feature ensures aura-llama-sys compiles without NDK.
+      - run: cargo test --workspace --features stub
         env:
           RUST_LOG: debug
 
@@ -86,23 +105,24 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - name: Install Rust stable + clippy
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly-2026-03-01) + clippy
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
+          toolchain: nightly-2026-03-01
           components: clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install system deps
@@ -118,13 +138,57 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
-      - name: Install Rust stable + rustfmt
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly-2026-03-01) + rustfmt
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
+          toolchain: nightly-2026-03-01
           components: rustfmt
 
       - run: cargo fmt --check
+
+  # --------------------------------------------------------
+  # Job 5: Security audit — check for known CVEs in deps
+  # --------------------------------------------------------
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust (nightly-2026-03-01)
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2026-03-01
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: cargo audit
+
+  # --------------------------------------------------------
+  # Job 6: Version tag validation — ensures git tag matches Cargo.toml
+  # Only runs on tag pushes (v*)
+  # --------------------------------------------------------
+  version-check:
+    name: Version Tag Check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate version tag matches Cargo.toml
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          echo "Git tag version:   $TAG_VERSION"
+          echo "Cargo.toml version: $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Version mismatch! Tag v${TAG_VERSION} does not match Cargo.toml version ${CARGO_VERSION}"
+            exit 1
+          fi
+          echo "Versions match."

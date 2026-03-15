@@ -622,7 +622,11 @@ pub fn format_action_brief(action: &ActionType) -> String {
         } => format!("Swipe({from_x},{from_y}→{to_x},{to_y})"),
         ActionType::Type { text } => {
             let preview = if text.len() > 20 {
-                format!("{}…", &text[..20])
+                let mut end = 20;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}…", &text[..end])
             } else {
                 text.clone()
             };

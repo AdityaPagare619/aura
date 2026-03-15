@@ -120,7 +120,14 @@ mod a11y_actions {
 
     pub fn click_button(text: &str) -> CallResult<()> {
         use std::ffi::CString;
-        let c_text = CString::new(text).unwrap();
+        // Interior NUL bytes in user-supplied text would panic with .unwrap();
+        // map the error to a descriptive CallError instead.
+        let c_text = CString::new(text).map_err(|_| {
+            super::CallError::A11yActionFailed(format!(
+                "button text contains interior NUL byte: {:?}",
+                text,
+            ))
+        })?;
         let result = unsafe { a11y_click_by_text(c_text.as_ptr()) };
         if result == 0 {
             Ok(())
@@ -131,7 +138,14 @@ mod a11y_actions {
 
     pub fn click_by_id(resource_id: &str) -> CallResult<()> {
         use std::ffi::CString;
-        let c_id = CString::new(resource_id).unwrap();
+        // Interior NUL bytes in resource IDs would panic with .unwrap();
+        // map the error to a descriptive CallError instead.
+        let c_id = CString::new(resource_id).map_err(|_| {
+            super::CallError::A11yActionFailed(format!(
+                "resource ID contains interior NUL byte: {:?}",
+                resource_id,
+            ))
+        })?;
         let result = unsafe { a11y_click_by_id(c_id.as_ptr()) };
         if result == 0 {
             Ok(())

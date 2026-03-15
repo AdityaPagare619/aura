@@ -31,8 +31,8 @@ use aura_types::actions::ActionResult;
 use aura_types::errors::AuraError;
 use aura_types::etg::ActionPlan;
 use aura_types::ipc::{
-    ContextPackage, DaemonToNeocortex, FailureContext, InferenceMode, NeocortexToDaemon,
-    ScreenSummary, TransitionPair,
+    ContextPackage, DaemonToNeocortex, FailureContext, IdentityTendencies,
+    InferenceMode, NeocortexToDaemon, ScreenSummary, SelfKnowledge, TransitionPair,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
@@ -55,6 +55,24 @@ use crate::screen::verifier::hash_screen_state;
 // ---------------------------------------------------------------------------
 
 /// Maximum iterations per agentic session before forced termination.
+///
+/// # Why this differs from Neocortex's MAX_REACT_ITERATIONS (5)
+///
+/// This is **intentional**, not a bug (confirmed by AURA-V4 courtroom review, LLM-HIGH-5).
+///
+/// - **Daemon MAX_ITERATIONS = 10**: The daemon orchestrates the full agentic session,
+///   which includes multiple IPC round-trips to Neocortex. Each iteration involves:
+///   building context → IPC call → executing the action → observing results → reflecting.
+///   Complex real-world tasks (multi-step app automation) legitimately need 6–10 iterations.
+///
+/// - **Neocortex MAX_REACT_ITERATIONS = 5**: The neocortex ReAct loop is a SINGLE
+///   inference pass with internal Thought→Action→Observation cycles. These are fast
+///   (in-model reasoning, no IPC), and 5 iterations is sufficient for single-inference
+///   reasoning chains. Going higher risks context window exhaustion in the 32K model.
+///
+/// The two constants govern different loop levels:
+///   Daemon loop (10) → per iteration → Neocortex inference (5 internal ReAct steps)
+///   Total possible reasoning steps: up to 10 × 5 = 50
 const MAX_ITERATIONS: u32 = 10;
 
 /// Maximum consecutive failures before strategy escalates to Recovery.
@@ -419,7 +437,7 @@ pub struct Iteration {
     pub action: ToolCall,
     /// Result of executing the action on the device.
     pub observation: ActionResult,
-    /// Post-hoc reflection on whether the action achieved its intent.
+    /// Signal summary from iteration (structured data, not reasoning text).
     pub reflection: String,
     /// Confidence in the iteration's outcome (0.0–1.0).
     pub confidence: f32,
@@ -610,18 +628,39 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 
 /// Classify a task description to determine which execution mode to use.
 ///
-/// # Architecture note
-/// Keyword matching and complexity heuristics in Rust are Theater AGI —
-/// Rust reasoning about *what* a task means violates the LLM=brain principle.
-/// The LLM is the only entity that understands task semantics.
+/// # Architecture: System 1 intentionally disabled (AURA-V4 Iron Laws)
 ///
-/// Default: always `SemanticReact`. The LLM (via Neocortex) decides whether
-/// a task is simple enough for DGS or requires full ReAct reasoning. The
-/// daemon's job is to route *to* the LLM, not to pre-classify intent.
+/// This function always returns `SemanticReact`. This is **intentional**, not dead code.
 ///
-/// TODO(arch): Once the Neocortex IPC layer returns an explicit
-/// `ExecutionMode` recommendation as part of the plan response, wire that
-/// recommendation here instead of hardcoding `SemanticReact`.
+/// ## Why System 1 (DGS direct execution) is disabled:
+///
+/// 1. **Iron Law: LLM = Brain, Rust = Body.** Task classification requires understanding
+///    task semantics (e.g., "is this a simple query or a multi-step plan?"). That's
+///    reasoning, and reasoning belongs exclusively in the LLM (Qwen3-8B). Any keyword
+///    matching, regex classification, or complexity heuristic in Rust is Theater AGI —
+///    it gives the appearance of intelligence without actual understanding.
+///
+/// 2. **The LLM decides execution strategy.** Once routed to SemanticReact, the
+///    Neocortex inference engine runs the full ReAct loop. The LLM itself can decide
+///    within its reasoning whether a task is simple (complete in one iteration) or
+///    complex (requires multiple Thought→Action→Observation cycles).
+///
+/// 3. **DGS templates remain available.** DGS is not dead — it's activated when the
+///    assembled prompt contains `DGS TEMPLATE:` markers (see inference.rs:273). The
+///    decision to USE a DGS template is made during prompt assembly, not here.
+///
+/// ## Why the classifier infrastructure is preserved:
+///
+/// - **Phase 5 (planned):** The Neocortex IPC response will include an explicit
+///   `ExecutionMode` recommendation from the LLM. This classifier will then wire
+///   that recommendation instead of hardcoding SemanticReact.
+/// - **Audit trail:** Enterprise code review (LLM-HIGH-1) confirmed this is
+///   architecturally correct. Removing the infrastructure would lose the hook point.
+///
+/// ## AURA-V4 Audit References:
+/// - Enterprise Review finding LLM-HIGH-1: "RouteClassifier Dead Code"
+/// - Courtroom verdict: INTENTIONAL — Architecture-correct per Iron Laws
+/// - Ground Truth §2.1: "The LLM is the ONLY entity that understands semantics"
 #[instrument(skip_all, fields(task_len = task.len()))]
 pub fn classify_task(task: &str) -> ExecutionMode {
     let _ = task; // LLM decides execution mode; Rust does not inspect task content.
@@ -654,6 +693,14 @@ pub fn build_context(
         current_screen: screen,
         ..Default::default()
     };
+
+    // ── Tier 1: Identity Core fields for agentic sessions ───────────
+    // Constitutional tendencies — always present regardless of context path.
+    ctx.identity_tendencies = Some(IdentityTendencies::constitutional());
+    // Self-knowledge — ReAct sessions always operate in "planning" mode.
+    ctx.self_knowledge = Some(SelfKnowledge::for_mode("planning"));
+    // user_preferences: None — no UserProfile available in agentic sessions.
+    // This is acceptable: the LLM will use sensible defaults.
 
     // Build conversation history from iteration log.
     // Each iteration becomes a user turn (thought) + assistant turn (observation).
@@ -804,17 +851,20 @@ pub fn plan_step_to_tool_call(step: &aura_types::dsl::DslStep) -> ToolCall {
 }
 
 // ---------------------------------------------------------------------------
-// Reflection — post-iteration self-assessment
+// Signal Aggregation — post-iteration data processing
 // ---------------------------------------------------------------------------
 
-/// Generate a reflection on the completed iteration.
+/// Compute iteration signals from the action result.
 ///
-/// Evaluates whether the action achieved its intent by comparing the
-/// expected outcome (from thought/plan) with the actual observation.
-/// Returns a confidence score and textual reflection.
+/// Aggregates boolean observation signals (success, screen_changed,
+/// matched_element) and current strategy into a confidence score.
+/// Returns a short signal summary (NOT reasoning text) and the score.
+///
+/// ARCHITECTURE: This is signal aggregation (data processing), not reasoning.
+/// The LLM evaluates iteration progress via its next think step, using the
+/// iteration history already provided in the ReAct prompt.
 #[instrument(skip_all)]
-pub fn reflect(
-    _thought: &str,
+pub fn compute_iteration_signals(
     action: &ToolCall,
     observation: &ActionResult,
     strategy: ExecutionStrategy,
@@ -842,39 +892,17 @@ pub fn reflect(
     let confidence: f32 =
         (base_confidence + screen_change_bonus + element_bonus - strategy_penalty).clamp(0.0, 1.0);
 
-    let reflection = if observation.success {
-        format!(
-            "Action '{}' succeeded (screen_changed={}, confidence={:.2}). {}",
-            action.tool_name,
-            observation.screen_changed,
-            confidence,
-            if confidence >= REFLECTION_SUCCESS_THRESHOLD {
-                "Proceeding with current strategy."
-            } else {
-                "Low confidence despite success — may need verification."
-            }
-        )
-    } else {
-        let error_hint = observation
-            .error
-            .as_deref()
-            .unwrap_or("unknown error");
-        format!(
-            "Action '{}' failed: {}. Strategy: {}. Will {}.",
-            action.tool_name,
-            error_hint,
-            strategy,
-            match strategy {
-                ExecutionStrategy::Direct => "retry directly",
-                ExecutionStrategy::Exploratory => "try alternative approach",
-                ExecutionStrategy::Cautious => "verify preconditions first",
-                ExecutionStrategy::Recovery => "consider escalation or abort",
-            }
-        )
-    };
+    // Signal summary — structured data, not fake reasoning text.
+    let summary = format!(
+        "tool={} success={} screen_changed={} confidence={:.2}",
+        action.tool_name,
+        observation.success,
+        observation.screen_changed,
+        confidence,
+    );
 
-    debug!(confidence, "iteration reflection complete");
-    (reflection, confidence)
+    debug!(confidence, "iteration signals computed");
+    (summary, confidence)
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,365 +1151,8 @@ impl ReactEngine {
                     "DGS plan blocked by policy gate: {}",
                     denied_result.error.as_deref().unwrap_or("unknown")
                 );
-                let (reflection, confidence) =
-                    reflect(&thought, &tool_call, &denied_result, session.strategy);
-                session.record_iteration(Iteration {
-                    thought,
-                    action: tool_call,
-                    observation: denied_result,
-                    reflection,
-                    confidence,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                });
-                return TaskOutcome::Failed {
-                    reason: "action denied by policy gate".to_string(),
-                    iterations_used: session.iteration_count,
-                    total_ms: start.elapsed().as_millis() as u64,
-                    last_strategy: session.strategy,
-                };
-            }
-        }
-
-        // Capture before-state for change detection.
-        let before_hash = self.capture_screen_hash();
-
-        // Delegate the entire plan to the Executor (11-stage pipeline).
-        let exec_result = self.executor.execute(&plan, self.screen.as_ref()).await;
-
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-
-        // Capture after-state.
-        let after_hash = self.capture_screen_hash();
-        let screen_changed = before_hash != after_hash && before_hash != 0;
-
-        match exec_result {
-            Ok(ExecutionOutcome::Success { steps_executed, .. }) => {
-                let tool_call = if let Some(last_step) = plan.steps.last() {
-                    plan_step_to_tool_call(last_step)
-                } else {
-                    ToolCall {
-                        tool_name: "dgs_plan".to_string(),
-                        parameters: BTreeMap::new(),
-                        reasoning: plan.goal_description.clone(),
-                    }
-                };
-
-                let observation = ActionResult {
-                    success: true,
-                    duration_ms: elapsed_ms as u32,
-                    error: None,
-                    screen_changed,
-                    matched_element: Some(format!("dgs_{}_steps", steps_executed)),
-                };
-
-                let thought = format!(
-                    "DGS plan completed: {} steps via Executor",
-                    steps_executed
-                );
-                let (reflection, confidence) =
-                    reflect(&thought, &tool_call, &observation, session.strategy);
-
-                session.record_iteration(Iteration {
-                    thought,
-                    action: tool_call,
-                    observation,
-                    reflection,
-                    confidence,
-                    duration_ms: elapsed_ms,
-                });
-
-                TaskOutcome::Success {
-                    iterations_used: session.iteration_count,
-                    total_ms: elapsed_ms,
-                    final_confidence: confidence,
-                }
-            }
-
-            Ok(ExecutionOutcome::Failed { step, reason, .. }) => {
-                let tool_call = plan
-                    .steps
-                    .get(step as usize)
-                    .map(plan_step_to_tool_call)
-                    .unwrap_or_else(|| ToolCall {
-                        tool_name: "dgs_plan".to_string(),
-                        parameters: BTreeMap::new(),
-                        reasoning: plan.goal_description.clone(),
-                    });
-
-                let observation = ActionResult {
-                    success: false,
-                    duration_ms: elapsed_ms as u32,
-                    error: Some(reason.clone()),
-                    screen_changed,
-                    matched_element: None,
-                };
-
-                let thought = format!("DGS failed at step {}: {}", step, reason);
-                let (reflection, confidence) =
-                    reflect(&thought, &tool_call, &observation, session.strategy);
-
-                session.record_iteration(Iteration {
-                    thought,
-                    action: tool_call,
-                    observation,
-                    reflection,
-                    confidence,
-                    duration_ms: elapsed_ms,
-                });
-
-                // Try mid-execution escalation.
-                let new_tier = escalate_dgs_step(session, step);
-                if new_tier >= EscalationTier::FullNeocortex {
-                    info!("DGS step escalated to full Neocortex — switching to SemanticReact");
-                    session.mode = ExecutionMode::SemanticReact;
-                    return self.execute_semantic_react(session, Some(plan)).await;
-                }
-
-                TaskOutcome::Failed {
-                    reason,
-                    iterations_used: session.iteration_count,
-                    total_ms: elapsed_ms,
-                    last_strategy: session.strategy,
-                }
-            }
-
-            Ok(ExecutionOutcome::Cancelled { step, .. }) => {
-                warn!(step, "DGS execution cancelled");
-                TaskOutcome::Cancelled {
-                    iterations_completed: session.iteration_count,
-                    total_ms: elapsed_ms,
-                }
-            }
-
-            Ok(ExecutionOutcome::CycleDetected { step, tier }) => {
-                let reason = format!(
-                    "cycle detected at step {} (tier {})",
-                    step, tier
-                );
-                warn!(%reason, "DGS aborted due to cycle");
-                TaskOutcome::CycleAborted {
-                    iterations_completed: session.iteration_count,
-                    cycle_reason: reason,
-                }
-            }
-
-            Err(e) => {
-                error!(error = %e, "Executor returned error during DGS");
-                TaskOutcome::Failed {
-                    reason: format!("executor error: {e}"),
-                    iterations_used: session.iteration_count,
-                    total_ms: elapsed_ms,
-                    last_strategy: session.strategy,
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SemanticReact execution — System 2 (LLM-driven), wired
-// ---------------------------------------------------------------------------
-
-impl ReactEngine {
-    /// Execute a task using Semantic ReAct (System 2) with real subsystems.
-    ///
-    /// Runs the full think→act→observe loop:
-    /// 1. Capture screen via [`ScreenProvider`] and build context with real data
-    /// 2. Get the next action from the plan (or fail if no plan/neocortex)
-    /// 3. Execute via [`Executor`] using a single-step plan
-    /// 4. Observe the result with screen-hash change detection
-    /// 5. Reflect and feed back into the loop
-    #[instrument(skip(self), fields(session_id = session.session_id))]
-    async fn execute_semantic_react(
-        &mut self,
-        session: &mut AgenticSession,
-        initial_plan: Option<ActionPlan>,
-    ) -> TaskOutcome {
-        let start = Instant::now();
-        let mut current_plan = initial_plan;
-        let mut budget = TokenBudgetManager::new(TokenBudgetConfig::default());
-
-        loop {
-            // Check termination.
-            if let Some(reason) = session.should_terminate() {
-                warn!(reason, "SemanticReact session terminating");
-                return TaskOutcome::Failed {
-                    reason: reason.to_string(),
-                    iterations_used: session.iteration_count,
-                    total_ms: start.elapsed().as_millis() as u64,
-                    last_strategy: session.strategy,
-                };
-            }
-
-            // --- THINK ---
-            // Capture real screen state for context.
-            let screen_summary = self.capture_screen_summary();
-            let context = match build_context(session, screen_summary, None) {
-                Ok(ctx) => ctx,
-                Err(e) => {
-                    warn!(error = %e, "failed to build context — aborting");
-                    return TaskOutcome::Failed {
-                        reason: format!("context build failed: {e}"),
-                        iterations_used: session.iteration_count,
-                        total_ms: start.elapsed().as_millis() as u64,
-                        last_strategy: session.strategy,
-                    };
-                }
-            };
-
-            let thought = format!(
-                "SemanticReact iteration {}: strategy={}, failures={}, screen={}, budget={}",
-                session.iteration_count,
-                session.strategy,
-                session.consecutive_failures,
-                context
-                    .current_screen
-                    .as_ref()
-                    .map(|s| s.package_name.as_str())
-                    .unwrap_or("unknown"),
-                session.token_budget,
-            );
-
-            // --- ACT ---
-            let (tool_call, single_step_plan) = if let Some(ref plan) = current_plan {
-                let step_idx = session.iteration_count as usize;
-                if step_idx < plan.steps.len() {
-                    let step = &plan.steps[step_idx];
-                    let tc = plan_step_to_tool_call(step);
-
-                    // Build a single-step plan for the Executor.
-                    let single_plan = ActionPlan {
-                        goal_description: format!(
-                            "{} (step {}/{})",
-                            plan.goal_description,
-                            step_idx + 1,
-                            plan.steps.len()
-                        ),
-                        steps: vec![step.clone()],
-                        estimated_duration_ms: step.timeout_ms,
-                        confidence: plan.confidence,
-                        source: plan.source,
-                    };
-                    (tc, single_plan)
-                } else {
-                    // Plan exhausted — would request re-plan from neocortex.
-                    info!("plan exhausted — would request re-plan from neocortex");
-                    current_plan = None;
-                    continue;
-                }
-            } else {
-                // No plan available — request one from the neocortex via IPC.
-                // Build a fresh context with the current screen state to send.
-                let screen_summary = self.capture_screen_summary();
-                let ctx = match build_context(session, screen_summary, None) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(error = %e, "context build failed during plan request — aborting");
-                        return TaskOutcome::Failed {
-                            reason: format!("context build failed: {e}"),
-                            iterations_used: session.iteration_count,
-                            total_ms: start.elapsed().as_millis() as u64,
-                            last_strategy: session.strategy,
-                        };
-                    }
-                };
-
-                let plan_req = DaemonToNeocortex::Plan { context: ctx, failure: None };
-
-                // ── Token budget: pre-call checks ───────────────────────────
-                if matches!(budget.check_budget(), BudgetStatus::Exhausted) {
-                    warn!(
-                        session_used = budget.snapshot().session_used,
-                        session_limit = budget.snapshot().session_limit,
-                        "token budget exhausted — aborting Plan request"
-                    );
-                    return TaskOutcome::Failed {
-                        reason: "token budget exhausted".to_string(),
-                        iterations_used: session.iteration_count,
-                        total_ms: start.elapsed().as_millis() as u64,
-                        last_strategy: session.strategy,
-                    };
-                }
-                if budget.must_summarize() {
-                    warn!(
-                        used_pct = budget.snapshot().used_pct,
-                        "token budget critical — conversation compaction required before Plan call"
-                    );
-                }
-
-                let mut client = match NeocortexClient::connect().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(error = %e, "neocortex unreachable for Plan request — aborting");
-                        return TaskOutcome::Failed {
-                            reason: "neocortex unavailable: cannot request action plan".to_string(),
-                            iterations_used: session.iteration_count,
-                            total_ms: start.elapsed().as_millis() as u64,
-                            last_strategy: session.strategy,
-                        };
-                    }
-                };
-
-                match client.request(&plan_req).await {
-                    Ok(NeocortexToDaemon::PlanReady { plan, tokens_used }) => {
-                        budget.record_usage(tokens_used);
-                        let snap = budget.snapshot();
-                        info!(
-                            steps = plan.steps.len(),
-                            confidence = plan.confidence,
-                            "received PlanReady from neocortex"
-                        );
-                        debug!(
-                            budget_used = snap.session_used,
-                            budget_limit = snap.session_limit,
-                            budget_pct = snap.used_pct,
-                            budget_calls = snap.calls_in_session,
-                            "budget snapshot after PlanReady"
-                        );
-                        current_plan = Some(plan);
-                        continue;
-                    }
-                    Ok(other) => {
-                        warn!(
-                            resp = ?std::mem::discriminant(&other),
-                            "unexpected response to Plan request — aborting"
-                        );
-                        return TaskOutcome::Failed {
-                            reason: "unexpected response to Plan request".to_string(),
-                            iterations_used: session.iteration_count,
-                            total_ms: start.elapsed().as_millis() as u64,
-                            last_strategy: session.strategy,
-                        };
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Plan IPC request failed — aborting");
-                        return TaskOutcome::Failed {
-                            reason: format!("Plan IPC request failed: {e}"),
-                            iterations_used: session.iteration_count,
-                            total_ms: start.elapsed().as_millis() as u64,
-                            last_strategy: session.strategy,
-                        };
-                    }
-                }
-            };
-
-            debug!(action = %tool_call.tool_name, "SemanticReact executing action via Executor");
-
-            // --- Policy gate check (before this action reaches the Executor) ---
-            {
-                let mut policy_ctx = PolicyContext {
-                    gate: &mut self.policy_gate,
-                    audit: &mut self.audit_log,
-                };
-                let action_str = format!("{}:{}", tool_call.tool_name, tool_call.reasoning);
-                if let Some(denied_result) = policy_ctx.check_action(&action_str) {
-                    let thought_denied = format!(
-                        "SemanticReact action '{}' blocked by policy gate: {}",
-                        tool_call.tool_name,
-                        denied_result.error.as_deref().unwrap_or("unknown")
-                    );
                     let (reflection, confidence) =
-                        reflect(&thought_denied, &tool_call, &denied_result, session.strategy);
+                        compute_iteration_signals(&tool_call, &denied_result, session.strategy);
                     session.record_iteration(Iteration {
                         thought: thought_denied,
                         action: tool_call,
@@ -1549,11 +1220,11 @@ impl ReactEngine {
             };
 
             // --- REFLECT ---
-            let (reflection, confidence) =
-                reflect(&thought, &tool_call, &observation, session.strategy);
+                let (reflection, confidence) =
+                    compute_iteration_signals(&tool_call, &observation, session.strategy);
 
-            let iteration = Iteration {
-                thought,
+                session.record_iteration(Iteration {
+                    thought,
                 action: tool_call,
                 observation,
                 reflection,
@@ -1788,7 +1459,7 @@ async fn execute_dgs_standalone(
         .await;
 
         let (reflection, confidence) =
-            reflect(&thought, &tool_call, &observation, session.strategy);
+            compute_iteration_signals(&tool_call, &observation, session.strategy);
 
         let iteration = Iteration {
             thought,
@@ -1950,7 +1621,7 @@ async fn execute_semantic_react_standalone(
         .await;
 
         let (reflection, confidence) =
-            reflect(&thought, &tool_call, &observation, session.strategy);
+            compute_iteration_signals(&tool_call, &observation, session.strategy);
 
         let iteration = Iteration {
             thought,
@@ -2376,7 +2047,7 @@ mod tests {
         assert!(tc.parameters.contains_key("target"));
     }
 
-    // --- Reflection ---
+    // --- Signal Aggregation ---
 
     #[test]
     fn test_reflect_success() {
@@ -2393,9 +2064,9 @@ mod tests {
             matched_element: Some("btn".to_string()),
         };
 
-        let (reflection, confidence) = reflect("test thought", &tool, &obs, ExecutionStrategy::Direct);
+        let (reflection, confidence) = compute_iteration_signals(&tool, &obs, ExecutionStrategy::Direct);
         assert!(confidence > 0.8);
-        assert!(reflection.contains("succeeded"));
+        assert!(reflection.contains("success=true"));
     }
 
     #[test]
@@ -2413,10 +2084,9 @@ mod tests {
             matched_element: None,
         };
 
-        let (reflection, confidence) = reflect("test thought", &tool, &obs, ExecutionStrategy::Recovery);
+        let (reflection, confidence) = compute_iteration_signals(&tool, &obs, ExecutionStrategy::Recovery);
         assert!(confidence < 0.3);
-        assert!(reflection.contains("failed"));
-        assert!(reflection.contains("element not found"));
+        assert!(reflection.contains("success=false"));
     }
 
     #[test]
@@ -2435,7 +2105,7 @@ mod tests {
             screen_changed: true,
             matched_element: Some("btn".to_string()),
         };
-        let (_, conf) = reflect("t", &tool, &obs_best, ExecutionStrategy::Direct);
+        let (_, conf) = compute_iteration_signals(&tool, &obs_best, ExecutionStrategy::Direct);
         assert!(conf <= 1.0);
         assert!(conf >= 0.0);
 
@@ -2447,7 +2117,7 @@ mod tests {
             screen_changed: false,
             matched_element: None,
         };
-        let (_, conf) = reflect("t", &tool, &obs_worst, ExecutionStrategy::Recovery);
+        let (_, conf) = compute_iteration_signals(&tool, &obs_worst, ExecutionStrategy::Recovery);
         assert!(conf <= 1.0);
         assert!(conf >= 0.0);
     }
@@ -2832,6 +2502,87 @@ mod tests {
             a complex multi-step workflow involving several different conditions \
             and branching logic paths";
         assert_eq!(classify_task(complex), ExecutionMode::SemanticReact);
+    }
+
+    // --- TEST-CRIT-002: ReAct loop core unit tests ---
+
+    #[test]
+    fn test_classify_task_always_returns_semantic_react() {
+        // classify_task must ALWAYS return SemanticReact — the LLM decides
+        // execution strategy, not Rust. This is an Iron Law invariant.
+        let inputs = [
+            "open settings",
+            "what time is it",
+            "",
+            "coordinate multi-step workflow across 5 apps with conditional branching",
+            "tap the blue button",
+            "a]!@#$%^& weird input with special chars",
+        ];
+        for input in &inputs {
+            assert_eq!(
+                classify_task(input),
+                ExecutionMode::SemanticReact,
+                "classify_task must return SemanticReact for all inputs, failed on: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fnv1a_hash_deterministic() {
+        // Same input must always produce the same hash — required for
+        // cycle detection and session ID stability.
+        let data = b"hello world";
+        let h1 = fnv1a_hash(data);
+        let h2 = fnv1a_hash(data);
+        assert_eq!(h1, h2, "fnv1a_hash must be deterministic");
+
+        // Also check empty input is deterministic.
+        let empty1 = fnv1a_hash(b"");
+        let empty2 = fnv1a_hash(b"");
+        assert_eq!(empty1, empty2, "fnv1a_hash must be deterministic for empty input");
+
+        // Empty input should return the FNV offset basis (no bytes processed).
+        assert_eq!(empty1, FNV_OFFSET, "fnv1a_hash of empty input should be FNV_OFFSET");
+    }
+
+    #[test]
+    fn test_fnv1a_hash_distributes() {
+        // Different inputs must produce different hashes (basic collision resistance).
+        // FNV-1a isn't cryptographic, but for cycle detection it must distinguish
+        // distinct screen states.
+        let inputs: Vec<&[u8]> = vec![
+            b"hello",
+            b"Hello",
+            b"hello!",
+            b"world",
+            b"",
+            b"\x00",
+            b"\x00\x00",
+            b"com.android.settings",
+            b"com.android.settings.wifi",
+        ];
+        let hashes: Vec<u64> = inputs.iter().map(|i| fnv1a_hash(i)).collect();
+
+        // All hashes should be unique for these distinct inputs.
+        for i in 0..hashes.len() {
+            for j in (i + 1)..hashes.len() {
+                assert_ne!(
+                    hashes[i], hashes[j],
+                    "collision between {:?} and {:?}: both hash to {}",
+                    std::str::from_utf8(inputs[i]).unwrap_or("<binary>"),
+                    std::str::from_utf8(inputs[j]).unwrap_or("<binary>"),
+                    hashes[i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_max_iterations_constant() {
+        // MAX_ITERATIONS is the daemon's outer agentic loop bound.
+        // Changing it has safety implications (resource exhaustion, infinite loops).
+        // This test catches accidental modifications.
+        assert_eq!(MAX_ITERATIONS, 10, "MAX_ITERATIONS must be 10 (daemon outer loop)");
     }
 
     // --- Helpers ---

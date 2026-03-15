@@ -97,6 +97,10 @@ pub struct ZipformerStt {
     frames_fed: usize,
 }
 
+// SAFETY: ZipformerStt is Send because the raw `*mut c_void` state pointer
+// (present only on Android) is only accessed through &mut self methods, ensuring
+// exclusive access. The C sherpa-onnx STT library is not thread-safe per-instance,
+// but since we never share the pointer across threads without &mut, Send is sound.
 unsafe impl Send for ZipformerStt {}
 
 impl ZipformerStt {
@@ -269,6 +273,10 @@ pub struct WhisperStt {
     pub model_size: WhisperModelSize,
 }
 
+// SAFETY: WhisperStt is Send because the raw `*mut c_void` ctx pointer
+// (present only on Android) is only accessed through &mut self methods, ensuring
+// exclusive access. The whisper.cpp library is not thread-safe per-context, but
+// ownership transfer between threads is safe since we never alias the pointer.
 unsafe impl Send for WhisperStt {}
 
 impl WhisperStt {
@@ -445,11 +453,13 @@ mod tests {
         let samples = vec![0i16; 480];
 
         let partial = stt.feed_audio(&samples).unwrap();
-        assert!(!partial.text.is_empty() || partial.text.is_empty()); // mock may be empty
+        // Feeding silence (zero samples) — partial text should be empty.
+        assert!(partial.text.is_empty(),
+            "expected empty partial text from silence, got: '{}'", partial.text);
 
         let result = stt.finalize_streaming().unwrap();
-        // Mock produces something
-        assert!(result.len() >= 0); // non-panic is success
+        // Finalize should produce a non-empty transcription (even mock returns something).
+        assert!(!result.is_empty(), "finalize_streaming should return non-empty result");
     }
 
     #[test]
@@ -500,6 +510,9 @@ mod tests {
         stt.reset_streaming();
         // Should be able to feed again without error
         let partial = stt.feed_audio(&samples).unwrap();
-        assert!(partial.text.is_empty() || !partial.text.is_empty());
+        // After reset, feed_audio should succeed without error (already asserted by unwrap above).
+        // Partial text from silence samples is expected to be empty.
+        assert!(partial.text.is_empty(),
+            "expected empty partial text from silence after reset, got: '{}'", partial.text);
     }
 }

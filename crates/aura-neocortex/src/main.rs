@@ -1,3 +1,4 @@
+#![feature(negative_impls)]
 //! AURA Neocortex — LLM inference binary.
 //!
 //! This is a **separate process** from the AURA daemon.  It communicates via
@@ -185,18 +186,10 @@ fn main() {
     let shutdown = Arc::new(AtomicBool::new(false));
     let cancel_token = Arc::new(AtomicBool::new(false));
 
-    // Register SIGTERM/SIGINT handler for graceful shutdown.
-    {
-        let shutdown_flag = shutdown.clone();
-        let cancel_flag = cancel_token.clone();
-
-        // Use a simple CTRL+C handler (works on all platforms).
-        let _ = ctrlc_handler(move || {
-            info!("shutdown signal received");
-            shutdown_flag.store(true, Ordering::SeqCst);
-            cancel_flag.store(true, Ordering::SeqCst);
-        });
-    }
+    // Spawn stdin-based shutdown listener.
+    // The daemon can send "SHUTDOWN\n" on stdin for graceful shutdown.
+    // Stdin EOF or errors do NOT trigger shutdown (safe for Android headless mode).
+    spawn_shutdown_listener(shutdown.clone(), cancel_token.clone());
 
     // ── Step 2: Create ModelManager and scan for GGUF files ─────────────────
     //
@@ -371,8 +364,23 @@ fn run_server(
                 current_caps = Some(reconnect_caps);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No connection yet — sleep briefly and retry.
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // No pending connection — poll again after a short sleep.
+                //
+                // Tradeoff: 50ms gives ≤50ms latency on new connections while
+                // keeping idle CPU wake-ups at 20/sec (negligible even on mobile).
+                //
+                // NOTE: handler.run_loop() above BLOCKS for the entire duration
+                // of a daemon connection (it uses blocking read_exact() with a
+                // 30-second read timeout for idle-unload checks).  This poll loop
+                // only runs while waiting for a NEW connection — not during active
+                // inference.  So the 50ms sleep only affects reconnection latency,
+                // which is acceptable for alpha.
+                //
+                // Future improvement: use `mio` or OS-level `poll()`/`select()`
+                // for zero-latency accept without busy-wait.  This would also
+                // allow multiplexing the shutdown flag check into the same poll
+                // set, eliminating the separate shutdown-listener thread.
+                std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
             }
             Err(e) => {
@@ -385,27 +393,69 @@ fn run_server(
     Ok(())
 }
 
-/// Install a closure to run on CTRL+C / SIGTERM.
+/// Spawn a background thread that listens for shutdown signals on stdin.
 ///
-/// Uses a simple approach without depending on the `ctrlc` crate.
-fn ctrlc_handler<F>(handler: F) -> Result<(), String>
-where
-    F: FnOnce() + Send + 'static,
-{
-    // We use a thread that waits for the process to be signalled.
-    // On Windows, there's no direct SIGTERM, but CTRL+C works.
-    // This is a best-effort handler for development.
-    std::thread::spawn(move || {
-        // Wait for a signal by blocking on stdin close or similar.
-        // In production Android builds, the daemon manages our lifecycle.
-        // For host development, CTRL+C will kill the process anyway.
-        //
-        // A proper implementation would use `signal-hook` or `ctrlc` crate,
-        // but we keep dependencies minimal.
-        let _ = std::io::stdin().read_line(&mut String::new());
-        handler();
-    });
-    Ok(())
+/// # Shutdown protocol
+///
+/// The parent process (daemon) can request graceful shutdown by writing
+/// `SHUTDOWN\n` to this process's stdin.  This is a simple, cross-platform
+/// mechanism that works on Android, Linux, Windows, and macOS without
+/// requiring signal-handling crates or platform-specific APIs.
+///
+/// **Behaviour on stdin events:**
+/// - Line containing "SHUTDOWN" (case-insensitive) → trigger graceful shutdown.
+/// - EOF (stdin closed / pipe broken) → log warning, do NOT shutdown.
+///   On Android the daemon may close stdin without intending to kill neocortex
+///   (e.g., process manager recycling file descriptors).
+/// - I/O error → log error, stop listening (do NOT trigger shutdown).
+/// - Any other line → ignored (allows future command extension).
+///
+/// CTRL+C on host platforms will still terminate the process via the default
+/// signal handler; this listener is an *additional* graceful shutdown path.
+///
+/// # Future improvements
+/// Replace with `signal-hook` or `ctrlc` crate for proper SIGTERM/SIGINT
+/// handling alongside the stdin protocol.
+fn spawn_shutdown_listener(shutdown: Arc<AtomicBool>, cancel: Arc<AtomicBool>) {
+    std::thread::Builder::new()
+        .name("shutdown-listener".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let reader = stdin.lock();
+
+            for line_result in reader.lines() {
+                match line_result {
+                    Ok(line) => {
+                        let trimmed = line.trim();
+                        if trimmed.eq_ignore_ascii_case("SHUTDOWN") {
+                            info!("received SHUTDOWN command on stdin — initiating graceful shutdown");
+                            shutdown.store(true, Ordering::SeqCst);
+                            cancel.store(true, Ordering::SeqCst);
+                            return;
+                        }
+                        // Ignore unrecognised lines (future: could add STATUS, RELOAD, etc.)
+                        if !trimmed.is_empty() {
+                            warn!(line = %trimmed, "unrecognised stdin command — ignoring");
+                        }
+                    }
+                    Err(e) => {
+                        // I/O error (not EOF) — stop listening but do NOT shutdown.
+                        // This can happen if stdin is redirected from /dev/null or a
+                        // closed pipe on some platforms.
+                        warn!(error = %e, "stdin read error — shutdown listener exiting (no shutdown triggered)");
+                        return;
+                    }
+                }
+            }
+
+            // Iterator exhausted → EOF. Stdin was closed by the parent process.
+            // On Android, this is normal when the daemon doesn't hold our stdin open.
+            // Do NOT trigger shutdown — the daemon will send an explicit SHUTDOWN or
+            // the OS will SIGKILL us if it truly wants us gone.
+            warn!("stdin closed (EOF) — shutdown listener exiting (no shutdown triggered)");
+        })
+        .expect("failed to spawn shutdown-listener thread");
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

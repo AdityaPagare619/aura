@@ -39,7 +39,8 @@
 //! ```
 
 use aura_types::ipc::{
-    ContextPackage, DaemonToNeocortex, InferenceMode, UserStateSignals,
+    ContextPackage, DaemonToNeocortex, IdentityTendencies, InferenceMode,
+    SelfKnowledge, UserStateSignals,
     ProactiveTrigger as IpcProactiveTrigger,
 };
 
@@ -150,6 +151,14 @@ pub fn trigger_to_ipc(trigger: &ProactiveTrigger) -> DaemonToNeocortex {
     ctx.inference_mode = InferenceMode::Conversational;
     ctx.user_state = UserStateSignals::default(); // assume user can receive the message
     ctx.token_budget = 512; // keep proactive messages short
+
+    // Tier 1: Identity Core fields for proactive messages.
+    // Constitutional tendencies ensure proactive messages align with AURA's character.
+    ctx.identity_tendencies = Some(IdentityTendencies::constitutional());
+    // Self-knowledge grounds the LLM in what AURA can/cannot do.
+    ctx.self_knowledge = Some(SelfKnowledge::for_mode("conversational"));
+    // user_preferences: None — proactive dispatcher doesn't have access to UserProfile.
+    // TODO(tier-1): Thread UserProfile into trigger_to_ipc() for personalized proactives.
 
     DaemonToNeocortex::ProactiveContext {
         trigger: ipc_trigger,

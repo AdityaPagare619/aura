@@ -381,7 +381,7 @@ curiosity = 0.8
 directness = 0.6
 
 [vault]
-# Vault PIN is stored as bcrypt hash, never plaintext
+# Vault PIN is stored as Argon2id hash, never plaintext
 # Set during first-time setup by install.sh
 pin_hash = ""
 # Auto-lock after idle seconds (0 = never)
@@ -389,7 +389,7 @@ auto_lock_seconds = 0
 
 [trust]
 # Default trust tier for new interactions
-# tiers: 0=untrusted, 1=user, 2=trusted, 3=admin
+# tiers: 0=Stranger, 1=Acquaintance, 2=Friend, 3=CloseFriend, 4=Soulmate
 default_tier = 1
 ```
 
@@ -853,7 +853,7 @@ user-owned hardware. This is a design invariant, not a milestone item.
 
 The vault PIN is the root of trust for AURA's security model. It is:
 - Never stored in plaintext
-- Stored as bcrypt hash at `config.toml` `vault.pin_hash`
+- Stored as Argon2id hash at `config.toml` `vault.pin_hash`
 - Required to access trust tier 2+ operations
 - Required for any destructive operation (memory wipe, config reset)
 

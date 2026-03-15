@@ -115,6 +115,10 @@ pub struct PiperTts {
     pub sample_rate: u32,
 }
 
+// SAFETY: PiperTts is Send because the raw `*mut c_void` state (present only on
+// Android) is only accessed through &mut self methods, ensuring exclusive access.
+// The piper C library is not thread-safe per-instance, but single-owner transfer
+// between threads is safe.
 unsafe impl Send for PiperTts {}
 
 impl PiperTts {
@@ -264,6 +268,10 @@ pub struct ESpeakTts {
     pub sample_rate: u32,
 }
 
+// SAFETY: ESpeakTts is Send because on Android the only non-Send-by-default field
+// is `initialized: bool`, which is trivially Send. The eSpeak library uses global
+// state internally, but the `initialized` flag just tracks whether init was called;
+// moving this struct between threads does not create data races.
 unsafe impl Send for ESpeakTts {}
 
 impl ESpeakTts {

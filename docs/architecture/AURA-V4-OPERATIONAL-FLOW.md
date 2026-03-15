@@ -727,16 +727,16 @@ ARC tracks the user's life across 10 domains, contributing to a composite Life Q
 
 | Domain | What It Tracks |
 |--------|---------------|
-| `health` | Sleep patterns, exercise reminders, medication |
-| `work` | Task completion, focus time, deadline proximity |
-| `relationships` | Communication patterns, important dates |
-| `learning` | Study sessions, knowledge goals, skill building |
-| `creativity` | Creative work time, project progress |
-| `finance` | Bill reminders, spending patterns (on-device only) |
-| `environment` | Physical space, ambient conditions |
-| `social` | Social connection quality, isolation detection |
-| `physical` | Movement, sedentary time, ergonomics |
-| `spiritual` | Mindfulness, reflection time, values alignment |
+| `Health` | Sleep patterns, exercise reminders, medication |
+| `Social` | Communication patterns, social connection quality |
+| `Productivity` | Task completion, focus time, deadline proximity |
+| `Finance` | Bill reminders, spending patterns (on-device only) |
+| `Lifestyle` | Daily living quality, routine consistency |
+| `Entertainment` | Leisure balance, hobby engagement |
+| `Learning` | Study sessions, knowledge goals, skill building |
+| `Communication` | Communication app usage, response patterns |
+| `Environment` | Physical space, ambient conditions |
+| `PersonalGrowth` | Mindfulness, reflection time, self-improvement |
 
 ### 10.3 Context Modes
 
@@ -744,14 +744,14 @@ ARC operates differently depending on which of 8 context modes is active:
 
 | Mode | Description | ARC Behavior |
 |------|-------------|--------------|
-| `focused_work` | Deep work in progress | Minimal interruption, suppress non-critical proactive |
-| `social_interaction` | User is in conversation | Suppress all proactive, preserve social flow |
-| `creative_flow` | Creative activity detected | Protect flow state, defer everything |
-| `recovery` | Rest/sleep/downtime | Low activity, gentle suggestions only |
-| `learning` | Study/reading in progress | Support focus, relevant suggestions welcome |
-| `planning` | Intentional planning activity | High initiative, assist with structuring |
-| `emergency` | Urgent situation detected | Override all suppression, surface critical info |
-| `idle` | No active task | Normal initiative, surface deferred suggestions |
+| `Default` | Standard operating mode | Normal initiative, surface deferred suggestions |
+| `DoNotDisturb` | User enabled DND | Suppress all proactive, minimal interruption |
+| `Sleeping` | Rest/sleep/downtime | Low activity, no proactive triggers |
+| `Active` | User actively engaged | Full interaction support, responsive mode |
+| `Driving` | User is driving | Safety-appropriate only, minimal distraction |
+| `Custom1` | User-defined mode 1 | User-configured behavior |
+| `Custom2` | User-defined mode 2 | User-configured behavior |
+| `Custom3` | User-defined mode 3 | User-configured behavior |
 
 ### 10.4 ForestGuardian — Attention Protection
 

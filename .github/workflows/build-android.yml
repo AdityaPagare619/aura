@@ -3,11 +3,9 @@
 # Target: aarch64-linux-android (Termux on ARM64 devices)
 # NDK: r26b (stable LTS)
 #
-# KNOWN ISSUE: This workflow requires the llama.cpp submodule.
-# If aura-llama-sys/llama.cpp/ is empty (submodule not initialized),
-# the build will fail at the cc::Build step in build.rs.
-# Fix: ensure `git submodule add <url> crates/aura-llama-sys/llama.cpp`
-# has been committed and the submodule URL is accessible.
+# TOOLCHAIN: Must match rust-toolchain.toml (nightly-2026-03-01)
+# SECURITY:  NDK download verified with SHA256 checksum
+#            All third-party actions pinned to commit SHA
 # ============================================================
 
 name: Build Android
@@ -17,9 +15,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   NDK_VERSION: r26b
+  # Official SHA256 for android-ndk-r26b-linux.zip (source: Google / conan-center-index)
+  NDK_SHA256: "ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632"
   # API level 21 = Android 5.0 minimum — covers all modern devices
   API_LEVEL: "21"
   TARGET: aarch64-linux-android
@@ -34,42 +38,66 @@ jobs:
       # 1. Checkout — recursive for llama.cpp submodule
       # ----------------------------------------------------------
       - name: Checkout (with submodules)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
       # ----------------------------------------------------------
-      # 2. Rust toolchain + Android target
+      # 2. Rust toolchain + Android target (matches rust-toolchain.toml)
       # ----------------------------------------------------------
-      - name: Install Rust stable + aarch64-linux-android target
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly-2026-03-01) + aarch64-linux-android target
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
+          toolchain: nightly-2026-03-01
           targets: aarch64-linux-android
 
       # ----------------------------------------------------------
       # 3. Cache
       # ----------------------------------------------------------
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: android-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: android-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: android-cargo-
 
       # ----------------------------------------------------------
-      # 4. Download and unpack Android NDK r26b
-      # Source: GitHub releases (no third-party services)
+      # 4. Cache and download Android NDK r26b with integrity check
       # ----------------------------------------------------------
-      - name: Download Android NDK r26b
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux-${{ env.NDK_SHA256 }}
+
+      - name: Download and verify Android NDK r26b
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
           NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
           echo "Downloading NDK from: $NDK_URL"
           curl -fsSL "$NDK_URL" -o ndk.zip
+
+          echo "Verifying NDK SHA256 checksum..."
+          ACTUAL_SHA256=$(sha256sum ndk.zip | cut -d' ' -f1)
+          if [ "$ACTUAL_SHA256" != "$NDK_SHA256" ]; then
+            echo "FATAL: NDK checksum mismatch!"
+            echo "Expected: $NDK_SHA256"
+            echo "Actual:   $ACTUAL_SHA256"
+            echo "This could indicate a supply-chain attack or corrupted download."
+            rm -f ndk.zip
+            exit 1
+          fi
+          echo "NDK checksum verified: $ACTUAL_SHA256"
+
           unzip -q ndk.zip -d $HOME
-          echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          rm -f ndk.zip
+
+      - name: Set NDK environment
+        run: echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
       # ----------------------------------------------------------
       # 5. Export cross-compilation environment variables
@@ -111,27 +139,33 @@ jobs:
       # ----------------------------------------------------------
       # 8. Cross-compile
       # ----------------------------------------------------------
-      - name: Build aura-daemon for aarch64-linux-android
-        run: cargo build --release -p aura-daemon --target aarch64-linux-android
+      - name: Build aura-daemon and aura-neocortex for aarch64-linux-android
+        run: cargo build --release -p aura-daemon -p aura-neocortex --target aarch64-linux-android
 
       # ----------------------------------------------------------
       # 9. Strip binary (reduces size significantly for on-device use)
       # ----------------------------------------------------------
-      - name: Strip binary
+      - name: Strip binaries
         run: |
           STRIP="$TOOLCHAIN/llvm-strip"
-          BINARY="target/aarch64-linux-android/release/aura-daemon"
-          echo "Binary size before strip: $(du -sh $BINARY | cut -f1)"
-          $STRIP "$BINARY"
-          echo "Binary size after strip:  $(du -sh $BINARY | cut -f1)"
+          for BIN in aura-daemon aura-neocortex; do
+            BINARY="target/aarch64-linux-android/release/$BIN"
+            if [ -f "$BINARY" ]; then
+              echo "Stripping $BIN: $(du -sh $BINARY | cut -f1) before"
+              $STRIP "$BINARY"
+              echo "Stripped $BIN: $(du -sh $BINARY | cut -f1) after"
+            fi
+          done
 
       # ----------------------------------------------------------
       # 10. Upload artifact
       # ----------------------------------------------------------
-      - name: Upload aura-daemon binary
-        uses: actions/upload-artifact@v4
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: aura-daemon-aarch64-linux-android
-          path: target/aarch64-linux-android/release/aura-daemon
+          name: aura-binaries-aarch64-linux-android
+          path: |
+            target/aarch64-linux-android/release/aura-daemon
+            target/aarch64-linux-android/release/aura-neocortex
           retention-days: 30
           if-no-files-found: error

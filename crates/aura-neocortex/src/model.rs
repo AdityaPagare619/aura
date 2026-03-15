@@ -315,7 +315,7 @@ impl ModelScanner {
             _ => {
                 // 3+ models: pick smallest, middle, largest
                 let (small_path, small_meta) = entries.remove(0);
-                let (large_path, large_meta) = entries.pop().unwrap();
+                let (large_path, large_meta) = entries.pop().expect("entries has 3+ items in this match arm");
                 // Middle: prefer the one whose RAM estimate is closest to the average
                 let mid_idx = entries.len() / 2;
                 let (mid_path, mid_meta) = entries.remove(mid_idx);
@@ -352,6 +352,11 @@ impl ModelScanner {
         if let Some((_, meta)) = self.models.get(&tier) {
             return meta.effective_context();
         }
+        warn!(
+            "no GGUF metadata for {:?} — falling back to default context window (4096 tokens). \
+             Load the model explicitly or check the GGUF header.",
+            tier
+        );
         4096
     }
 
@@ -601,9 +606,19 @@ pub struct LoadedModel {
     pub cumulative_confidence: f64,
 }
 
-// Safety: the raw pointers are only accessed from a single thread (the
-// neocortex binary is single-threaded with respect to model access).
+// SAFETY (RUST-MED-7 / GAP-MED-009): LoadedModel contains raw pointers
+// (*mut LlamaModel, *mut LlamaContext) from the C FFI layer.
+//
+// Send: Pointers are only dereferenced by the neocortex binary's inference
+// thread. The ModelManager serializes all access through its internal state
+// machine, ensuring no concurrent mutation. Moving between threads is safe
+// because we guarantee single-owner semantics at the architectural level.
+//
+// !Sync: Explicitly declared. Although Rust auto-derives !Sync for raw-pointer
+// types, making it explicit prevents accidental future changes (e.g. wrapping
+// in Arc) from silently enabling shared-reference access across threads.
 unsafe impl Send for LoadedModel {}
+impl !Sync for LoadedModel {}
 
 impl LoadedModel {
     /// Whether this model's pointers are valid (non-null).
@@ -633,12 +648,18 @@ impl LoadedModel {
 
 impl Drop for LoadedModel {
     fn drop(&mut self) {
+        // Free llama.cpp resources on ALL platforms, including Android.
+        // The previous `#[cfg(not(target_os = "android"))]` guards caused
+        // a memory leak on mobile: neither the context nor the model weights
+        // were released, accumulating hundreds of MB per model reload.
+        //
+        // On Android the symbols are dynamically loaded via libloading, but
+        // the stubs module resolves them correctly at runtime — there is no
+        // reason to skip cleanup.
         if !self.ctx_ptr.is_null() {
-            #[cfg(not(target_os = "android"))]
             aura_llama_sys::stubs::llama_free_context(self.ctx_ptr);
         }
         if !self.model_ptr.is_null() {
-            #[cfg(not(target_os = "android"))]
             aura_llama_sys::stubs::llama_free_model(self.model_ptr);
         }
     }

@@ -273,7 +273,7 @@ Sensitive user data is stored in the `CriticalVault`, an encrypted SQLite databa
 | Algorithm | Argon2id | Best current KDF: combines Argon2i (side-channel resistance) and Argon2d (GPU resistance) |
 | Memory cost (`m`) | 65536 KiB (64 MB) | Expensive for attackers, feasible on mobile |
 | Time cost (`t`) | 3 iterations | Balances security and startup latency |
-| Parallelism (`p`) | 1 | Appropriate for single-threaded mobile environment |
+| Parallelism (`p`) | 4 | Parallelized KDF for faster derivation |
 | Salt | 16 bytes, random per vault | Prevents rainbow tables |
 | Output key length | 32 bytes | AES-256 key |
 
@@ -315,13 +315,15 @@ Result: All encrypted data is mathematically unrecoverable without the salt.
 
 ### 7.1 Trust Tiers
 
-| Tier | Value | Actions Permitted | Granted By |
-|------|-------|------------------|------------|
-| **None** | 0 | Read-only; UI-independent queries | Default for unknown actions |
-| **Basic** | 1 | Low-risk UI actions (open app, set alarm, adjust volume) | Default for known safe actions |
-| **Trusted** | 2 | Communication actions (send message, make call — with confirmation) | User opt-in per action category |
-| **Elevated** | 3 | Sensitive actions (delete files, financial app access) | Explicit user grant + confirmation |
-| **System** | 4 | Reserved for AURA internal operations | Internal only; not grantable by LLM |
+| Tier | Name | τ Threshold | Actions Permitted | Granted By |
+|------|------|-------------|------------------|------------|
+| **Stranger** | 0 | τ < 0.15 | Read-only; UI-independent queries | Default for unknown users |
+| **Acquaintance** | 1 | 0.15 ≤ τ < 0.35 | Basic conversation, limited memory access | Early interaction buildup |
+| **Friend** | 2 | 0.35 ≤ τ < 0.60 | Full conversation and actions with confirmation | Established relationship |
+| **CloseFriend** | 3 | 0.60 ≤ τ < 0.85 | Full autonomy for routine tasks, no confirmation | Deep trust established |
+| **Soulmate** | 4 | τ ≥ 0.85 | Maximum autonomy including proactive actions | Highest trust achieved |
+
+Trust tier transitions use a hysteresis gap of 0.05 to prevent oscillation at boundaries.
 
 ### 7.2 Trust Escalation
 
@@ -375,7 +377,7 @@ training and produce harmful outputs.
 
 **Mitigation:**
 
-1. `aura-gguf` parser validates GGUF headers and metadata before loading
+1. `aura-llama-sys` GGUF parser validates GGUF headers and metadata before loading
 2. Model checksums verified against `install.sh` known-good hashes (when vendored)
 3. Layers 1 and 2 defense are independent of model behavior — a compromised model that emits
    `FactoryReset` actions will still be blocked by the ethics gate

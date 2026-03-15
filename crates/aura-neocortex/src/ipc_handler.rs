@@ -1118,6 +1118,7 @@ mod tests {
                 neuroticism: 0.3,
                 current_mood_valence: 0.5,
                 current_mood_arousal: 0.4,
+                current_mood_dominance: 0.5,
                 trust_level: 0.8,
             },
             user_state: UserStateSignals::default(),

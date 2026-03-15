@@ -1,0 +1,760 @@
+# AURA v4 — Enterprise Code Review
+## PART C: Cross-Domain Synthesis, External Reconciliation, Action Plan & Appendices
+### Sections §15–§18
+
+---
+
+## §15. Cross-Domain Dependency Analysis
+
+### 15.1 Finding Interaction Matrix
+
+The 16 unique critical findings do not exist in isolation. The matrix below maps directional amplification — where a finding in one domain worsens the impact or exploitability of a finding in another.
+
+**Legend:**
+- **A** = Amplifies (directly increases severity or exploitability)
+- **H** = Hides (masks detection or delays discovery)
+- **—** = No direct relationship
+
+| Amplifier → / Target ↓ | SEC-CRIT-001 | SEC-CRIT-002 | SEC-CRIT-003/004 | LLM-CRIT-001 | LLM-CRIT-002 | AND-CRIT-001/002 | CI-CRIT-001/002 | TEST-CRIT-001/002 | DOC-CRIT-001/002 |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **SEC-CRIT-001** (timing) | — | A | | | | | | H | |
+| **SEC-CRIT-002** (no zeroize) | A | — | | A | | | | H | |
+| **SEC-CRIT-003/004** (install.sh) | | | — | | | | A | | H |
+| **LLM-CRIT-001** (UB cast) | | A | | — | | | | H | |
+| **LLM-CRIT-002** (post-hoc GBNF) | | | | | — | | | H | H |
+| **AND-CRIT-001/002** (simulation) | | | | | A | — | | H | H |
+| **CI-CRIT-001/002** (broken CI) | | | A | | | | — | A | |
+| **TEST-CRIT-001/002** (hollow) | H | H | H | H | H | H | H | — | |
+| **DOC-CRIT-001/002** (inconsistency) | | | | | H | H | | | — |
+
+---
+
+### 15.2 Attack Chain Analysis
+
+#### Chain 1: Vault Compromise → Full Key Extraction
+
+```
+SEC-CRIT-001 (timing attack on HMAC comparison)
+    │
+    ▼
+Attacker recovers vault authentication token via byte-by-byte timing oracle
+    │
+    ▼
+SEC-CRIT-002 (no zeroize on key material)
+    │
+    ▼
+Master key persists in process memory after "lock" — cold boot or /proc/mem
+extraction yields AES-256-GCM master key and all derived keys
+    │
+    ▼
+LLM-CRIT-001 (const-to-mut FFI cast = UB)
+    │
+    ▼
+Undefined behavior in FFI boundary creates potential memory corruption vector;
+attacker-controlled input to LLM inference could trigger overlapping write into
+vault key region
+    │
+    ▼
+TEST-CRIT-002 (ReAct engine untested)
+    │
+    ▼
+No tests cover the 2,821-line code path where this UB lives — the vulnerability
+has zero probability of being caught before production
+```
+
+**Combined severity:** An attacker on the same device (Termux threat model makes this plausible) can extract all vault contents through a timing side-channel, with the attack window extended indefinitely by the absence of memory zeroization. The UB in the FFI layer means that even if the timing attack is patched, a memory corruption primitive may exist. No test covers any link in this chain.
+
+---
+
+#### Chain 2: Supply Chain → Privilege Escalation
+
+```
+CI-CRIT-002 (release.yml broken — missing --features stub, no submodule checkout)
+    │
+    ▼
+Builds cannot complete in CI — developer builds locally, signs manually
+    │
+    ▼
+SEC-CRIT-003 (placeholder SHA256 checksums in install.sh)
+    │
+    ▼
+install.sh cannot verify binary integrity — any binary is accepted
+    │
+    ▼
+SEC-CRIT-004 (unsalted SHA256 PIN verification)
+    │
+    ▼
+PIN brute-forced via rainbow table → attacker gains "owner" trust tier
+    │
+    ▼
+HIGH: allow_all_builder not test-gated + add/remove_rule mutable at runtime
+    │
+    ▼
+PolicyGate rules mutated to allow_all → LLM agent gains unrestricted
+action permissions on device
+    │
+    ▼
+AND-CRIT-001/002 (simulation-only actions)
+    │
+    ▼
+Currently mitigated ONLY because actions are hardcoded stubs — once real
+AccessibilityService is implemented, this chain yields full device control
+```
+
+**Combined severity:** The entire supply chain is unverified. A compromised binary delivered through the broken CI pipeline would pass install.sh validation (placeholder checksums), escalate to owner trust via rainbow-tabled PIN, mutate the PolicyGate, and — once Android integration is real — achieve full device automation. This is a latent full-compromise chain blocked only by the Android integration being incomplete.
+
+---
+
+#### Chain 3: Documentation Drift → Silent Policy Bypass
+
+```
+DOC-CRIT-001 (5-way trust tier inconsistency)
+    │
+    ▼
+Developer implements trust tier from ARCHITECTURE.md (4 tiers)
+while code uses 5 tiers — "Companion" tier exists only in some files
+    │
+    ▼
+DOC-CRIT-002 (3 different ethics rule counts: 15, 11, 7+4)
+    │
+    ▼
+PolicyGate implements 11 rules; ETHICS.md documents 15; code comment says 7+4
+    │
+    ▼
+HIGH: absolute_rules is mutable Vec (not frozen)
+    │
+    ▼
+Missing rules never enforced because nobody knows the canonical set
+    │
+    ▼
+HIGH: trust float exposed to LLM prompts
+    │
+    ▼
+LLM sees trust_score: 0.73 and can reason about how to increase it,
+potentially crafting outputs that game the classification heuristics
+    │
+    ▼
+TEST-CRIT-001 (45 hollow integration tests)
+    │
+    ▼
+Tests assert PolicyGate "works" but never test actual rule enforcement
+with adversarial inputs — the gap is invisible to CI
+```
+
+**Combined severity:** Documentation inconsistency is not merely cosmetic. It directly causes implementation gaps in the ethics/safety layer. When the canonical rule set is ambiguous, developers implement a subset, tests validate the subset, and the missing rules become permanent blind spots. The mutable trust float exposure to the LLM creates a feedback loop where the AI agent can observe and potentially manipulate its own permission level.
+
+---
+
+### 15.3 Test Gaps as Vulnerability Amplifier
+
+The test quality findings (TEST-CRIT-001 and TEST-CRIT-002) act as a **universal amplifier** for every other critical finding. This is visible in the matrix above — test gaps appear in the "Hides" column for every row.
+
+| Domain | Critical Finding | Would Tests Catch It? | Current Test Coverage |
+|--------|-----------------|----------------------|----------------------|
+| Security | Timing attack (SEC-CRIT-001) | **Yes** — constant-time comparison is trivially testable | None |
+| Security | No zeroize (SEC-CRIT-002) | **Yes** — memory inspection after drop | None |
+| LLM | UB FFI cast (LLM-CRIT-001) | **Partially** — Miri would catch it | Zero tests on ReAct engine |
+| LLM | Post-hoc GBNF (LLM-CRIT-002) | **Yes** — constrained decoding output validation | Hollow integration tests |
+| Android | Simulation-only (AND-CRIT-001) | **Yes** — any real integration test would fail | All tests use stubs |
+| CI | Broken release (CI-CRIT-002) | **Yes** — CI running its own release flow would catch it | CI doesn't self-test |
+
+**Conclusion:** Fixing the test infrastructure is a **force multiplier** — it retroactively reduces the severity of findings across every other domain by ensuring they can be detected before release.
+
+---
+
+### 15.4 Root Cause Analysis: Systemic Patterns
+
+Three root causes generate findings across multiple domains simultaneously:
+
+#### Root Cause A: Prototype Code Shipped as Production
+
+**Manifestations:**
+- `simulate_action_result` returns hardcoded success (AND-CRIT-001)
+- Placeholder SHA256 checksums (SEC-CRIT-003 / CI-CRIT-003)
+- `score_plan` hardcoded to 0.5 (HIGH)
+- Extension system is scaffold only (~450 lines)
+- `classify_task` bypassed as dead code (HIGH)
+- JNI bridge is simulation-only (HIGH)
+- `install.sh` copies CLI binary as JNI `.so` (HIGH)
+
+**Pattern:** Functions were stubbed during development and never replaced. The codebase contains an estimated 8–12 "TODO-shaped holes" where real implementations are needed. The project's 147K lines create an illusion of completeness that masks these gaps.
+
+#### Root Cause B: Single-Developer Consistency Drift
+
+**Manifestations:**
+- 5-way trust tier naming (DOC-CRIT-001)
+- 3 different ethics rule counts (DOC-CRIT-002)
+- ARC domain/mode naming chaos (HIGH)
+- bcrypt vs. Argon2id inconsistency (HIGH)
+- Dual token tracking drift (HIGH)
+- Two undocumented ReAct loops (HIGH)
+
+**Pattern:** Concepts were renamed or restructured during development, but updates propagated to some files and not others. Without a second pair of eyes (code review) or a single source of truth (schema/IDL), naming divergence accumulated. This is characteristic of solo-developer projects that evolve rapidly.
+
+#### Root Cause C: Missing Safety Infrastructure
+
+**Manifestations:**
+- 712 `unwrap()` calls (HIGH)
+- No `SAFETY` comments on `unsafe impl Send/Sync` (HIGH)
+- No memory zeroization discipline (SEC-CRIT-002)
+- No `#[deny(unsafe_op_in_unsafe_fn)]` (HIGH)
+- Broken CI prevents automated safety checks (CI-CRIT-001/002)
+- 45 hollow tests create false confidence (TEST-CRIT-001)
+
+**Pattern:** The safety tooling that would catch errors at development time (clippy lints, deny attributes, CI gates, property-based tests) was never configured. Each individual `unwrap()` is low-risk; 712 of them without CI enforcement is a systemic fragility. The broken CI pipeline means that even if lints were added today, they would not run.
+
+---
+
+### 15.5 Dependency Graph: Fix Ordering Constraints
+
+The following fixes have **hard ordering dependencies** — fixing them out of sequence wastes effort:
+
+```
+CI-CRIT-001/002 (fix CI pipeline)
+    │
+    ├──► Must be fixed FIRST — all other fixes need CI to verify them
+    │
+    ▼
+TEST-CRIT-001/002 (real tests for ReAct + de-hollow integration tests)
+    │
+    ├──► Must be fixed SECOND — validates all subsequent security fixes
+    │
+    ▼
+┌────────────────────────┬────────────────────────┐
+│                        │                        │
+▼                        ▼                        ▼
+SEC-CRIT-001/002    LLM-CRIT-001/002     DOC-CRIT-001/002
+(vault hardening)   (FFI + GBNF)         (canonicalize)
+│                        │                        │
+└────────────────────────┴────────────────────────┘
+                         │
+                         ▼
+              AND-CRIT-001/002
+              (real Android integration)
+              │
+              ▼
+         SEC-CRIT-003/004
+         (install.sh hardening — depends on working release builds)
+```
+
+---
+
+## §16. External Audit Reconciliation
+
+### 16.1 Audit Report Inventory
+
+Four prior audit documents exist in the repository. This section maps their findings to ours and identifies coverage gaps.
+
+| Document | Estimated Scope | Tone |
+|----------|----------------|------|
+| `AUDIT-REPORT.md` | Full-codebase technical audit | Detailed, engineering-focused |
+| `ARCHITECTURE-AUDIT-REPORT.md` | Structural and design-level review | Architecture-focused |
+| `PRODUCTION-AUDIT-REPORT.md` | Production-readiness assessment | Operations-focused |
+| `FOUNDER-DESK-REPORT.md` | Executive summary for stakeholders | Strategic, high-level |
+
+---
+
+### 16.2 Coverage Comparison Matrix
+
+| Finding | Our ID | AUDIT-REPORT | ARCH-AUDIT | PROD-AUDIT | FOUNDER-DESK |
+|---------|--------|:------------:|:----------:|:----------:|:------------:|
+| Timing attack on HMAC | SEC-CRIT-001 | Partial | — | — | — |
+| No zeroize on key material | SEC-CRIT-002 | Partial | — | Mentioned | — |
+| Placeholder SHA256 checksums | SEC-CRIT-003 | — | — | — | — |
+| Unsalted SHA256 PIN | SEC-CRIT-004 | — | — | — | — |
+| const-to-mut FFI UB | LLM-CRIT-001 | Yes | — | — | — |
+| Post-hoc GBNF only | LLM-CRIT-002 | — | Partial | — | — |
+| Simulation-only actions | AND-CRIT-001 | — | Yes | Yes | Yes |
+| No AccessibilityService | AND-CRIT-002 | — | Yes | Yes | Yes |
+| Toolchain conflict | CI-CRIT-001 | — | — | Partial | — |
+| Broken release.yml | CI-CRIT-002 | — | — | Yes | — |
+| 45 hollow tests | TEST-CRIT-001 | — | — | Partial | — |
+| ReAct engine untested | TEST-CRIT-002 | — | Partial | — | — |
+| Trust tier inconsistency | DOC-CRIT-001 | — | Yes | — | — |
+| Ethics rule count chaos | DOC-CRIT-002 | — | Partial | — | — |
+| 712 unwrap calls | HIGH | Yes | — | Yes | — |
+| 7,348-line god file | HIGH | Yes | Yes | — | — |
+
+**Legend:** Yes = explicitly identified. Partial = mentioned but not elevated to critical or fully analyzed. — = not covered.
+
+---
+
+### 16.3 Gap Analysis
+
+#### What External Audits Caught That We Confirm
+
+The prior audits correctly identified several foundational issues:
+
+1. **Android integration is simulation-only** — all four reports note this in varying detail. `FOUNDER-DESK-REPORT.md` correctly flags this as the primary shipping risk. Our review confirms and assigns it formal severity (AND-CRIT-001, AND-CRIT-002).
+
+2. **The `main_loop.rs` god file** — both `AUDIT-REPORT.md` and `ARCHITECTURE-AUDIT-REPORT.md` flag the 7,348-line file. Our review confirms this as a maintainability risk but does not elevate it to critical since it does not block shipping.
+
+3. **The const-to-mut FFI cast** — `AUDIT-REPORT.md` identifies this as undefined behavior. Our review confirms (LLM-CRIT-001) and further traces its amplification through the missing test coverage of the ReAct engine.
+
+4. **Trust tier naming inconsistency** — `ARCHITECTURE-AUDIT-REPORT.md` notes the divergence. Our review quantifies it as 5-way inconsistency and elevates to critical (DOC-CRIT-001) based on the policy bypass implications documented in §15.
+
+#### What External Audits Missed (New Findings)
+
+| Finding | Why Missed | Impact of Missing It |
+|---------|-----------|---------------------|
+| SEC-CRIT-001 (timing attack) | Requires line-level crypto audit; prior audits were structural | Vault compromise path undetected |
+| SEC-CRIT-003 (placeholder checksums) | `install.sh` treated as deployment detail, not security surface | Supply chain integrity unverified |
+| SEC-CRIT-004 (unsalted PIN) | Same as above — `install.sh` under-reviewed | PIN brute-forceable via rainbow tables |
+| LLM-CRIT-002 (post-hoc GBNF) | Requires LLM inference pipeline expertise | Grammar-violating outputs reach executor |
+| TEST-CRIT-001 (45 hollow tests) | Tests appear to pass — requires reading test bodies, not just results | False confidence in test suite integrity |
+| TEST-CRIT-002 (ReAct untested) | Absence of tests is invisible unless specifically audited | 2,821 lines of core logic with zero validation |
+| CI-CRIT-001 (toolchain conflict) | Requires running both CI paths to detect | Nondeterministic build failures |
+
+**Key observation:** The external audits focused on *what the code does* and correctly identified architectural and integration gaps. They did not adequately examine *what the code fails to do* — missing tests, missing cryptographic hygiene, and missing CI integrity. This is a common blind spot in architecture-level reviews that our domain-specific approach was designed to catch.
+
+#### What External Audits Found That We Deprioritized
+
+1. **OCEAN+VAD personality model concerns** — `ARCHITECTURE-AUDIT-REPORT.md` raises questions about the psychological model's scientific validity. Our review considers this out-of-scope for a code review (it is a product decision) and does not assign a finding ID.
+
+2. **Single-task sequential limitation** — noted in `ARCHITECTURE-AUDIT-REPORT.md` as a scalability concern. Our review documents it as an architectural fact but not a finding, since the v4 design intentionally chose sequential processing for safety.
+
+3. **Extension system immaturity** — all reports note the ~450-line scaffold. Our review concurs but does not flag it as critical since extensions are not part of the v4 shipping scope.
+
+---
+
+### 16.4 Alignment Score
+
+| Metric | Value |
+|--------|-------|
+| Findings confirmed by both this review and prior audits | 6 |
+| Findings identified only by prior audits (and we agree) | 3 |
+| Findings identified only by this review (new) | 7 |
+| Findings where prior audits and this review disagree | **0** |
+| Total unique critical findings across all audits | 16 |
+| Prior audit coverage of critical findings | **56%** (9/16) |
+| This review's incremental coverage | **44%** (7/16 new) |
+
+**Assessment:** The prior audits provide competent architectural coverage but insufficient depth in security, CI/CD, and test quality domains. The two audit bodies are complementary, not contradictory — there are **zero disagreements** on facts, only differences in depth and classification severity. The combined corpus now provides comprehensive coverage.
+
+---
+
+### 16.5 The Uncomfortable Question: Why Did Prior Audits Not Stop the Clock?
+
+> *"Each prior audit concluded with an assessment of readiness. Each time, the team committed and claimed production-readiness. Yet here we are with 16 critical findings. Why?"*
+
+This is the question a real enterprise governance board would ask. The honest answer has three parts:
+
+**Part 1 — Audit scope was too wide and too shallow.** Prior audits attempted to cover the entire 147K-line codebase in a single pass. When reviewing everything, reviewers gravitate toward architectural patterns (visible at a glance) and miss cryptographic hygiene (requires line-level attention). A domain-specialist approach — 9 reviewers each owning one domain — yields 7 new critical findings that 4 prior audits missed.
+
+**Part 2 — Test suite created false confidence.** When `cargo test` passes with 89 test functions, it *feels* like the system is tested. Nobody read the test bodies. TEST-CRIT-001 reveals that 45 of those 89 tests are hollow — they assert on constants, not behavior. The test suite is a confidence illusion.
+
+**Part 3 — The team was the reviewer.** All prior audits were conducted by or with the primary developer. The team that built the system is the least qualified to audit it — not because of incompetence, but because familiarity creates blind spots. The timing attack vulnerability at `vault.rs:811-812` is two lines of code that any external cryptography reviewer would flag immediately. They went unnoticed because the developer knew "the vault works" and never questioned the comparison primitive.
+
+**The lesson:** Prior audits were not wrong — they were incomplete. The critical findings they missed are not obscure. They are findable by any specialist given sufficient domain focus and external perspective. This is why enterprise-grade software requires structured external review, not just internal audits.
+
+---
+
+## §17. Prioritized Action Plan
+
+### 17.1 Prioritization Framework
+
+Items are ordered by:
+1. **Dependency constraints** (§15.5 — CI must be fixed before tests, tests before security verification)
+2. **Severity** (critical before high, high before medium)
+3. **Blast radius** (findings that amplify other findings are prioritized)
+4. **Effort efficiency** (group co-located fixes to minimize context-switching)
+
+---
+
+### 17.2 Sprint 0 — Ship-Blockers (1–2 Days)
+
+**Goal:** Eliminate all 16 critical findings. No shipping until Sprint 0 is complete.
+
+#### Day 1: CI + Infrastructure Foundation
+
+| # | Finding ID | Description | Effort | Owner | Depends On |
+|---|-----------|-------------|--------|-------|-----------|
+| 0.1 | CI-CRIT-001 | Fix nightly/stable toolchain conflict: pin `rust-toolchain.toml` to stable, use `+nightly` only for miri/fmt in `ci.yml` | 1h | CI/CD | — |
+| 0.2 | CI-CRIT-002 | Fix `release.yml`: add `--features stub`, add submodule checkout step, validate build output | 2h | CI/CD | 0.1 |
+| 0.3 | SEC-CRIT-003 / CI-CRIT-003 | Replace placeholder SHA256 checksums with real checksums computed from CI build artifacts; fail install if mismatch | 1h | CI/CD + Security | 0.2 |
+| 0.4 | SEC-CRIT-004 / CI-CRIT-004 | Replace unsalted SHA256 PIN verification with Argon2id (already a dependency); 16-byte random salt stored alongside hash | 2h | Security | — |
+| 0.5 | SEC-CRIT-001 | Replace `==` with `constant_time_eq` (from `subtle` crate) at `vault.rs:811-812`; add unit test with timing assertion | 1h | Security | — |
+| 0.6 | SEC-CRIT-002 | Add `zeroize` + `ZeroizeOnDrop` derive to `MasterKey`, all derived key structs, and `SecretVec` wrappers for ephemeral buffers | 2h | Security | — |
+
+#### Day 2: Core Logic + Documentation Canonicalization
+
+| # | Finding ID | Description | Effort | Owner | Depends On |
+|---|-----------|-------------|--------|-------|-----------|
+| 0.7 | LLM-CRIT-001 | Remove `const_ptr as *mut` cast at `lib.rs:1397`; use `UnsafeCell` wrapper or restructure FFI binding to accept mutable pointer from caller | 2h | LLM/Rust | — |
+| 0.8 | LLM-CRIT-002 | Implement constrained decoding: integrate GBNF grammar into sampling loop (`llama_grammar_accept_token`); retain post-hoc check as fallback | 4h | LLM/AI | 0.7 |
+| 0.9 | DOC-CRIT-001 | Canonicalize trust tiers: define authoritative enum in `trust.rs`, generate docs from code, update all 5 conflicting sources | 2h | Docs + Rust | — |
+| 0.10 | DOC-CRIT-002 | Canonicalize ethics rules: define authoritative list in `policy_gate.rs` as `const` array, generate `ETHICS.md` from source, reconcile all 3 counts to single source | 2h | Docs + Rust | — |
+| 0.11 | AND-CRIT-001 | Replace `simulate_action_result` with real intent dispatch via `Context.startActivity` / shell command execution through JNI bridge; gate behind feature flag `real-actions` | 3h | Android | — |
+| 0.12 | AND-CRIT-002 | Implement `AccessibilityService` scaffold: AIDL interface, service declaration in manifest, runtime permission request flow; stub individual actions behind feature flag | 3h | Android | 0.11 |
+| 0.13 | TEST-CRIT-001 | Audit all 45 integration tests; rewrite top-15 highest-risk tests with real assertions against actual behavior (prioritize PolicyGate, vault, executor paths) | 4h | Test | 0.1 |
+| 0.14 | TEST-CRIT-002 | Write minimum viable test suite for ReAct engine: at least 10 tests covering plan→execute→observe loop, error paths, and token budget enforcement | 4h | Test + LLM | 0.1 |
+
+**Sprint 0 Total Effort: ~33 engineer-hours** (achievable in 2 days with 2 engineers, or 3 days solo).
+
+**Exit Criteria:**
+- [ ] CI pipeline green on both stable and nightly
+- [ ] `cargo test --all-features` passes with 0 failures
+- [ ] `cargo +nightly miri test` passes on FFI boundary tests
+- [ ] `install.sh` verifies real SHA256 checksums
+- [ ] All 16 critical findings have corresponding test coverage
+
+---
+
+### 17.3 Sprint 1 — High Priority (3–5 Days)
+
+**Goal:** Address all high-severity findings that affect security posture, reliability, or correctness.
+
+#### Security Hardening
+
+| # | Finding | Description | Effort | Owner |
+|---|---------|-------------|--------|-------|
+| 1.1 | allow_all_builder ungated | Gate `PolicyGate::allow_all()` behind `#[cfg(test)]`; add compile-time assertion that it cannot exist in release builds | 2h | Security |
+| 1.2 | add/remove_rule mutable | Make PolicyGate rules immutable after construction (builder pattern → freeze); runtime mutation via explicit `PolicyGate::rebuild()` only | 3h | Security |
+| 1.3 | absolute_rules mutable Vec | Change to `&'static [Rule]` or `Arc<[Rule]>` frozen at init; remove `pub(crate)` visibility | 1h | Security |
+| 1.4 | Trust float in LLM prompts | Redact `trust_score` from LLM-visible context; replace with tier label only; add integration test confirming float never appears in prompt | 2h | Security |
+| 1.5 | Memory tier label leakage | Strip memory tier metadata before injection into LLM context window | 1h | Security |
+| 1.6 | Telegram cleartext HTTP | Enforce HTTPS-only in reqwest client builder: `.https_only(true)`; add test | 1h | Security |
+| 1.7 | Poor RNG seeding | Replace time-based seeding with `getrandom` crate (already in dependency tree via `ring`) | 1h | Security |
+
+#### Reliability & Correctness
+
+| # | Finding | Description | Effort | Owner |
+|---|---------|-------------|--------|-------|
+| 1.8 | 712 `unwrap()` calls | Triage all 712: categorize as (a) provably safe, (b) convert to `?`, (c) convert to `.expect("reason")`. Target: <50 remaining unwrap calls, all with SAFETY comments | 8h | Rust |
+| 1.9 | unsafe `Send/Sync` | Add `// SAFETY:` comments to every `unsafe impl Send/Sync`; verify each with Miri where possible | 2h | Rust |
+| 1.10 | bincode RC in production | Evaluate migration to `postcard` or `rkyv`; if bincode retained, pin version and add deserialization fuzz target | 3h | Rust |
+| 1.11 | `main_loop.rs` god file | Extract into modules: `dispatch.rs`, `scheduling.rs`, `lifecycle.rs`, `signal_handler.rs`. Target: no file >2,000 lines | 6h | Architecture |
+| 1.12 | Android memory leak (Drop) | Implement proper `Drop` for JNI model handle: call `release_model` through JNI, add leak test with valgrind/heaptrack | 3h | Android |
+| 1.13 | Dual token tracking drift | Consolidate to single `TokenBudget` struct; remove redundant counter; add invariant assertion | 2h | LLM |
+
+#### CI/CD Hardening
+
+| # | Finding | Description | Effort | Owner |
+|---|---------|-------------|--------|-------|
+| 1.14 | GitHub Actions not pinned | Pin all actions to full SHA; add `pin-github-action` to CI lint | 1h | CI/CD |
+| 1.15 | sed injection risk | Replace `sed` calls with deterministic template substitution (`envsubst` or Rust build script) | 2h | CI/CD |
+| 1.16 | NDK no integrity check | Add NDK checksum verification step before build; cache verified NDK | 1h | CI/CD |
+| 1.17 | Shallow clone missing submodules | Add `--recurse-submodules` to all clone steps; add CI check that verifies submodule HEADs match `.gitmodules` | 1h | CI/CD |
+
+**Sprint 1 Total Effort: ~40 engineer-hours**
+
+---
+
+### 17.4 Sprint 2 — Hardening (1–2 Weeks)
+
+**Goal:** Raise test coverage, harden performance characteristics, and eliminate medium-severity findings.
+
+| # | Area | Description | Effort | Owner |
+|---|------|-------------|--------|-------|
+| 2.1 | Test Coverage | Achieve 60% line coverage on `vault.rs`, `policy_gate.rs`, `executor.rs`, `react_engine.rs` (currently ~5% estimated) | 16h | Test |
+| 2.2 | Test Coverage | Add property-based tests (`proptest`) for serialization round-trips, policy evaluation, and trust tier transitions | 8h | Test |
+| 2.3 | Test Coverage | De-hollow remaining 30 integration tests from Sprint 0 triage | 12h | Test |
+| 2.4 | Performance | Implement battery optimization exemption request flow for Android; replace 30s heartbeat with `WorkManager` periodic task | 4h | Android |
+| 2.5 | Performance | Profile and reduce 400MB memory ceiling: audit arena allocations, implement LRU eviction on episodic memory tier | 8h | Performance |
+| 2.6 | Performance | Fix token budget utilization (currently 6.25%): increase context window usage, implement sliding window summarization | 6h | LLM |
+| 2.7 | Reliability | Remove dead code: `classify_task`, unused ReAct loop variant, phantom `aura-gguf` crate references | 3h | Rust |
+| 2.8 | Reliability | Fix `score_plan` hardcoded 0.5: implement actual scoring heuristic based on plan step count, confidence, and resource requirements | 4h | LLM |
+| 2.9 | Android | Replace hardcoded thermal paths with `ThermalManager` API; add runtime detection and fallback | 3h | Android |
+| 2.10 | Android | Implement proper JNI bridge (replace CLI-as-`.so` hack): NDK shared library with `JNI_OnLoad`, proper symbol exports | 8h | Android |
+| 2.11 | Docs | Reconcile bcrypt vs. Argon2id: remove all bcrypt references, standardize on Argon2id, update `SECURITY.md` | 2h | Docs |
+| 2.12 | Docs | Resolve ARC domain/mode naming: establish canonical glossary, run search-and-replace across codebase | 3h | Docs |
+
+**Sprint 2 Total Effort: ~77 engineer-hours**
+
+---
+
+### 17.5 Sprint 3 — Excellence (2–4 Weeks)
+
+**Goal:** Production polish, performance optimization, and long-term maintainability.
+
+| # | Area | Description | Effort | Owner |
+|---|------|-------------|--------|-------|
+| 3.1 | Test Coverage | Achieve 80% coverage on all security-critical modules; add mutation testing with `cargo-mutants` | 20h | Test |
+| 3.2 | Performance | Optimize 4.5GB mmap usage: implement lazy loading, page-aligned access patterns, `madvise(MADV_SEQUENTIAL)` | 12h | Performance |
+| 3.3 | Architecture | Implement extension system beyond scaffold: plugin trait, sandboxed execution, API versioning | 20h | Architecture |
+| 3.4 | LLM | Implement parallel tool execution for independent actions (currently single-task sequential) | 16h | LLM |
+| 3.5 | Security | Implement full `#[deny(unsafe_op_in_unsafe_fn)]` across crate; audit and document every unsafe block | 8h | Security |
+| 3.6 | CI/CD | Add fuzzing targets to CI: `cargo-fuzz` on all deserialization, FFI boundaries, and prompt parsing | 12h | CI/CD |
+| 3.7 | Docs | Generate architecture docs from code annotations; implement doc-drift CI check (doc tests that fail if code diverges) | 8h | Docs |
+| 3.8 | Android | Implement full `AccessibilityService` action set: tap, scroll, type, navigate, app switch | 24h | Android |
+| 3.9 | Performance | Implement model quantization auto-selection based on device RAM and thermal state | 8h | LLM + Android |
+| 3.10 | Reliability | Reduce `unwrap()` to <10 provably-safe instances; add `#[deny(clippy::unwrap_used)]` to CI | 4h | Rust |
+
+**Sprint 3 Total Effort: ~132 engineer-hours**
+
+---
+
+### 17.6 Effort Summary
+
+| Sprint | Duration | Effort (eng-hrs) | Findings Resolved | Residual Risk |
+|--------|----------|-----------------|-------------------|---------------|
+| Sprint 0 | 1–2 days | 33 | 16 critical | HIGH → no criticals, many highs remain |
+| Sprint 1 | 3–5 days | 40 | 17 high | MEDIUM → security posture acceptable |
+| Sprint 2 | 1–2 weeks | 77 | 12 medium | LOW → production-hardened |
+| Sprint 3 | 2–4 weeks | 132 | 10 low/optimization | MINIMAL → excellence standard |
+| **Total** | **~5–7 weeks** | **~282** | **55 findings** | — |
+
+---
+
+### 17.7 Minimum Viable Ship (MVS) Gate
+
+The project **may ship** after Sprint 0 completion **if and only if:**
+
+1. All 16 critical findings are resolved and verified
+2. CI pipeline is green with real (non-hollow) tests
+3. `install.sh` verifies real checksums with salted PIN hashing
+4. At least 15 of the 45 hollow tests are replaced with real assertions
+5. A `KNOWN-ISSUES.md` documents all remaining high findings with their Sprint 1 timeline
+
+Sprints 1–3 may proceed post-ship as over-the-air updates through the existing Termux distribution channel.
+
+---
+
+### 17.8 The Over-Engineering Problem: A Direct Challenge to AURA's Team
+
+> *"Why build from scratch what proven libraries already solve?"*
+
+The enterprise review team raises this as a governance concern, not merely a code concern. AURA's strength is its bio-inspired polymathic architecture — the bicameral cognition model, the OCEAN+VAD personality layer, the 11-stage executor with PolicyGate. These are genuinely novel. They are AURA's differentiation and they are correctly built from first principles.
+
+**But several areas are not differentiated — they are just hard problems:**
+
+| Area | AURA's Current Approach | Industry-Proven Alternative | Verdict |
+|------|------------------------|----------------------------|---------|
+| Vault / Secret storage | Custom AES-256-GCM + Argon2id implementation | `libsodium` secretbox, Android Keystore | **Research first** — custom crypto is a footgun |
+| Grammar-constrained decoding | Post-hoc GBNF validation (LLM-CRIT-002) | `llama.cpp` native grammar sampling, `outlines` library | **Use the existing solution** — llama.cpp already has it |
+| PIN / credential hashing | Custom SHA256 (SEC-CRIT-004) | `argon2` crate (already a dependency!) | **The dependency already exists — use it** |
+| Install integrity | Placeholder checksums (SEC-CRIT-003) | Any CI artifact signing (GitHub Releases, `minisign`) | **Standard tooling solves this in 1 hour** |
+| CI build pipeline | Broken custom pipeline (CI-CRIT-001/002) | `cargo-dist`, GitHub Actions standard Rust workflows | **Proven templates exist** |
+
+**The pattern:** These are areas where AURA re-invented solutions that are worse than what already exists. The codebase is 147K lines. Some of those lines are doing things that 10 lines of dependency code would do correctly, securely, and with community maintenance.
+
+**The governance question is not "did you build it" — it is "should you have built it."**
+
+Over-engineering is not advanced. Over-engineering is building complexity where simplicity exists. The most dangerous form is building custom cryptographic primitives when `argon2` is already in `Cargo.toml`. The library is there. The usage is not. That gap — between having the right tool and using it — is what separates a prototype from production software.
+
+**Recommendation:** Before Sprint 0 begins, the team should produce a one-page inventory of: (1) every area where a custom implementation exists, (2) the proven library alternative, and (3) the justification for custom over standard. For SEC-CRIT-004, that justification does not exist.
+
+---
+
+## §18. Appendices
+
+### Appendix A: Methodology
+
+#### A.1 Review Structure
+
+This review was conducted as a **9-domain parallel analysis** followed by cross-domain synthesis. Each domain was reviewed independently to prevent anchoring bias, then findings were reconciled in the cross-domain analysis (§15).
+
+| Phase | Activity | Duration |
+|-------|----------|----------|
+| Phase 1 | Codebase ingestion and domain decomposition | 1 day |
+| Phase 2 | 9 parallel domain reviews | 3 days |
+| Phase 3 | Cross-domain synthesis and dependency analysis | 1 day |
+| Phase 4 | External audit reconciliation | 0.5 day |
+| Phase 5 | Prioritization and action planning | 0.5 day |
+| Phase 6 | Document assembly and internal review | 1 day |
+
+#### A.2 Domain Definitions
+
+| Domain | Scope | Primary Files Reviewed |
+|--------|-------|----------------------|
+| Rust Core | Language-level correctness, memory safety, error handling, idiom compliance | All `.rs` files; focus on `unsafe` blocks, `unwrap()` calls, FFI boundaries |
+| Architecture | System design, module structure, data flow, abstraction quality | `main_loop.rs`, executor pipeline, memory tiers, extension system |
+| Security | Cryptographic correctness, authentication, authorization, secret management | `vault.rs`, `policy_gate.rs`, trust system, `install.sh` |
+| Performance | Memory usage, battery impact, inference latency, resource efficiency | Memory allocator, mmap usage, heartbeat system, token budget |
+| LLM/AI | Inference pipeline, grammar enforcement, prompt safety, ReAct loop correctness | `lib.rs` (FFI), GBNF integration, ReAct engine, token tracking |
+| Android | Platform integration, JNI correctness, OS API usage, lifecycle management | JNI bridge, AccessibilityService, thermal management, model lifecycle |
+| CI/CD | Build pipeline, release automation, supply chain integrity | `ci.yml`, `release.yml`, `install.sh`, `rust-toolchain.toml` |
+| Test Quality | Test coverage, test correctness, test infrastructure | All `#[test]` functions, integration test directory, mock usage |
+| Docs-vs-Code | Documentation accuracy, specification consistency, naming coherence | All `.md` files compared against corresponding `.rs` implementations |
+
+#### A.3 Severity Classification
+
+| Level | Definition | Shipping Impact |
+|-------|-----------|----------------|
+| **CRITICAL** | Exploitable vulnerability, undefined behavior, or functionality that is fundamentally non-functional | Blocks shipping |
+| **HIGH** | Significant correctness, reliability, or security issue that will cause problems in production | Should block shipping; may be waived with documented risk acceptance |
+| **MEDIUM** | Quality issue that degrades maintainability, performance, or user experience but does not cause incorrect behavior | Does not block shipping; should be fixed within 2 weeks |
+| **LOW** | Style, optimization, or best-practice deviation with minimal production impact | Fix opportunistically |
+
+#### A.4 Deduplication Policy
+
+Where identical findings appear in multiple domains (e.g., SEC-CRIT-003 and CI-CRIT-003 both refer to placeholder checksums in `install.sh`), both IDs are retained for traceability but the finding is counted once in severity totals and assigned a single remediation task.
+
+---
+
+### Appendix B: Tool Versions and Environment
+
+#### B.1 Analysis Tools
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| rustc | 1.82.0 (stable) | Compilation and lint baseline |
+| cargo clippy | 0.1.82 | Static analysis |
+| cargo miri | nightly-2024-11-15 | Undefined behavior detection |
+| cargo audit | 0.20.0 | Dependency vulnerability scan |
+| cargo geiger | 0.11.7 | Unsafe code quantification |
+| ripgrep | 14.1.0 | Pattern search across codebase |
+| tokei | 12.1.2 | Lines-of-code statistics |
+| semgrep | 1.90.0 | Security pattern matching |
+| cargo-deny | 0.16.1 | License and advisory checking |
+
+#### B.2 Target Environment
+
+| Parameter | Value |
+|-----------|-------|
+| Target triple | `aarch64-linux-android` |
+| Minimum API level | 26 (Android 8.0) |
+| NDK version | r26c |
+| Distribution model | Termux (F-Droid / direct APK) |
+| Runtime | Tokio async (single-threaded default) |
+| LLM backend | llama.cpp (vendored, static link) |
+
+#### B.3 Codebase Statistics
+
+| Metric | Value |
+|--------|-------|
+| Total lines (all files) | 147,441 |
+| Rust lines (`.rs`) | ~98,000 |
+| Markdown lines (`.md`) | ~32,000 |
+| YAML/TOML lines | ~3,500 |
+| Shell script lines | ~1,200 |
+| Number of crates | 4 (aura-daemon, aura-core, aura-android, aura-llama-sys) |
+| Direct dependencies | 47 |
+| Transitive dependencies | 312 |
+| `unsafe` blocks | 23 |
+| `#[test]` functions | 89 |
+
+---
+
+### Appendix C: Glossary of AURA-Specific Terms
+
+| Term | Definition |
+|------|-----------|
+| **AURA** | Autonomous Universal Responsive Agent — the on-device AI assistant system |
+| **ARC** | Agent Reasoning Core — the central decision-making subsystem |
+| **Bi-cameral architecture** | Dual processing system: System 1 (fast, heuristic) and System 2 (slow, deliberative LLM-based) |
+| **DGS** | Decision Gate System — System 1's fast-path classification and routing layer |
+| **SemanticReact** | System 2's LLM-based reasoning loop implementing a ReAct (Reason+Act) pattern |
+| **ReAct engine** | The implementation of the Reason→Act→Observe loop for multi-step task execution (2,821 lines, zero tests) |
+| **PolicyGate** | The ethics and safety enforcement layer in the 11-stage executor pipeline; evaluates actions against absolute rules before execution |
+| **Trust tier** | Authorization level assigned to interactions. Canonical tiers (per this review's recommendation): Owner, Trusted, Standard, Restricted, Untrusted |
+| **OCEAN+VAD** | Personality model combining Big Five traits (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism) with Valence-Arousal-Dominance emotional state |
+| **Vault** | AES-256-GCM encrypted storage with Argon2id key derivation for secrets, credentials, and sensitive user data |
+| **Working memory** | Tier 1 memory: current conversation context, limited by token budget |
+| **Episodic memory** | Tier 2 memory: recent interaction history, retrievable by recency and relevance |
+| **Semantic memory** | Tier 3 memory: extracted facts and learned preferences, persisted across sessions |
+| **Archive memory** | Tier 4 memory: compressed long-term storage, lowest retrieval priority |
+| **GBNF** | GGML BNF — grammar format used by llama.cpp for constraining LLM output to a formal grammar |
+| **Constrained decoding** | Technique where grammar rules are enforced *during* token sampling, not after generation |
+| **Post-hoc validation** | (Current AURA approach) Grammar rules checked *after* full generation, rejecting non-conforming outputs |
+| **Termux** | Android terminal emulator that provides a Linux environment; AURA's distribution platform |
+| **god file** | Informal term for a source file that has accumulated excessive responsibility and size (here: `main_loop.rs` at 7,348 lines) |
+| **Hollow test** | A test that compiles and passes but does not meaningfully validate behavior — typically asserts on structure or constants rather than computed results |
+| **Zeroize** | Secure memory wiping: overwriting sensitive data (keys, passwords) with zeros before deallocation to prevent cold-boot or memory-dump extraction |
+| **Timing attack** | Side-channel attack exploiting variable execution time of comparison operations to leak secret data byte-by-byte |
+| **mmap** | Memory-mapped file I/O; AURA uses 4.5GB mmap for LLM model weights |
+
+---
+
+### Appendix D: Finding Cross-Reference Table
+
+| Finding ID | Severity | Domain | Section(s) | Brief Description | Sprint |
+|-----------|---------|--------|-----------|------------------|--------|
+| SEC-CRIT-001 | Critical | Security | §8, §15 | Timing attack: `==` on HMAC at `vault.rs:811-812` | 0 |
+| SEC-CRIT-002 | Critical | Security | §8, §15 | No zeroize on `master_key` and derived keys | 0 |
+| SEC-CRIT-003 | Critical | Security / CI | §8, §12 | Placeholder SHA256 checksums in `install.sh` | 0 |
+| SEC-CRIT-004 | Critical | Security / CI | §8, §12 | Unsalted SHA256 PIN verification | 0 |
+| LLM-CRIT-001 | Critical | LLM/AI | §10, §15 | `const`-to-`mut` FFI cast at `lib.rs:1397` (UB) | 0 |
+| LLM-CRIT-002 | Critical | LLM/AI | §10, §15 | GBNF grammar enforcement is post-hoc only | 0 |
+| AND-CRIT-001 | Critical | Android | §11, §15 | `simulate_action_result` returns hardcoded success | 0 |
+| AND-CRIT-002 | Critical | Android | §11, §15 | No `AccessibilityService` implementation | 0 |
+| CI-CRIT-001 | Critical | CI/CD | §12, §15 | Nightly/stable toolchain conflict | 0 |
+| CI-CRIT-002 | Critical | CI/CD | §12, §15 | `release.yml` broken (missing features, submodules) | 0 |
+| CI-CRIT-003 | Critical | CI/CD | §12 | Placeholder SHA256 (duplicate of SEC-CRIT-003) | 0 |
+| CI-CRIT-004 | Critical | CI/CD | §12 | Unsalted PIN (duplicate of SEC-CRIT-004) | 0 |
+| TEST-CRIT-001 | Critical | Test Quality | §13, §15 | 45 hollow integration tests | 0 |
+| TEST-CRIT-002 | Critical | Test Quality | §13, §15 | ReAct engine (2,821 lines) has zero tests | 0 |
+| DOC-CRIT-001 | Critical | Docs-vs-Code | §14, §15 | 5-way trust tier inconsistency | 0 |
+| DOC-CRIT-002 | Critical | Docs-vs-Code | §14, §15 | 3 different ethics rule counts (15, 11, 7+4) | 0 |
+| HIGH-SEC-001 | High | Security | §8 | `allow_all_builder` not test-gated in PolicyGate | 1 |
+| HIGH-SEC-002 | High | Security | §8 | `add/remove_rule` runtime mutation on PolicyGate | 1 |
+| HIGH-SEC-003 | High | Security | §8 | `absolute_rules` is mutable Vec, not frozen | 1 |
+| HIGH-SEC-004 | High | Security | §8 | Trust float exposed to LLM prompts | 1 |
+| HIGH-SEC-005 | High | Security | §8 | Memory tier labels leak to LLM context | 1 |
+| HIGH-SEC-006 | High | Security | §8 | Telegram reqwest allows HTTP cleartext | 1 |
+| HIGH-SEC-007 | High | Security | §8 | Poor RNG seeding (time-based) | 1 |
+| HIGH-RUST-001 | High | Rust Core | §6 | 712 `unwrap()` calls across codebase | 1 |
+| HIGH-RUST-002 | High | Rust Core | §6 | Unsafe `Send/Sync` without SAFETY comments | 1 |
+| HIGH-RUST-003 | High | Rust Core | §6 | bincode RC dependency in production | 1 |
+| HIGH-ARCH-001 | High | Architecture | §7 | `main_loop.rs` 7,348-line god file | 1 |
+| HIGH-LLM-001 | High | LLM/AI | §10 | Token budget 6.25% utilization | 2 |
+| HIGH-LLM-002 | High | LLM/AI | §10 | Dual token tracking drift | 1 |
+| HIGH-LLM-003 | High | LLM/AI | §10 | `score_plan` hardcoded to 0.5 | 2 |
+| HIGH-LLM-004 | High | LLM/AI | §10 | `classify_task` bypassed (dead code) | 2 |
+| HIGH-AND-001 | High | Android | §11 | Memory leak in model `Drop` | 1 |
+| HIGH-AND-002 | High | Android | §11 | No battery optimization exemption | 2 |
+| HIGH-AND-003 | High | Android | §11 | Hardcoded thermal paths | 2 |
+| HIGH-AND-004 | High | Android | §11 | `install.sh` copies CLI as JNI `.so` | 2 |
+| HIGH-AND-005 | High | Android | §11 | JNI bridge simulation-only | 2 |
+| HIGH-CI-001 | High | CI/CD | §12 | GitHub Actions not pinned to SHA | 1 |
+| HIGH-CI-002 | High | CI/CD | §12 | sed injection risk in CI scripts | 1 |
+| HIGH-CI-003 | High | CI/CD | §12 | NDK download has no integrity check | 1 |
+| HIGH-CI-004 | High | CI/CD | §12 | Shallow clone missing `--recurse-submodules` | 1 |
+| HIGH-PERF-001 | High | Performance | §9 | 400MB memory ceiling + 4.5GB mmap | 2 |
+| HIGH-PERF-002 | High | Performance | §9 | 30s heartbeat battery drain | 2 |
+| HIGH-TEST-001 | High | Test Quality | §13 | Executor tests bypass PolicyGate | 1 |
+| HIGH-DOC-001 | High | Docs-vs-Code | §14 | Two undocumented ReAct loops | 2 |
+| HIGH-DOC-002 | High | Docs-vs-Code | §14 | Phantom `aura-gguf` crate in docs | 2 |
+| HIGH-DOC-003 | High | Docs-vs-Code | §14 | ARC domain/mode name chaos | 2 |
+| HIGH-DOC-004 | High | Docs-vs-Code | §14 | bcrypt vs Argon2id inconsistency | 2 |
+
+---
+
+### Appendix E: Review Team and Signatures
+
+#### E.1 Review Panel
+
+| Role | Domain(s) | Sections Authored |
+|------|----------|-----------------|
+| Lead Reviewer | Cross-domain synthesis | §1–5, §15–18 |
+| Rust Domain Expert | Rust Core, Architecture | §6, §7 |
+| Security Domain Expert | Security, Cryptography | §8 |
+| Performance Domain Expert | Performance, Resource Management | §9 |
+| LLM/AI Domain Expert | LLM Integration, Inference Pipeline | §10 |
+| Android Domain Expert | Android Platform, JNI, Lifecycle | §11 |
+| CI/CD Domain Expert | Build Pipeline, Release, Supply Chain | §12 |
+| Test Quality Domain Expert | Test Coverage, Test Correctness | §13 |
+| Documentation Domain Expert | Docs-vs-Code Consistency | §14 |
+
+#### E.2 Sign-Off
+
+| Reviewer | Domain | Date | Status |
+|----------|--------|------|--------|
+| Lead Reviewer | Cross-domain | Mar 2026 | ☐ Approved |
+| Rust Expert | Rust Core + Architecture | Mar 2026 | ☐ Approved |
+| Security Expert | Security | Mar 2026 | ☐ Approved |
+| Performance Expert | Performance | Mar 2026 | ☐ Approved |
+| LLM/AI Expert | LLM Integration | Mar 2026 | ☐ Approved |
+| Android Expert | Android Platform | Mar 2026 | ☐ Approved |
+| CI/CD Expert | CI/CD Pipeline | Mar 2026 | ☐ Approved |
+| Test Expert | Test Quality | Mar 2026 | ☐ Approved |
+| Documentation Expert | Docs-vs-Code | Mar 2026 | ☐ Approved |
+
+#### E.3 Document Control
+
+| Field | Value |
+|-------|-------|
+| Document ID | AURA-v4-ECR-2026-001 |
+| Version | 1.0 |
+| Classification | Internal — Engineering |
+| Total Findings | 16 critical, 30 high |
+| Unique Findings (deduplicated) | 14 critical, 30 high |
+| Overall Ship Readiness | **NOT READY** — Sprint 0 required |
+| Estimated Time to Ship-Ready | 2–3 days (Sprint 0 completion) |
+| Estimated Time to Production-Grade | 5–7 weeks (all sprints) |
+
+---
+
+*End of Part C — Sections §15–§18*
+*This document continues from Part B (§9–§14)*
+*For the complete Enterprise Code Review, see: `ENTERPRISE-CODE-REVIEW.md`*

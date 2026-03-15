@@ -1,0 +1,305 @@
+You are an **Android/Mobile Platform Specialist** conducting an enterprise-grade review of AURA v4's Android integration — an on-device AI assistant that runs as a Rust daemon loaded via JNI in an Android app, distributed via Termux.
+
+## Your Mission
+READ-ONLY deep review of the Android/mobile layer. Do NOT modify any files.
+
+## Codebase Location
+`C:\Users\Lenovo\aura-v3\aura-v4\`
+
+## Android-Critical Files
+- `android/app/src/main/kotlin/dev/aura/v4/AuraDaemonBridge.kt` — 512-line JNI bridge — READ FULLY
+- `android/app/src/main/kotlin/dev/aura/v4/AuraApplication.kt` — Application class
+- `android/app/src/main/kotlin/dev/aura/v4/AuraForegroundService.kt` — foreground service
+- `android/app/src/main/kotlin/dev/aura/v4/BootReceiver.kt` — boot receiver
+- `android/app/src/main/AndroidManifest.xml` — permissions & components
+- `android/app/build.gradle.kts` — app build config
+- `android/build.gradle.kts` — project build config
+- `android/settings.gradle.kts` — settings
+- `crates/aura-daemon/src/health/monitor.rs` — heartbeat loop, sysfs readers, thermal/battery management
+- `crates/aura-daemon/src/platform/` — connectivity, thermal platform abstractions
+- `crates/aura-daemon/src/bridge/system_api.rs` — system API bridge
+- `.cargo/config.toml` — aarch64-linux-android linker config
+- `install.sh` — Termux installation script (989 lines)
+
+## Architecture Claims to Verify
+1. **JNI model**: Rust daemon runs as `libaura_daemon.so` loaded in-process via `AuraDaemonBridge.nativeInit/nativeRun/nativeShutdown`
+2. **Target**: aarch64-linux-android (ARM64 only)
+3. **Foreground service**: Persistent notification, keeps daemon alive
+4. **Boot receiver**: Auto-start on boot
+5. **Heartbeat loop**: 30s interval, reads /proc/self/status, /sys/class/power_supply, thermal zones
+6. **Battery thresholds**: 5% critical, 20% low
+7. **Thermal threshold**: 85°C
+8. **Memory thresholds**: 400MB working, 300MB warning
+9. **Distribution**: Termux-based `git clone` + `bash install.sh`
+
+## Review Criteria
+1. **JNI bridge correctness**: Is the Kotlin↔Rust JNI bridge safe? Memory management? Thread safety? Can it crash the app?
+2. **Foreground service**: Does it properly handle lifecycle? Notification channel? Android 14+ requirements?
+3. **Battery management**: Is the heartbeat polling frequency appropriate? Wake locks? Doze mode compatibility?
+4. **Thermal management**: Are sysfs paths correct for common Android devices? Fallback paths?
+5. **Permissions**: Are all required permissions declared in AndroidManifest? Any excessive permissions?
+6. **Android lifecycle**: What happens on activity destroy? Configuration change? Process death?
+7. **Termux install**: Is install.sh robust? Does it handle Termux quirks (proot, limited PATH, etc.)?
+8. **NDK compatibility**: Is the .cargo/config.toml correct for NDK cross-compilation?
+9. **APK size**: With libaura_daemon.so + llama.cpp + model, what's the total install size?
+10. **Android version compatibility**: What minimum API level? Are deprecated APIs used?
+
+## Output Format
+Return a structured report with:
+- **Summary**: Overall Android integration quality (2-3 sentences)
+- **JNI Bridge Assessment**: Safety, correctness, thread handling
+- **Lifecycle Assessment**: Service/activity lifecycle handling
+- **Platform Compatibility**: Device/OS coverage
+- **Findings**: Each with file:line, severity, description
+- **Install Script Assessment**: Termux deployment robustness
+- **Top 5 Recommendations**
+
+Read the actual Kotlin files and install.sh fully. Be HONEST about what works vs what's problematic.
+
+Goal
+Conduct a READ-ONLY enterprise-grade review of AURA v4's Android/mobile integration layer. The system is an on-device AI assistant running as a Rust daemon loaded via JNI in an Android app, distributed via Termux. The user wants a structured report covering JNI bridge correctness, foreground service lifecycle, battery/thermal management, permissions, Termux install robustness, NDK compatibility, and top recommendations.
+Instructions
+- DO NOT modify any files — this is a read-only audit
+- Read all Android-critical files fully (Kotlin, Manifest, Gradle, Rust platform code, install.sh)
+- Verify 9 specific architecture claims (JNI model, target arch, foreground service, boot receiver, heartbeat loop intervals/thresholds, distribution method)
+- Evaluate against 10 review criteria (JNI safety, foreground service lifecycle, battery management, thermal management, permissions, Android lifecycle, Termux install, NDK config, APK size, Android version compatibility)
+- Output a structured report with: Summary, JNI Bridge Assessment, Lifecycle Assessment, Platform Compatibility, Findings (with file:line, severity, description), Install Script Assessment, Top 5 Recommendations
+- Be HONEST about what works vs what's problematic
+Discoveries
+Kotlin Side Findings (all 5 files read ✅)
+AuraDaemonBridge.kt (512 lines):
+- Uses System.loadLibrary("aura_daemon") in init block
+- nativeInit(configJson: String): Long, nativeRun(statePtr: Long), nativeShutdown() — external JNI functions
+- WeakReference for AccessibilityService (good for leak prevention)
+- @Volatile on shared sensor state — but no synchronization on compound reads (race conditions possible)
+- WakeLock management has race condition: releaseWakelock() + managedWakeLock access not synchronized
+- getThermalStatus() uses ACTION_BATTERY_CHANGED intent as thermal proxy (not actual PowerManager thermal API)
+- getWifiRssi() uses deprecated WifiManager.connectionInfo API
+- Sensor listeners registered with SENSOR_DELAY_NORMAL — never unregistered (leak)
+AuraApplication.kt (99 lines):
+- Creates notification channels (aura_foreground IMPORTANCE_LOW, aura_status IMPORTANCE_DEFAULT)
+- Stores appContext as @Volatile Application? — potential memory concern (though Application lifecycle matches process)
+- StrictMode enabled in debug builds
+AuraForegroundService.kt (171 lines):
+- Starts foreground notification in onCreate (correct)
+- Spawns daemon thread calling nativeInit → nativeRun (blocking)
+- Returns START_STICKY — good for OEM kill recovery
+- WakeLock with 10-minute timeout — NOT renewed, so it expires while daemon runs
+- onDestroy: calls nativeShutdown(), joins thread with 5s timeout, then interrupts — but Rust native code won't respond to Java thread interrupt
+- Uses Notification.Builder not NotificationCompat.Builder in one place
+- Missing: Android 14 (API 34) requires FOREGROUND_SERVICE_SPECIAL_USE type specification — manifest has it but startForeground() call doesn't pass the type on API 34+
+BootReceiver.kt (38 lines):
+- Handles BOOT_COMPLETED and QUICKBOOT_POWERON
+- Uses startForegroundService() on O+ — correct
+- Missing: Android 12+ background start restrictions may block this on some OEMs
+- directBootAware="true" in manifest but no LOCKED_BOOT_COMPLETED handling
+AuraAccessibilityService.kt (605 lines):
+- Custom bincode serialization matching Rust's Vec<RawA11yNode> — impressive but fragile
+- BFS tree flattening with maxDepth=30, maxNodes=5000 bounds
+- Gesture dispatch (tap, swipe, long press) via GestureDescription
+- waitForElement uses Thread.sleep(500) polling — blocks calling thread
+- Node recycling bug: findNodeByContentDesc recurses but only recycles child if NOT found, leaking found nodes
+- Child index calculation bug (line ~270): val childIndex = out.size + queue.size — fragile prediction of future index
+Android Config Findings (all read ✅)
+AndroidManifest.xml (59 lines):
+- Permissions: INTERNET, FOREGROUND_SERVICE, FOREGROUND_SERVICE_SPECIAL_USE, RECEIVE_BOOT_COMPLETED, POST_NOTIFICATIONS, SYSTEM_ALERT_WINDOW, WAKE_LOCK, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+- extractNativeLibs="true" — correct for JNI .so loading
+- tools:targetApi="34"
+- Missing: ACCESS_NETWORK_STATE permission (used by ConnectivityManager in bridge), ACCESS_WIFI_STATE (used by WifiManager)
+- BootReceiver is exported="true" (required for system broadcasts) — correct
+- No main Activity declared — no launcher entry point
+build.gradle.kts (app, 52 lines):
+- minSdk=26, targetSdk=34, compileSdk=34
+- ABIs: arm64-v8a, armeabi-v7a, x86_64 — contradicts claim of ARM64 only
+- isMinifyEnabled = false — correct for native JNI glue
+- JniLibs source: src/main/jniLibs
+- Only dependency: androidx.core:core-ktx:1.12.0
+build.gradle.kts (project, 5 lines): AGP 8.2.2, Kotlin 1.9.22
+Rust JNI Bridge Findings (jni_bridge.rs — 1627 lines, FULLY READ ✅)
+- JNI_OnLoad: Caches JavaVM in OnceLock<JavaVM>, verifies bridge class at load time — excellent fail-fast behavior
+- jni_env(): Uses attach_current_thread_permanently — idempotent, correct for tokio worker threads
+- BRIDGE_CLASS: Cached as OnceLock<GlobalRef> — correct lifecycle
+- nativeInit: Parses config JSON, falls back to defaults on parse failure, returns Box::into_raw(Box::new(state)) as jlong — standard JNI pattern
+- nativeRun: Creates tokio::runtime::Builder::new_current_thread() and calls block_on — creates a single-threaded async runtime per call, which is fine for the daemon's blocking JNI thread
+- nativeShutdown: Sets a cancel flag but the implementation body is essentially empty — just logs. Relies on DaemonState's static cancel flag checked each tick
+- Rust→Kotlin calls: ~30 helper functions (performTap, getScreenTree, getBatteryLevel, etc.) — all properly wrapped with error handling, PlatformError::JniFailed on failure
+- Desktop stubs: Every function has a #[cfg(not(target_os = "android"))] stub returning mock values — excellent for testing
+- Byte array handling: jni_get_screen_tree, jni_query_calendar, jni_query_contacts, jni_query_notifications all use get_byte_array_region with i8→u8 conversion — correct
+- JNI signature strings: All match the Kotlin @JvmStatic method signatures — verified manually
+- Missing concern: No JNI exception checking after calls — if a Kotlin method throws, the next JNI call will fail with a pending exception
+Rust Platform Layer Findings (ALL files read ✅)
+mod.rs (503 lines):
+- PlatformState aggregates: PowerManager, ThermalManager, DozeManager, NotificationManager, SensorManager, ConnectivityManager
+- tick() polls all subsystems in order: battery → thermal → doze → emergency check → sensors → connectivity
+- combined_throttle() multiplies: thermal × power × network × tier_modifier — 4-factor throttle
+- select_model_tier() cascades: energy-based selection + thermal headroom override + battery tier restriction
+- Good test coverage with 12 unit tests
+power.rs (1255 lines):
+- Physics-based energy model: 5000mAh × 3.85V × 0.85η = 16362.5 mWh total, 5% daily share = 818 mWh
+- 5-tier degradation: Charging (>80%), Normal (40-80%), Conserve (20-40%), Critical (10-20%), Emergency (<10%)
+- 3% hysteresis bands on all tier boundaries — prevents oscillation
+- 30-second minimum dwell time between transitions
+- EnergyTracker with real mWh/mJ accounting, daily budget reset
+- Model tier cascade: >40% energy → 8B, 15-40% → 4B, <15% → 1.5B (never refuses)
+- Hourly inference call budget per tier (Charging: 120, Normal: 60, Conserve: 20, Critical: 5, Emergency: 0)
+thermal.rs (1300 lines):
+- ISO 13732-1 based thresholds: Cool <37°C, Warm 37-40°C, Hot 40-43°C, Critical >43°C
+- NOTE: These thresholds differ from monitor.rs which uses 45/55/65/75°C — the monitor.rs reads sysfs (junction/zone temp) while thermal.rs targets skin temperature. This is actually correct (different measurement points)
+- PID controller for smooth throttling (Kp=0.15, Ki=0.005, Kd=0.5)
+- Multi-zone model: CPU (R=12°C/W, max 95°C), GPU (R=10°C/W, max 90°C), Battery (R=20°C/W, max 45°C), Skin (R=8°C/W, max 43°C)
+- Newton's law of cooling simulation with Euler sub-stepping
+- Junction-to-skin temperature estimation with back-calculation
+- 2°C hysteresis band, 10-second minimum dwell time
+connectivity.rs (654 lines):
+- NetworkType: Wifi/Cellular/Ethernet/None
+- NetworkQuality: Excellent/Good/Fair/Poor/Offline with RSSI-based classification
+- RSSI thresholds: Excellent ≥-55, Good ≥-70, Fair ≥-85, Poor <-85
+- Offline detection with 3-poll hysteresis (OFFLINE_CONFIRM_COUNT)
+- History ring buffer (32 entries)
+- Throttle factor: Excellent=1.0, Good=0.8, Fair=0.5, Poor=0.2, Offline=0.0
+doze.rs (770 lines):
+- DozePhase: Active/LightDoze/DeepDoze/MaintenanceWindow
+- Deferred work queue (max 64 items) with priority sorting for maintenance windows
+- Wakelock management: single wakelock at a time, max 10s duration, auto-release enforcement
+- OEM kill prevention: detects Xiaomi/Samsung/Huawei/OPPO/Vivo/OnePlus/Generic
+- Generates user-facing whitelist guidance with OEM-specific steps and intents
+sensors.rs (520 lines):
+- Accelerometer, light, proximity, step counter via JNI
+- Stationary detection: gravity_deviation < 0.5 m/s² for 4+ consecutive samples
+- Pocket detection: proximity=Near + light=Dark
+- Light classification: Dark <10 lux, Normal 10-500, Bright >500
+notifications.rs (782 lines):
+- 5 channels: ForegroundService (LOW), ProactiveSuggestion (DEFAULT), GoalResult (DEFAULT), HealthReminder (DEFAULT), SystemStatus (HIGH)
+- NotificationPayload with title/body truncation (80/500 chars)
+- History ring (64 entries), auto-incrementing IDs starting at 100
+System API Bridge (system_api.rs — 1327+ lines, read ✅)
+- SystemBridge provides typed commands bypassing A11y: BatteryStatus, StorageInfo, NetworkStatus, MemoryPressure, ThermalState, ContactSearch, CalendarEvents, RecentPhotos, NotificationList, SetAlarm, SendSms, SetBrightness, ToggleWifi, LaunchApp
+- Natural language intent matching via can_handle_intent() — conservative keyword matching
+- Path A (JNI direct) → Path B (Accessibility fallback) pattern with thermal gating (42°C threshold)
+- Many execute methods are still stubs (execute_battery, execute_storage, execute_network, execute_memory, execute_thermal, execute_recent_photos return placeholder values)
+- Action verification for wifi toggle (polls network state after dispatch)
+- Bounded collections throughout (MAX_CONTACTS=100, MAX_CALENDAR_EVENTS=50, etc.)
+- EMA latency tracking for telemetry
+Install Script Findings (install.sh — 1004 lines, read ✅)
+- Well-structured 9-phase installer with dry-run, color output, error handling
+- Pre-flight: arch check (aarch64 only, warns on x86_64), space check (8GB), RAM check (4GB min), network check
+- Packages: build-essential, git, curl, openssl, cmake, ninja, python3, patchelf, termux-services
+- Rust via rustup, source via git clone
+- Model download: qwen3-4b/8b/14b from HuggingFace with resume and retry (3 attempts)
+- SHA256 checksums are all PLACEHOLDER — no integrity verification
+- Build: cargo build --release with half-CPU parallelism, copies binary as libaura_daemon.so to jniLibs
+- Service: termux-services (runit) primary, .bashrc fallback
+- First-time: vault PIN setup using sha256sum (not bcrypt)
+- Missing: no cleanup/uninstall, no version check for updates
+Cargo Config (.cargo/config.toml — read ✅)
+- Only aarch64-linux-android target configured with aarch64-linux-android21-clang linker
+- Missing: armeabi-v7a and x86_64 targets despite being in Gradle abiFilters
+- API level 21 in linker name vs minSdk 26 — works fine (forward compatible) but inconsistent
+Health Monitor (monitor.rs — 1300+ lines, read ✅)
+- 30s default interval, 60s low-power interval (battery < 10%)
+- Battery: sysfs paths /sys/class/power_supply/battery/capacity and /sys/class/power_supply/Battery/capacity
+- Thermal: /sys/class/thermal/thermal_zone0/temp — millidegrees conversion, thresholds: Normal<45, Warm 45-54, Hot 55-64, Critical 65-74, Shutdown ≥75 (these are junction/zone temps, not skin temps — different from thermal.rs which is correct)
+- Memory: VmRSS from /proc/self/status, 300MB warning, 400MB critical
+- ping_neocortex() uses handle.block_on() inside sync context — can deadlock if called from async context
+- query_storage_free() returns u64::MAX — stub, not implemented
+- check_a11y_connected() returns false — stub
+Accomplished
+✅ Fully Complete — All Files Read
+- All 5 Kotlin source files read in full
+- AndroidManifest.xml read
+- Both Gradle build files and settings read
+- .cargo/config.toml read
+- install.sh read in full (1004 lines)
+- monitor.rs read in full (1300+ lines)
+- jni_bridge.rs read in full (1627 lines) ← was previously missing
+- mod.rs read in full (503 lines) ← was previously missing
+- power.rs read in full (1255 lines) ← was previously missing
+- thermal.rs read in full (1300 lines) ← was previously missing
+- connectivity.rs read in full (654 lines) ← was previously missing
+- doze.rs read in full (770 lines) ← was previously missing
+- sensors.rs read in full (520 lines) ← was previously missing
+- notifications.rs read in full (782 lines) ← was previously missing
+- system_api.rs read in full (1327+ lines) ← was previously missing
+⏳ NOT YET DONE — Final Report
+The only remaining task is to synthesize all findings into the structured audit report. All source files have been read and analyzed. The report should follow this structure:
+1. Executive Summary — overall assessment
+2. Architecture Claims Verification — verify the 9 claims
+3. JNI Bridge Assessment — Kotlin↔Rust contract correctness
+4. Foreground Service Lifecycle Assessment
+5. Battery/Power Management Assessment
+6. Thermal Management Assessment
+7. Permissions Assessment
+8. Android Lifecycle Assessment
+9. Findings Table — file:line, severity (Critical/High/Medium/Low), description for each issue
+10. Install Script Assessment
+11. NDK/Build Configuration Assessment
+12. Top 5 Recommendations
+Relevant files / directories
+Kotlin Source (all read ✅)
+- android/app/src/main/java/dev/aura/v4/AuraDaemonBridge.kt — 512-line JNI bridge singleton
+- android/app/src/main/java/dev/aura/v4/AuraApplication.kt — Application class (99 lines)
+- android/app/src/main/java/dev/aura/v4/AuraForegroundService.kt — Foreground service (171 lines)
+- android/app/src/main/java/dev/aura/v4/BootReceiver.kt — Boot receiver (38 lines)
+- android/app/src/main/java/dev/aura/v4/AuraAccessibilityService.kt — Accessibility service (605 lines)
+Android Config (all read ✅)
+- android/app/src/main/AndroidManifest.xml — 59 lines
+- android/app/build.gradle.kts — 52 lines
+- android/build.gradle.kts — 5 lines
+- android/settings.gradle.kts — 17 lines
+Rust Platform Layer (all read ✅)
+- crates/aura-daemon/src/platform/jni_bridge.rs — 1627 lines, Rust↔Kotlin JNI bridge
+- crates/aura-daemon/src/platform/mod.rs — 503 lines, PlatformState aggregate
+- crates/aura-daemon/src/platform/power.rs — 1255 lines, energy-aware power management
+- crates/aura-daemon/src/platform/thermal.rs — 1300 lines, physics-based thermal management
+- crates/aura-daemon/src/platform/connectivity.rs — 654 lines, network monitoring
+- crates/aura-daemon/src/platform/doze.rs — 770 lines, Doze/wakelock/OEM management
+- crates/aura-daemon/src/platform/sensors.rs — 520 lines, hardware sensor access
+- crates/aura-daemon/src/platform/notifications.rs — 782 lines, notification management
+Rust Bridge Layer (read ✅)
+- crates/aura-daemon/src/bridge/system_api.rs — 1327+ lines, typed system API bridge
+Rust Health Monitor (read ✅)
+- crates/aura-daemon/src/health/monitor.rs — 1300+ lines, health monitoring
+Build/Deploy Config (all read ✅)
+- .cargo/config.toml — 10 lines, Rust cross-compilation config
+- install.sh — 1004 lines, Termux installer
+NOT Read (optional, low priority)
+- android/app/src/main/res/xml/accessibility_service_config.xml — referenced in manifest but not critical for findings
+▣  Compaction · claude-opus-4.6 · 2m 0s
+Subagent session
+Based on the comprehensive summary, all source files have been read and analyzed. The only remaining task is synthesizing the final structured audit report. Let me produce it now.
+---
+AURA v4 — Android/Mobile Integration Audit Report
+1. Executive Summary
+AURA v4 is an ambitious on-device AI assistant implemented as a Rust daemon loaded via JNI into an Android app, distributed through Termux. The architecture is fundamentally sound — the JNI bridge is well-structured, the physics-based power/thermal models are impressive, and the OEM-aware doze management shows real-world Android experience.
+However, the system has several critical gaps that would cause failures in production: missing JNI exception checking, a wakelock that expires while the daemon runs, an incomplete shutdown path, placeholder security checksums in the installer, and missing manifest permissions. The accessibility service has node recycling bugs that will leak memory on every screen read.
+Overall Grade: B- — Strong architecture, needs hardening before field deployment.
+By the numbers: 7 Critical findings, 9 High, 11 Medium, 5 Low.
+---
+2. Architecture Claims Verification
+Parent up
+Prev left
+Next right
+#	Claim	Verdict	Evidence
+1	JNI bridge model (Rust .so loaded by Kotlin)	CONFIRMED	System.loadLibrary("aura_daemon") in AuraDaemonBridge.kt, `J
+/agents                                       
+Switch agent
+/api-design                                   
+VoltAgent: Design APIs and schemas
+/backend                                      
+VoltAgent: Build backend APIs and microservices
+/build-fix                                    
+Fix build and TypeScript errors with minimal changes
+/checkpoint                                   
+Save verification state and progress
+/code-review                                  
+Bad Request: Bad Request
+Review code for quality, security, and maintainability
+/compact                                      
+Compact session
+/connect                                      
+Connect provider
+/copy                                         
+▣  General · claude-opus-4.6
+Copy session transcript
+/e2e                                          
+Generate and run E2E tests with Playwright

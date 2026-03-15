@@ -270,7 +270,7 @@ identity:
     dominance: 0.55           # in-control/overwhelmed
     description: "calm and mildly positive"
   relationship:
-    stage: "trusted_friend"   # acquaintance|colleague|trusted_friend|intimate
+    stage: "Friend"           # Stranger|Acquaintance|Friend|CloseFriend|Soulmate
     trust: 0.74
     interaction_count: 847
   thinking_partner_mode: false
@@ -386,9 +386,9 @@ Every feature works correctly on first launch with zero learned data. No cold-st
 
 | Subsystem | Day Zero State | Behavior |
 |---|---|---|
-| Personality | OCEAN all at 0.5 (population mean) | Neutral, balanced expression — correct baseline |
-| Relationship | Acquaintance stage, trust: 0.0 | Polite, measured tone — appropriate for a stranger |
-| Affect | Neutral VAD: (0.5, 0.3, 0.5) | Calm, slightly low arousal — appropriate default |
+| Personality | OCEAN: O=0.85, C=0.75, E=0.50, A=0.70, N=0.25 | Curious, reliable, warm, stable — correct baseline |
+| Relationship | Stranger stage, trust: 0.0 | Polite, measured tone — appropriate for a stranger |
+| Affect | Neutral VAD: (0.0, 0.0, 0.5) | Neutral valence, calm arousal, balanced dominance — appropriate default |
 | ETG cache | Empty | Every request routes to S2 (LLM) — correct fallback |
 | Episodic memory | Empty | LLM reasons from request context only — works |
 | Semantic memory | Empty | LLM reasons without prior facts — works |

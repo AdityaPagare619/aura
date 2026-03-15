@@ -33,6 +33,7 @@ use aura_types::errors::AuraError;
 use aura_types::events::{EventSource, GateDecision, ScoredEvent};
 use aura_types::ipc::{
     ConversationTurn, GoalSummary, MemorySnippet, MemoryTier, PersonalitySnapshot, Role,
+    UserPreferences as IpcUserPreferences,
 };
 use aura_types::memory::MemoryQuery;
 
@@ -40,7 +41,7 @@ use crate::identity::personality::Personality;
 use crate::identity::relationship::RelationshipTracker;
 use crate::identity::affective::AffectiveEngine;
 use crate::identity::prompt_personality::PersonalityPromptInjector;
-use crate::identity::user_profile::UserProfile;
+use crate::identity::user_profile::{CommunicationStyle, UserProfile};
 use crate::memory::AuraMemory;
 
 // ---------------------------------------------------------------------------
@@ -131,6 +132,10 @@ pub struct EnrichedEvent {
     /// Human-readable mood context string from `mood_context_string()`.
     /// Example: "Mood: positive valence, high energy, assertive stance. Emotion: Joy."
     pub mood_description: String,
+    /// IPC-serializable user preferences converted from daemon-side UserProfile.
+    /// `None` if no user profile is available.
+    /// Tier 1: Identity Integration.
+    pub ipc_user_preferences: Option<IpcUserPreferences>,
 }
 
 /// Configuration for the Contextor's retrieval behavior.
@@ -339,7 +344,29 @@ impl Contextor {
         // 8. Generate mood description string
         let mood_description = affective.mood_context_string();
 
-        // 9. Assemble enriched event
+        // 9. Convert daemon-side user preferences to IPC format (Tier 1)
+        let ipc_user_preferences = user_profile.map(|profile| {
+            let style_str = match profile.preferences.communication_style {
+                CommunicationStyle::Concise => "concise",
+                CommunicationStyle::Balanced => "balanced",
+                CommunicationStyle::Detailed => "detailed",
+            };
+            IpcUserPreferences {
+                model_preference: None, // User hasn't set this yet
+                interaction_style: Some(style_str.into()),
+                proactiveness: Some(if profile.preferences.likes_proactive {
+                    0.6
+                } else {
+                    0.1
+                }),
+                autonomy_level: None, // User hasn't set this yet
+                access_scope: Vec::new(), // Populated as user configures
+                domain_focus: Vec::new(), // Populated as user configures
+                custom_instructions: None, // Populated via conversational shaping (T1-5)
+            }
+        });
+
+        // 10. Assemble enriched event
         let enriched = EnrichedEvent {
             scored,
             memory_context,
@@ -351,6 +378,7 @@ impl Contextor {
             personality_context,
             identity_block,
             mood_description,
+            ipc_user_preferences,
         };
 
         debug!(
@@ -647,6 +675,7 @@ impl Contextor {
                 neuroticism: traits.neuroticism,
                 current_mood_valence: mood.mood.valence,
                 current_mood_arousal: mood.mood.arousal,
+                current_mood_dominance: mood.mood.dominance,
                 trust_level: trust,
             },
             recent_topics,

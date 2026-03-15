@@ -36,13 +36,14 @@ pub mod queue;
 pub mod reqwest_backend;
 pub mod security;
 pub mod voice_handler;
+pub mod voice_pipeline;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use rusqlite::Connection;
 use tokio::sync::mpsc;
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use aura_types::config::AuraConfig;
 use aura_types::errors::AuraError;
@@ -55,7 +56,7 @@ use self::commands::TelegramCommand;
 use self::dashboard::DashboardSnapshot;
 use self::dialogue::DialogueManager;
 use self::handlers::{HandlerContext, HandlerResponse};
-use self::polling::{HttpBackend, StubHttpBackend, TelegramPoller, TelegramUpdate};
+use self::polling::{HttpBackend, NonTextContent, StubHttpBackend, TelegramPoller, TelegramUpdate};
 use self::queue::{MessageContent, MessageQueue};
 use self::security::SecurityGate;
 
@@ -241,9 +242,53 @@ impl TelegramEngine {
 
                 // ── Inline handle_update logic ──────────────────────────
                 let chat_id = update.chat_id;
+
+                // ── Voice pipeline: decode OGG if voice data was pre-downloaded ──
+                // Rust (body) extracts audio → future STT feeds LLM (brain).
+                // For alpha: decode succeeds → log → still route description text.
+                // When STT is wired, transcript replaces description text.
+                let voice_processed = if let Some(ref voice_bytes) = update.voice_data {
+                    let bytes = voice_bytes.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        voice_pipeline::process_voice_input(&bytes)
+                    }).await {
+                        Ok(Ok(result)) => {
+                            debug!(
+                                duration_secs = result.duration_secs,
+                                pcm_samples = result.pcm_16k.len(),
+                                "voice pipeline: decoded OGG/Opus successfully"
+                            );
+                            // TODO(stt-alpha): When STT is wired, transcribe pcm_16k
+                            // and use transcript as `text` instead of description.
+                            Some(result.duration_secs)
+                        }
+                        Ok(Err(e)) => {
+                            warn!(error = %e, "voice pipeline: decode failed — falling back to text");
+                            None
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "voice pipeline: spawn_blocking panicked");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let text = match &update.text {
                     Some(t) => t.clone(),
-                    None => continue, // Ignore non-text messages.
+                    None => {
+                        // Non-text content: extract metadata and route to LLM.
+                        // Rust (body) provides sensory info; LLM (brain) reasons.
+                        match &update.non_text_content {
+                            Some(content) => format!(
+                                "[User sent a non-text message: {}. Respond helpfully \
+                                 based on what you know about this content type.]",
+                                content.description()
+                            ),
+                            None => continue, // Callback/system update — no content.
+                        }
+                    }
                 };
 
                 // Check for active dialogue first.
@@ -349,14 +394,51 @@ impl TelegramEngine {
                                 // Inline enqueue_response logic.
                                 match response {
                                     HandlerResponse::Text(text) => {
-                                        let _ = queue.enqueue(
-                                            chat_id,
-                                            &MessageContent::Text { text, parse_mode: None },
-                                            0,
-                                            3600,
-                                            3,
-                                            None,
-                                        );
+                                        // If this was a voice message, try to respond
+                                        // with voice too. Falls back to text if TTS
+                                        // is unavailable (alpha: always falls back).
+                                        if voice_processed.is_some() {
+                                            let tts_text = text.clone();
+                                            match voice_pipeline::synthesize_voice_response(&tts_text) {
+                                                Ok(ogg_bytes) => {
+                                                    let duration = voice_processed.unwrap_or(0.0) as u32;
+                                                    let _ = queue.enqueue(
+                                                        chat_id,
+                                                        &MessageContent::Voice {
+                                                            data: ogg_bytes,
+                                                            duration_secs: duration,
+                                                            caption: Some(text),
+                                                        },
+                                                        0,
+                                                        3600,
+                                                        3,
+                                                        None,
+                                                    );
+                                                }
+                                                Err(_) => {
+                                                    // TTS unavailable (expected in alpha).
+                                                    // Fall back to text response.
+                                                    debug!("TTS unavailable — responding with text to voice message");
+                                                    let _ = queue.enqueue(
+                                                        chat_id,
+                                                        &MessageContent::Text { text, parse_mode: None },
+                                                        0,
+                                                        3600,
+                                                        3,
+                                                        None,
+                                                    );
+                                                }
+                                            }
+                                        } else {
+                                            let _ = queue.enqueue(
+                                                chat_id,
+                                                &MessageContent::Text { text, parse_mode: None },
+                                                0,
+                                                3600,
+                                                3,
+                                                None,
+                                            );
+                                        }
                                     }
                                     HandlerResponse::Html(text) => {
                                         let _ = queue.enqueue(
@@ -464,7 +546,18 @@ impl TelegramEngine {
         let chat_id = update.chat_id;
         let text = match &update.text {
             Some(t) => t.clone(),
-            None => return, // Ignore non-text messages for now.
+            None => {
+                // Non-text content: extract metadata and route to LLM.
+                // Rust (body) provides sensory info; LLM (brain) reasons.
+                match &update.non_text_content {
+                    Some(content) => format!(
+                        "[User sent a non-text message: {}. Respond helpfully \
+                         based on what you know about this content type.]",
+                        content.description()
+                    ),
+                    None => return, // Callback/system update — no content.
+                }
+            }
         };
 
         // Check if there's an active dialogue for this chat.
@@ -838,6 +931,8 @@ mod tests {
             text: Some("/status".into()),
             message_id: Some(1),
             callback_data: None,
+            non_text_content: None,
+            voice_data: None,
         };
 
         engine.handle_update(update).await;
@@ -865,6 +960,8 @@ mod tests {
             text: Some("/status".into()),
             message_id: Some(1),
             callback_data: None,
+            non_text_content: None,
+            voice_data: None,
         };
 
         engine.handle_update(update).await;

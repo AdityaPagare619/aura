@@ -698,7 +698,11 @@ fn describe_action(action: &ActionType) -> (String, String, bool) {
         ),
         ActionType::Type { text } => {
             let preview = if text.len() > 20 {
-                format!("{}...", &text[..20])
+                let mut end = 20;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}...", &text[..end])
             } else {
                 text.clone()
             };

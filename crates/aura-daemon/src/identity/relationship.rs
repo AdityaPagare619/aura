@@ -127,6 +127,16 @@ impl RelationshipTracker {
         // Recalculate stage with hysteresis.
         // compute_cohesion and evaluate_stage were removed from aura-types (Theater AGI violation).
         // Logic is owned here in the identity engine where it belongs.
+        //
+        // TODO(H7 — Courtroom Verdict: KEEP AS IS, track for Beta):
+        // The cohesion formula currently uses `trust` for both the trust (0.4) AND
+        // sentiment (0.3) weights, hardcodes interaction_frequency to 0.0, and
+        // defaults longevity to 0.5. For Beta, replace with real signals:
+        //   - sentiment: derive from recent conversation mood analysis (LLM-side)
+        //   - interaction_frequency: compute from interaction timestamps in RelationshipState
+        //   - longevity: compute from (now - first_interaction_ms) normalized
+        // This is NOT Theater AGI — the formula itself is valid math owned by the
+        // identity engine. Only the INPUT signals need enrichment.
         let cohesion = (rel.trust * 0.4
             + rel.trust * 0.3
             + 0.0_f32 * 0.2

@@ -367,7 +367,15 @@ impl AuraMemory {
 
         debug!(
             "cross-tier query '{}' returned {} results from {} tiers",
-            &query.query_text[..query.query_text.len().min(40)],
+            {
+                let q = &query.query_text;
+                let max = q.len().min(40);
+                let mut end = max;
+                while end > 0 && !q.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &q[..end]
+            },
             all_results.len(),
             query.tiers.len(),
         );

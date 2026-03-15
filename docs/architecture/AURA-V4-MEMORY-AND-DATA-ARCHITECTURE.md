@@ -111,8 +111,8 @@ graph TD
         SM["Tier 3: Semantic Memory\n──────────────────\nStorage: SQLite + FTS5 + HNSW\nCapacity: ~50MB/year\nLatency: 5–15ms\nPersistence: Survives restart\nRetrieval: RRF fusion"]
     end
 
-    subgraph ColdStorage["Cold Storage (ZSTD-compressed)"]
-        AR["Tier 4: Archive\n──────────────────\nStorage: ZSTD SQLite\nCapacity: ~4MB/year (compressed)\nLatency: 50–200ms\nPersistence: Long-term\nCompression: ZSTD level 3"]
+    subgraph ColdStorage["Cold Storage (LZ4-compressed, default)"]
+        AR["Tier 4: Archive\n──────────────────\nStorage: LZ4 SQLite (ZSTD available)\nCapacity: ~4MB/year (compressed)\nLatency: 50–200ms\nPersistence: Long-term\nCompression: LZ4 (default)"]
     end
 
     WM -->|"Hot consolidation\nevery 5 min"| EM
@@ -209,7 +209,7 @@ Where `k = 60` (a smoothing constant that reduces the impact of high-variance ra
 
 The archive is cold storage for memories that no longer need fast access. It exists to preserve long-term history without consuming the storage or memory budget required by the active tiers.
 
-**Storage:** ZSTD-compressed SQLite. The compression is applied at the SQLite page level using ZSTD level 3, which offers good compression ratios with manageable CPU cost.
+**Storage:** LZ4-compressed SQLite by default (ZSTD also supported). LZ4 is the default compression algorithm, chosen for its fast decompression speed which benefits the mobile use case. ZSTD is available as an alternative when higher compression ratios are needed.
 
 **Capacity:** Approximately 4MB per year. This is compressed from much larger raw episodic data — the compression ratio for text-heavy SQLite content is typically 5–10x.
 
@@ -226,7 +226,7 @@ The archive is cold storage for memories that no longer need fast access. It exi
 
 | Property | Working | Episodic | Semantic | Archive |
 |---|---|---|---|---|
-| Storage medium | RAM ring buffer | SQLite WAL | SQLite + FTS5 | ZSTD SQLite |
+| Storage medium | RAM ring buffer | SQLite WAL | SQLite + FTS5 | LZ4/ZSTD SQLite |
 | Capacity | 1MB / 1024 slots | ~18MB/year | ~50MB/year | ~4MB/year |
 | Access latency | <1ms | 2–8ms | 5–15ms | 50–200ms |
 | Persistence | None | WAL-safe | WAL-safe | Compressed |
@@ -715,10 +715,10 @@ The vault master key is never stored directly. It is derived from the user's PIN
 | Memory | 64 MB | Forces attacker to use 64MB RAM per guess attempt; limits parallelism |
 | Iterations | 3 | Three passes over the memory block; increases time cost |
 | Parallelism | 4 | 4 parallel lanes; matches modern mobile CPU core count |
-| Salt length | 32 bytes | Random salt, stored alongside the vault ciphertext |
+| Salt length | 16 bytes | Random salt, stored alongside the vault ciphertext |
 | Output length | 32 bytes | 256-bit key for AES-256 |
 
-**Salt storage:** The 32-byte salt is stored in plaintext alongside the vault. This is correct and expected — the salt's purpose is to prevent precomputed rainbow tables, not to be secret. An attacker who knows the salt still cannot brute-force without expending 64MB × 3 passes × (number of guesses) of computation.
+**Salt storage:** The 16-byte salt is stored in plaintext alongside the vault (format: `salt(16) || hash(32)` = 48 bytes total). This is correct and expected — the salt's purpose is to prevent precomputed rainbow tables, not to be secret. An attacker who knows the salt still cannot brute-force without expending 64MB × 3 passes × (number of guesses) of computation.
 
 **Key lifecycle:** The derived key is held in a memory-locked allocation (using `mlock` on Linux/Android) to prevent it from being paged to swap. It is zeroed using volatile writes when the vault is locked to prevent compiler optimization from eliminating the clear.
 
@@ -886,17 +886,17 @@ ARC maintains a score for each of 10 life domains:
 | Domain | Description |
 |---|---|
 | Health | Physical and mental health signals |
-| Work | Professional productivity and stress |
-| Relationships | Social connection quality |
+| Social | Social connection quality |
+| Productivity | Professional productivity and output |
 | Finance | Financial situation indicators |
+| Lifestyle | Daily living and routine quality |
+| Entertainment | Leisure and recreation |
 | Learning | Skill development and intellectual engagement |
-| Creativity | Creative output and expression |
-| Recreation | Rest and leisure quality |
+| Communication | Communication patterns and quality |
 | Environment | Physical environment and home context |
-| Purpose | Sense of meaning and alignment |
-| Autonomy | Self-direction and decision agency |
+| PersonalGrowth | Self-improvement and personal development |
 
-Each score is a float in [0.0, 1.0] computed from signals AURA observes (conversation content, interaction patterns, explicit user statements). Domain scores update every 5 minutes.
+Each score is a float in [0.0, 1.0] computed from signals AURA observes (conversation content, interaction patterns, explicit user statements). Default weights: Health=1.0, Social=0.8, Productivity=0.7, Finance=0.6, Lifestyle=0.5, Learning=0.4, PersonalGrowth=0.4, Communication=0.3, Entertainment=0.2, Environment=0.2. Domain scores update every 5 minutes.
 
 **Context mode history (8 modes):**
 
@@ -904,14 +904,14 @@ ARC infers the user's current cognitive/emotional mode:
 
 | Mode | Description |
 |---|---|
-| FOCUSED | Deep work, low interruption tolerance |
-| SOCIAL | Engaged in relationships, open to interaction |
-| CREATIVE | Generative state, exploring ideas |
-| REST | Low energy, needs minimal cognitive demand |
-| STRESSED | Elevated load, needs support or simplification |
-| LEARNING | Acquiring knowledge, receptive to detail |
-| TRANSITIONING | Between states, uncertain context |
-| AUTONOMOUS | Independent operation, minimal oversight needed |
+| Default | Standard operating mode |
+| DoNotDisturb | Minimal interruptions, suppressed notifications |
+| Sleeping | User is sleeping, minimal activity |
+| Active | User is actively engaged |
+| Driving | User is driving, safety-appropriate interactions only |
+| Custom1 | User-defined context mode 1 |
+| Custom2 | User-defined context mode 2 |
+| Custom3 | User-defined context mode 3 |
 
 Mode history is the time-series of mode transitions. This history allows ARC to recognize patterns ("user enters FOCUSED mode every weekday at 9am") and anticipate transitions.
 
@@ -976,7 +976,7 @@ Note: Episodic tier does not grow unboundedly — cold consolidation archives me
 |---|---|---|
 | Pure Rust HNSW | Use `hnswlib` via FFI | FFI on Android adds ABI complexity; Rust impl cross-compiles cleanly |
 | SQLite with WAL | LevelDB, RocksDB | SQLite is battle-tested on Android; WAL provides concurrent read/write without daemon complexity |
-| ZSTD for archive | LZ4, Gzip | ZSTD level 3 gives better compression than LZ4, faster than Gzip; good balance for cold storage |
+| ZSTD for archive | LZ4, Gzip | LZ4 is the default for fast decompression on mobile; ZSTD is available as an alternative when higher compression ratios are needed |
 | AES-256-GCM | AES-256-CBC | GCM provides authenticated encryption; CBC requires separate MAC; GCM is strictly better |
 | Argon2id | bcrypt, PBKDF2 | Argon2id is the current OWASP recommendation for password hashing; memory-hard by design |
 | Cryptographic erasure | Physical deletion | Physical deletion on flash is unreliable; cryptographic erasure is provably complete |

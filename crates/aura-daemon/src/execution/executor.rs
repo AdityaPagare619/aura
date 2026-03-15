@@ -230,6 +230,23 @@ impl Executor {
             policy_gate: PolicyGate::allow_all(),
         }
     }
+
+    /// Create an executor with a **custom** `PolicyGate` for testing policy
+    /// enforcement.  Use this to verify that the executor correctly blocks
+    /// actions when `PolicyGate` denies them.
+    #[cfg(test)]
+    pub(crate) fn for_testing_with_policy(gate: PolicyGate) -> Self {
+        Self {
+            max_steps: 200,
+            anti_bot: AntiBot::normal(),
+            cycle_detector: CycleDetector::new(),
+            enhanced_monitor: EnhancedMonitor::normal(),
+            intelligent_retry: IntelligentRetry::new(),
+            etg: EtgStore::in_memory(),
+            action_sandbox: Sandbox::new(),
+            policy_gate: gate,
+        }
+    }
 }
 
 impl Default for Executor {
@@ -1116,6 +1133,7 @@ mod tests {
     use aura_types::etg::{ActionPlan, PlanSource};
     use aura_types::screen::{Bounds, ScreenNode, ScreenTree};
     use crate::screen::actions::MockScreenProvider;
+    use crate::policy::rules::{PolicyRule, RuleEffect};
 
     /// Helper: create a minimal screen tree with the given nodes.
     fn make_tree(package: &str, activity: &str, nodes: Vec<ScreenNode>) -> ScreenTree {
@@ -1535,5 +1553,98 @@ mod tests {
         let ids = collect_interactive_ids(&node);
         assert_eq!(ids.len(), 1); // Only btn1 is clickable
         assert_eq!(ids[0], "btn1");
+    }
+
+    // ── PolicyGate enforcement tests (TEST-HIGH-2) ──────────────────────
+
+    #[tokio::test]
+    async fn test_policy_gate_deny_blocks_execution() {
+        // A deny-by-default PolicyGate with NO allow rules should block
+        // any action, causing the executor to return Failed with a reason
+        // mentioning "PolicyGate denied".
+        let gate = PolicyGate::deny_by_default();
+        let mut executor = Executor::for_testing_with_policy(gate);
+
+        let tree = make_tree(
+            "com.test.app",
+            "MainActivity",
+            vec![make_button("btn_ok", "OK", 540, 960)],
+        );
+        let tree2 = make_tree(
+            "com.test.app",
+            "ResultActivity",
+            vec![make_button("btn_done", "Done", 540, 960)],
+        );
+        let screen = MockScreenProvider::new(vec![tree, tree2]);
+
+        let plan = make_plan("tap OK button", vec![tap_step(540, 960)]);
+        let outcome = executor.execute(&plan, &screen).await.expect("should return outcome");
+
+        match outcome {
+            ExecutionOutcome::Failed { step, reason, .. } => {
+                assert_eq!(step, 0, "should fail on the first step");
+                assert!(
+                    reason.contains("PolicyGate denied"),
+                    "reason should mention PolicyGate denial, got: {reason}"
+                );
+            }
+            other => panic!(
+                "expected ExecutionOutcome::Failed from PolicyGate denial, got: {:?}",
+                other
+            ),
+        }
+
+        // Verify no actions were actually dispatched to the screen.
+        let log = screen.action_log().unwrap();
+        assert!(
+            log.is_empty(),
+            "no actions should reach the screen when PolicyGate denies; got {} actions",
+            log.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_policy_gate_allow_rule_permits_execution() {
+        // A deny-by-default gate with an explicit allow rule for Tap actions
+        // should permit execution of tap steps.
+        let mut gate = PolicyGate::deny_by_default();
+        gate.add_rule(PolicyRule {
+            name: "allow-taps".to_string(),
+            action_pattern: "*tap*".to_string(),
+            effect: RuleEffect::Allow,
+            reason: "taps are safe for testing".to_string(),
+            priority: 1,
+        });
+
+        let mut executor = Executor::for_testing_with_policy(gate);
+
+        let tree1 = make_tree(
+            "com.test.app",
+            "MainActivity",
+            vec![make_button("btn_ok", "OK", 540, 960)],
+        );
+        let tree2 = make_tree(
+            "com.test.app",
+            "ResultActivity",
+            vec![make_button("btn_done", "Done", 540, 960)],
+        );
+        let screen = MockScreenProvider::new(vec![tree1, tree2]);
+
+        let plan = make_plan("tap OK button", vec![tap_step(540, 960)]);
+        let outcome = executor.execute(&plan, &screen).await.expect("should return outcome");
+
+        match outcome {
+            ExecutionOutcome::Success { steps_executed, .. } => {
+                assert_eq!(steps_executed, 1, "one tap step should have executed");
+            }
+            other => panic!(
+                "expected ExecutionOutcome::Success with allow rule, got: {:?}",
+                other
+            ),
+        }
+
+        // Verify the tap action was dispatched.
+        let log = screen.action_log().unwrap();
+        assert_eq!(log.len(), 1, "exactly one action should have been dispatched");
     }
 }

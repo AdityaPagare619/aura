@@ -28,15 +28,15 @@
 //!
 //! # Note on Hash Function
 //!
-//! Uses `std::hash::DefaultHasher` (SipHash) for portability.
-//! In a production deployment with forensic requirements, replace with
-//! SHA-256 from the `sha2` crate.
+//! Uses SHA-256 (from the `sha2` crate), truncated to `u64` for structural
+//! compatibility. This provides cryptographic preimage resistance for the
+//! audit chain — an attacker cannot forge entries without 2^64 work.
 
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 
 use aura_types::errors::SecurityError;
 
@@ -151,17 +151,25 @@ impl std::fmt::Display for AuditResult {
 
 impl AuditEntry {
     /// Compute the hash of this entry (excluding `entry_hash` itself).
+    ///
+    /// SECURITY [SEC-MED-1]: Uses SHA-256 (truncated to u64) instead of SipHash.
+    /// SipHash is a non-cryptographic keyed hash designed for hash tables — an
+    /// attacker with binary access could forge audit entries. SHA-256 provides
+    /// cryptographic preimage resistance (2^64 after truncation, sufficient for
+    /// on-device audit chain integrity).
     fn compute_hash(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.seq.hash(&mut hasher);
-        self.timestamp_ms.hash(&mut hasher);
-        self.action.hash(&mut hasher);
-        self.target.hash(&mut hasher);
-        format!("{}", self.result).hash(&mut hasher);
-        (self.level as u8).hash(&mut hasher);
-        self.context_hash.hash(&mut hasher);
-        self.prev_hash.hash(&mut hasher);
-        hasher.finish()
+        let mut hasher = Sha256::new();
+        hasher.update(self.seq.to_le_bytes());
+        hasher.update(self.timestamp_ms.to_le_bytes());
+        hasher.update(self.action.as_bytes());
+        hasher.update(self.target.as_bytes());
+        hasher.update(format!("{}", self.result).as_bytes());
+        hasher.update((self.level as u8).to_le_bytes());
+        hasher.update(self.context_hash.to_le_bytes());
+        hasher.update(self.prev_hash.to_le_bytes());
+        let digest = hasher.finalize();
+        // Truncate SHA-256 to u64 — first 8 bytes, little-endian.
+        u64::from_le_bytes(digest[..8].try_into().expect("8 bytes from 32-byte digest"))
     }
 
     /// Verify that this entry's hash is correct.

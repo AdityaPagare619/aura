@@ -20,7 +20,7 @@ trailing_comma = "Vertical"     # Trailing comma on multiline, not on single-lin
 trailing_semicolon = true
 
 # ── Braces and blocks ─────────────────────────────────────────────────────────
-brace_style = "SameLineBrace"
+brace_style = "PreferSameLine"
 control_brace_style = "AlwaysSameLine"
 empty_item_single_line = true
 fn_single_line = false

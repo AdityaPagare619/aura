@@ -8,10 +8,9 @@
 //! The system tracks user engagement with greetings and adaptively reduces
 //! frequency if the user ignores them (consecutive_ignored counter).
 
+use aura_types::identity::OceanTraits;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
-
-use aura_types::identity::OceanTraits;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -488,34 +487,53 @@ fn daily_tip_content(index: usize, personality: &OceanTraits) -> (&'static str, 
 
     match index {
         0 => {
-            let greeting = if warm { "daily_tip_0_warm" } else { "daily_tip_0_neutral" };
+            let greeting = if warm {
+                "daily_tip_0_warm"
+            } else {
+                "daily_tip_0_neutral"
+            };
             (greeting, "daily_tip_0_tip")
-        }
+        },
         1 => {
-            let greeting = if direct { "daily_tip_1_direct" } else { "daily_tip_1_friendly" };
+            let greeting = if direct {
+                "daily_tip_1_direct"
+            } else {
+                "daily_tip_1_friendly"
+            };
             (greeting, "daily_tip_1_tip")
-        }
+        },
         2 => ("daily_tip_2", "daily_tip_2_tip"),
         3 => ("daily_tip_3", "daily_tip_3_tip"),
         4 => ("daily_tip_4", "daily_tip_4_tip"),
         5 => {
-            let greeting = if warm { "daily_tip_5_warm" } else { "daily_tip_5_neutral" };
+            let greeting = if warm {
+                "daily_tip_5_warm"
+            } else {
+                "daily_tip_5_neutral"
+            };
             (greeting, "daily_tip_5_tip")
-        }
+        },
         6 => ("daily_tip_6", "daily_tip_6_tip"),
         _ => ("daily_tip_default", "daily_tip_default_tip"),
     }
 }
 
 /// Return (greeting_key, tip_key) signal pair for a weekly highlight by index.
-fn weekly_highlight_content(index: usize, personality: &OceanTraits) -> (&'static str, &'static str) {
+fn weekly_highlight_content(
+    index: usize,
+    personality: &OceanTraits,
+) -> (&'static str, &'static str) {
     let enthusiastic = personality.extraversion > 0.6;
 
     match index {
         0 => {
-            let greeting = if enthusiastic { "weekly_0_enthusiastic" } else { "weekly_0_calm" };
+            let greeting = if enthusiastic {
+                "weekly_0_enthusiastic"
+            } else {
+                "weekly_0_calm"
+            };
             (greeting, "weekly_0_tip")
-        }
+        },
         1 => ("weekly_1", "weekly_1_tip"),
         2 => ("weekly_2", "weekly_2_tip"),
         _ => ("weekly_default", "weekly_default_tip"),
@@ -529,15 +547,23 @@ fn milestone_message(days: u32, personality: &OceanTraits) -> &'static str {
 
     match days {
         30 => {
-            if enthusiastic { "milestone_30d_enthusiastic" }
-            else if warm { "milestone_30d_warm" }
-            else { "milestone_30d_neutral" }
-        }
+            if enthusiastic {
+                "milestone_30d_enthusiastic"
+            } else if warm {
+                "milestone_30d_warm"
+            } else {
+                "milestone_30d_neutral"
+            }
+        },
         60 => "milestone_60d",
         90 => "milestone_90d",
         180 => {
-            if warm { "milestone_180d_warm" } else { "milestone_180d_neutral" }
-        }
+            if warm {
+                "milestone_180d_warm"
+            } else {
+                "milestone_180d_neutral"
+            }
+        },
         365 => "milestone_365d",
         _ => "milestone_generic",
     }

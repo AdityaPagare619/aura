@@ -13,12 +13,16 @@
 //! - **Power-aware**: in low power states, only high-priority goals proceed
 //! - **Concurrent limits**: max N goals active based on complexity + power state
 
-use aura_types::errors::GoalError;
-#[allow(unused_imports)] // GoalSource re-imported in inner scopes; this is the canonical top-level import
-use aura_types::goals::{Goal, GoalPriority, GoalSource};
-use aura_types::power::{DegradationLevel, PowerBudget, PowerState};
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+
+#[allow(unused_imports)]
+// GoalSource re-imported in inner scopes; this is the canonical top-level import
+use aura_types::goals::{Goal, GoalPriority, GoalSource};
+use aura_types::{
+    errors::GoalError,
+    power::{DegradationLevel, PowerBudget, PowerState},
+};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::{BoundedMap, BoundedVec};
@@ -788,8 +792,7 @@ impl BdiScheduler {
     ///
     /// Applies mechanical multipliers derived from well-known system beliefs:
     /// - battery_level < 15 → 0.5× penalty (very low battery)
-    /// - network_connected = "false" AND goal description contains network
-    ///   keywords → 0.6× penalty
+    /// - network_connected = "false" AND goal description contains network keywords → 0.6× penalty
     /// - screen_on = "false" → 0.8× penalty (UI goals need screen)
     fn compute_feasibility(&self, goal: &Goal) -> f32 {
         let mut feasibility = 1.0_f32;
@@ -811,13 +814,24 @@ impl BdiScheduler {
                 // Check if the goal description involves network activity.
                 let desc_lower = goal.description.to_ascii_lowercase();
                 const NETWORK_KEYWORDS: &[&str] = &[
-                    "search", "send", "message", "navigate", "maps", "online",
-                    "web", "internet", "email", "download", "upload", "stream",
-                    "restaurant", "weather", "news", "sync",
+                    "search",
+                    "send",
+                    "message",
+                    "navigate",
+                    "maps",
+                    "online",
+                    "web",
+                    "internet",
+                    "email",
+                    "download",
+                    "upload",
+                    "stream",
+                    "restaurant",
+                    "weather",
+                    "news",
+                    "sync",
                 ];
-                let needs_network = NETWORK_KEYWORDS
-                    .iter()
-                    .any(|kw| desc_lower.contains(kw));
+                let needs_network = NETWORK_KEYWORDS.iter().any(|kw| desc_lower.contains(kw));
                 if needs_network {
                     feasibility *= 0.6;
                 }
@@ -901,8 +915,9 @@ impl BdiScheduler {
         for goal in goals {
             let base_scored = self.base.compute_score(goal, now_ms);
 
-            // LLM sets priority at goal creation — Rust uses goal priority directly as desirability.
-            // No blended formula: desirability = goal's own priority (f32 passthrough).
+            // LLM sets priority at goal creation — Rust uses goal priority directly as
+            // desirability. No blended formula: desirability = goal's own priority (f32
+            // passthrough).
             let desirability = base_scored.score;
 
             // Unused — kept for API compat; LLM assesses feasibility.
@@ -1409,8 +1424,9 @@ impl Default for BdiScheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::goals::{GoalPriority, GoalSource, GoalStatus};
+
+    use super::*;
 
     fn make_goal(id: u64, priority: GoalPriority, source: GoalSource) -> Goal {
         Goal {
@@ -1463,7 +1479,7 @@ mod tests {
         match decision {
             SchedulerDecision::Activate { goal_id, .. } => {
                 assert_eq!(goal_id, 1);
-            }
+            },
             other => panic!("expected Activate, got {:?}", other),
         }
         assert_eq!(scheduler.active_count(), 1);
@@ -1755,7 +1771,7 @@ mod tests {
                     !new_intentions.is_empty(),
                     "should commit at least one intention"
                 );
-            }
+            },
             other => panic!("expected Commit, got {:?}", other),
         }
     }
@@ -2094,12 +2110,12 @@ mod tests {
 
         // With low battery, goals should be filtered as infeasible
         match result {
-            DeliberationResult::Maintain => {} // OK - no feasible goals
+            DeliberationResult::Maintain => {}, // OK - no feasible goals
             DeliberationResult::Commit { new_intentions: _ } => {
                 // If commit, check that infeasible goals weren't committed
                 // Low battery makes goals infeasible
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -2130,8 +2146,8 @@ mod tests {
                     drop_intentions.contains(&1),
                     "should drop stale low-commitment"
                 );
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 

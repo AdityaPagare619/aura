@@ -15,8 +15,10 @@
 //!
 //! L2/L3/L4 run in PARALLEL when reached. The rest run sequentially.
 
-use aura_types::actions::TargetSelector;
-use aura_types::screen::{ScreenNode, ScreenTree};
+use aura_types::{
+    actions::TargetSelector,
+    screen::{ScreenNode, ScreenTree},
+};
 use tracing::{debug, trace, warn};
 
 use super::tree::ScreenTreeExt;
@@ -93,35 +95,35 @@ pub fn resolve_target(
                         None
                     }
                 })
-        }
+        },
 
         TargetSelector::ResourceId(rid) => {
             // Starts at L2
             try_resource_id(tree, rid)
                 .map(|n| make_resolved(n, 2))
                 .or_else(|| try_remaining_levels(tree, selector, 3, max_fallback_depth))
-        }
+        },
 
         TargetSelector::Text(text) => {
             // Starts at L3
             try_text_anchor(tree, text)
                 .map(|n| make_resolved(n, 3))
                 .or_else(|| try_remaining_levels(tree, selector, 4, max_fallback_depth))
-        }
+        },
 
         TargetSelector::ContentDescription(desc) => {
             // Starts at L4
             try_content_desc_class(tree, desc, None)
                 .map(|n| make_resolved(n, 4))
                 .or_else(|| try_remaining_levels(tree, selector, 5, max_fallback_depth))
-        }
+        },
 
         TargetSelector::ClassName(class) => {
             // Starts at L5
             try_class_index(tree, class, 0)
                 .map(|n| make_resolved(n, 5))
                 .or_else(|| try_remaining_levels(tree, selector, 6, max_fallback_depth))
-        }
+        },
 
         TargetSelector::Position {
             index,
@@ -129,18 +131,20 @@ pub fn resolve_target(
         } => {
             // Resolve parent first, then pick child by index
             resolve_position(tree, *index, parent_selector, max_fallback_depth)
-        }
+        },
 
         TargetSelector::Coordinates { x, y } => {
             // L6: direct coordinate lookup
             try_coordinates(tree, *x, *y).map(|n| make_resolved(n, 6))
-        }
+        },
 
         TargetSelector::LlmDescription(desc) => {
             // L7: Return all visible candidates — LLM selects the target node.
             // Rust does NOT do NLP scoring; it returns raw candidates for the LLM.
-            resolve_by_description(tree, desc).first().map(|n| make_resolved(n, 7))
-        }
+            resolve_by_description(tree, desc)
+                .first()
+                .map(|n| make_resolved(n, 7))
+        },
     };
 
     let elapsed_us = start.elapsed().as_micros() as u64;
@@ -155,11 +159,11 @@ pub fn resolve_target(
                 "target resolved"
             );
             Some(r)
-        }
+        },
         None => {
             warn!(elapsed_us, "target resolution failed at all levels");
             None
-        }
+        },
     }
 }
 
@@ -640,8 +644,8 @@ fn parse_xpath_segments(xpath: &str) -> Vec<XPathSegment> {
                     segments.push(parse_one_segment(&xpath[start..i]));
                 }
                 start = i + 1;
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -699,10 +703,10 @@ fn parse_one_segment(segment: &str) -> XPathSegment {
                     break;
                 }
             }
-        }
+        },
         None => {
             class_name = segment.to_string();
-        }
+        },
     }
 
     XPathSegment {
@@ -781,7 +785,7 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                         .map(|t| t.to_lowercase().contains(&attr_val.to_lowercase()))
                         .unwrap_or(false)
                 }
-            }
+            },
             "content-desc" | "content-description" => {
                 if exact {
                     node.content_description.as_deref() == Some(attr_val.as_str())
@@ -791,7 +795,7 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                         .map(|d| d.to_lowercase().contains(&attr_val.to_lowercase()))
                         .unwrap_or(false)
                 }
-            }
+            },
             "class" => short_class_match(&node.class_name, attr_val),
             "clickable" => {
                 let expected = attr_val == "true";
@@ -800,7 +804,7 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                 } else {
                     true
                 }
-            }
+            },
             "enabled" => {
                 let expected = attr_val == "true";
                 if exact {
@@ -808,7 +812,7 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                 } else {
                     true
                 }
-            }
+            },
             // Volatile attributes — skip in structural mode
             "bounds" | "index" | "focused" | "checked" | "scrollable" => {
                 if exact {
@@ -819,7 +823,7 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                 } else {
                     true // structural: always skip volatile
                 }
-            }
+            },
             _ => true, // Unknown attributes: don't reject
         };
 
@@ -1212,7 +1216,12 @@ mod tests {
             text: None,
             content_description: None,
             resource_id: None,
-            bounds: Bounds { left: 0, top: 0, right: 1080, bottom: 1920 },
+            bounds: Bounds {
+                left: 0,
+                top: 0,
+                right: 1080,
+                bottom: 1920,
+            },
             is_clickable: false,
             is_checkable: false,
             is_focused: false,

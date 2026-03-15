@@ -14,9 +14,8 @@ pub mod interests;
 pub mod skills;
 
 pub use interests::InterestModel;
-pub use skills::SkillRegistry;
-
 use serde::{Deserialize, Serialize};
+pub use skills::SkillRegistry;
 
 // ---------------------------------------------------------------------------
 // LearningEngine
@@ -66,4 +65,3 @@ mod tests {
         assert_eq!(engine.skills.skill_count(), 0);
     }
 }
-

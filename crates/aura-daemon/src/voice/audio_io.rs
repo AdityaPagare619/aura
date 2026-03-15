@@ -3,9 +3,13 @@
 //! Provides low-latency audio capture and playback through Android's Oboe library.
 //! On non-Android platforms, a mock implementation is provided for testing.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 // ---------------------------------------------------------------------------
 // Error type (voice-local, convertible to AuraError in mod.rs)
@@ -332,7 +336,7 @@ impl AudioIo {
             Some(output) => {
                 output.enqueue(samples);
                 Ok(())
-            }
+            },
             None => Err(AudioError::StreamNotInitialized),
         }
     }

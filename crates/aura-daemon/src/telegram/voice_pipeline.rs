@@ -77,11 +77,9 @@ pub fn decode_ogg_opus(ogg_bytes: &[u8]) -> Result<Vec<i16>, VoicePipelineError>
     let mut packet_reader = ogg::PacketReader::new(cursor);
 
     // Create Opus decoder: 48kHz, mono.
-    let decoder = audiopus::coder::Decoder::new(
-        audiopus::SampleRate::Hz48000,
-        audiopus::Channels::Mono,
-    )
-    .map_err(|e| VoicePipelineError::OpusDecode(format!("init: {e}")))?;
+    let decoder =
+        audiopus::coder::Decoder::new(audiopus::SampleRate::Hz48000, audiopus::Channels::Mono)
+            .map_err(|e| VoicePipelineError::OpusDecode(format!("init: {e}")))?;
 
     let mut pcm_out = Vec::new();
     let mut decode_buf = vec![0i16; OPUS_FRAME_SAMPLES * 2]; // generous buffer
@@ -105,18 +103,20 @@ pub fn decode_ogg_opus(ogg_bytes: &[u8]) -> Result<Vec<i16>, VoicePipelineError>
                     .map_err(|e| VoicePipelineError::OpusDecode(format!("frame: {e}")))?;
 
                 pcm_out.extend_from_slice(&decode_buf[..decoded_samples]);
-            }
+            },
             Ok(None) => break, // End of stream.
             Err(e) => {
                 // Some OGG streams have minor issues — log and continue.
                 warn!(error = %e, "OGG packet read error (continuing)");
                 break;
-            }
+            },
         }
     }
 
     if pcm_out.is_empty() {
-        return Err(VoicePipelineError::OggDecode("no audio data decoded".into()));
+        return Err(VoicePipelineError::OggDecode(
+            "no audio data decoded".into(),
+        ));
     }
 
     let duration_ms = (pcm_out.len() as u64 * 1000) / OPUS_SAMPLE_RATE as u64;
@@ -282,13 +282,13 @@ pub fn encode_ogg_opus(pcm_48k: &[i16]) -> Result<Vec<u8>, VoicePipelineError> {
 /// Build the OpusHead identification header (RFC 7845 §5.1).
 fn build_opus_head() -> Vec<u8> {
     let mut head = Vec::with_capacity(19);
-    head.extend_from_slice(b"OpusHead");  // Magic signature
-    head.push(1);                         // Version
-    head.push(1);                         // Channel count (mono)
+    head.extend_from_slice(b"OpusHead"); // Magic signature
+    head.push(1); // Version
+    head.push(1); // Channel count (mono)
     head.extend_from_slice(&0u16.to_le_bytes()); // Pre-skip
     head.extend_from_slice(&48000u32.to_le_bytes()); // Input sample rate
-    head.extend_from_slice(&0i16.to_le_bytes());  // Output gain
-    head.push(0);                         // Channel mapping family
+    head.extend_from_slice(&0i16.to_le_bytes()); // Output gain
+    head.push(0); // Channel mapping family
     head
 }
 
@@ -412,15 +412,15 @@ mod tests {
         let output = resample_to_48k(&input, 24000);
         // 24000 → 48000 = 2x, so ~4 output samples.
         assert_eq!(output.len(), 4);
-        assert_eq!(output[0], 0);   // exact first sample
+        assert_eq!(output[0], 0); // exact first sample
     }
 
     #[test]
     fn test_opus_head_structure() {
         let head = build_opus_head();
         assert_eq!(&head[..8], b"OpusHead");
-        assert_eq!(head[8], 1);  // version
-        assert_eq!(head[9], 1);  // mono
+        assert_eq!(head[8], 1); // version
+        assert_eq!(head[9], 1); // mono
     }
 
     #[test]

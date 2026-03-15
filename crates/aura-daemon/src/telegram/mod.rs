@@ -6,8 +6,7 @@
 //! - [`polling`] — Pure HTTP long-polling (no teloxide dependency).
 //! - [`commands`] — 43-command parser with aliases and categories.
 //! - [`handlers`] — Command dispatch and per-category handler modules.
-//! - [`security`] — 5-layer security gate (whitelist, PIN, permissions,
-//!   rate-limit, audit).
+//! - [`security`] — 5-layer security gate (whitelist, PIN, permissions, rate-limit, audit).
 //! - [`audit`] — Ring-buffer audit trail for all command attempts.
 //! - [`queue`] — SQLite offline message queue with priority and coalesce.
 //! - [`dashboard`] — HTML health dashboard generator.
@@ -38,27 +37,25 @@ pub mod security;
 pub mod voice_handler;
 pub mod voice_pipeline;
 
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 
+use aura_types::{config::AuraConfig, errors::AuraError};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
 use tracing::{debug, info, instrument, warn};
 
-use aura_types::config::AuraConfig;
-use aura_types::errors::AuraError;
-
+use self::{
+    approval::PolicyGate,
+    audit::{AuditLog, AuditOutcome},
+    commands::TelegramCommand,
+    dashboard::DashboardSnapshot,
+    dialogue::DialogueManager,
+    handlers::{HandlerContext, HandlerResponse},
+    polling::{HttpBackend, NonTextContent, StubHttpBackend, TelegramPoller, TelegramUpdate},
+    queue::{MessageContent, MessageQueue},
+    security::SecurityGate,
+};
 use crate::daemon_core::channels::UserCommandTx;
-
-use self::approval::PolicyGate;
-use self::audit::{AuditLog, AuditOutcome};
-use self::commands::TelegramCommand;
-use self::dashboard::DashboardSnapshot;
-use self::dialogue::DialogueManager;
-use self::handlers::{HandlerContext, HandlerResponse};
-use self::polling::{HttpBackend, NonTextContent, StubHttpBackend, TelegramPoller, TelegramUpdate};
-use self::queue::{MessageContent, MessageQueue};
-use self::security::SecurityGate;
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -145,11 +142,7 @@ impl TelegramEngine {
         startup_time_ms: u64,
         cancel_flag: Arc<AtomicBool>,
     ) -> Result<Self, AuraError> {
-        let primary_chat_id = config
-            .allowed_chat_ids
-            .first()
-            .copied()
-            .unwrap_or(0);
+        let primary_chat_id = config.allowed_chat_ids.first().copied().unwrap_or(0);
 
         let queue = MessageQueue::open(queue_db)?;
         let security = SecurityGate::new(config.allowed_chat_ids.clone());
@@ -251,7 +244,9 @@ impl TelegramEngine {
                     let bytes = voice_bytes.clone();
                     match tokio::task::spawn_blocking(move || {
                         voice_pipeline::process_voice_input(&bytes)
-                    }).await {
+                    })
+                    .await
+                    {
                         Ok(Ok(result)) => {
                             debug!(
                                 duration_secs = result.duration_secs,
@@ -261,15 +256,15 @@ impl TelegramEngine {
                             // TODO(stt-alpha): When STT is wired, transcribe pcm_16k
                             // and use transcript as `text` instead of description.
                             Some(result.duration_secs)
-                        }
+                        },
                         Ok(Err(e)) => {
                             warn!(error = %e, "voice pipeline: decode failed — falling back to text");
                             None
-                        }
+                        },
                         Err(e) => {
                             warn!(error = %e, "voice pipeline: spawn_blocking panicked");
                             None
-                        }
+                        },
                     }
                 } else {
                     None
@@ -288,7 +283,7 @@ impl TelegramEngine {
                             ),
                             None => continue, // Callback/system update — no content.
                         }
-                    }
+                    },
                 };
 
                 // Check for active dialogue first.
@@ -307,7 +302,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        }
+                        },
                         DialogueOutcome::Completed { kind: _, responses } => {
                             for resp in responses {
                                 let _ = queue.enqueue(
@@ -322,7 +317,7 @@ impl TelegramEngine {
                                     None,
                                 );
                             }
-                        }
+                        },
                         DialogueOutcome::InvalidInput(hint) => {
                             let _ = queue.enqueue(
                                 chat_id,
@@ -335,7 +330,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        }
+                        },
                         DialogueOutcome::TimedOut => {
                             let _ = queue.enqueue(
                                 chat_id,
@@ -348,7 +343,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        }
+                        },
                         DialogueOutcome::Cancelled => {
                             let _ = queue.enqueue(
                                 chat_id,
@@ -361,7 +356,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        }
+                        },
                     }
                     continue;
                 }
@@ -399,9 +394,12 @@ impl TelegramEngine {
                                         // is unavailable (alpha: always falls back).
                                         if voice_processed.is_some() {
                                             let tts_text = text.clone();
-                                            match voice_pipeline::synthesize_voice_response(&tts_text) {
+                                            match voice_pipeline::synthesize_voice_response(
+                                                &tts_text,
+                                            ) {
                                                 Ok(ogg_bytes) => {
-                                                    let duration = voice_processed.unwrap_or(0.0) as u32;
+                                                    let duration =
+                                                        voice_processed.unwrap_or(0.0) as u32;
                                                     let _ = queue.enqueue(
                                                         chat_id,
                                                         &MessageContent::Voice {
@@ -414,32 +412,38 @@ impl TelegramEngine {
                                                         3,
                                                         None,
                                                     );
-                                                }
+                                                },
                                                 Err(_) => {
                                                     // TTS unavailable (expected in alpha).
                                                     // Fall back to text response.
                                                     debug!("TTS unavailable — responding with text to voice message");
                                                     let _ = queue.enqueue(
                                                         chat_id,
-                                                        &MessageContent::Text { text, parse_mode: None },
+                                                        &MessageContent::Text {
+                                                            text,
+                                                            parse_mode: None,
+                                                        },
                                                         0,
                                                         3600,
                                                         3,
                                                         None,
                                                     );
-                                                }
+                                                },
                                             }
                                         } else {
                                             let _ = queue.enqueue(
                                                 chat_id,
-                                                &MessageContent::Text { text, parse_mode: None },
+                                                &MessageContent::Text {
+                                                    text,
+                                                    parse_mode: None,
+                                                },
                                                 0,
                                                 3600,
                                                 3,
                                                 None,
                                             );
                                         }
-                                    }
+                                    },
                                     HandlerResponse::Html(text) => {
                                         let _ = queue.enqueue(
                                             chat_id,
@@ -452,7 +456,7 @@ impl TelegramEngine {
                                             3,
                                             None,
                                         );
-                                    }
+                                    },
                                     HandlerResponse::Photo { data, caption } => {
                                         let _ = queue.enqueue(
                                             chat_id,
@@ -462,7 +466,7 @@ impl TelegramEngine {
                                             3,
                                             None,
                                         );
-                                    }
+                                    },
                                     HandlerResponse::Voice { text } => {
                                         let _ = queue.enqueue(
                                             chat_id,
@@ -475,10 +479,10 @@ impl TelegramEngine {
                                             3,
                                             Some("voice"),
                                         );
-                                    }
-                                    HandlerResponse::Empty => {}
+                                    },
+                                    HandlerResponse::Empty => {},
                                 }
-                            }
+                            },
                             Err(e) => {
                                 audit.record(
                                     chat_id,
@@ -496,9 +500,9 @@ impl TelegramEngine {
                                     3,
                                     None,
                                 );
-                            }
+                            },
                         }
-                    }
+                    },
                     Err(sec_err) => {
                         audit.record(
                             chat_id,
@@ -516,7 +520,7 @@ impl TelegramEngine {
                             3,
                             None,
                         );
-                    }
+                    },
                 }
             }
         };
@@ -557,7 +561,7 @@ impl TelegramEngine {
                     ),
                     None => return, // Callback/system update — no content.
                 }
-            }
+            },
         };
 
         // Check if there's an active dialogue for this chat.
@@ -594,9 +598,10 @@ impl TelegramEngine {
                 match result {
                     Ok(response) => {
                         // Layer 5: audit (success).
-                        self.audit.record(chat_id, &audit_summary, AuditOutcome::Allowed);
+                        self.audit
+                            .record(chat_id, &audit_summary, AuditOutcome::Allowed);
                         self.enqueue_response(chat_id, response);
-                    }
+                    },
                     Err(e) => {
                         // Layer 5: audit (failure).
                         self.audit.record(
@@ -615,9 +620,9 @@ impl TelegramEngine {
                             3,
                             None,
                         );
-                    }
+                    },
                 }
-            }
+            },
             Err(sec_err) => {
                 // Layer 5: audit (denied).
                 self.audit.record(
@@ -636,7 +641,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
         }
     }
 
@@ -659,12 +664,9 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             DialogueOutcome::Completed { kind, responses } => {
-                let msg = format!(
-                    "Dialogue completed: {:?}\nResponses: {:?}",
-                    kind, responses
-                );
+                let msg = format!("Dialogue completed: {:?}\nResponses: {:?}", kind, responses);
                 // TODO: Execute the action associated with the completed dialogue.
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -677,7 +679,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             DialogueOutcome::InvalidInput(hint) => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -690,7 +692,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             DialogueOutcome::TimedOut => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -703,7 +705,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             DialogueOutcome::Cancelled => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -716,7 +718,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
         }
     }
 
@@ -737,7 +739,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             HandlerResponse::Html(html) => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -750,7 +752,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             HandlerResponse::Photo { data, caption } => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -760,7 +762,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            }
+            },
             HandlerResponse::Voice { text } => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -773,8 +775,8 @@ impl TelegramEngine {
                     3,
                     Some("voice"),
                 );
-            }
-            HandlerResponse::Empty => {}
+            },
+            HandlerResponse::Empty => {},
         }
     }
 
@@ -940,10 +942,7 @@ mod tests {
         // Should be denied — check audit log.
         let entries = engine.audit().last_n(1);
         assert_eq!(entries.len(), 1);
-        assert!(matches!(
-            entries[0].outcome,
-            AuditOutcome::Denied(_)
-        ));
+        assert!(matches!(entries[0].outcome, AuditOutcome::Denied(_)));
     }
 
     #[tokio::test]

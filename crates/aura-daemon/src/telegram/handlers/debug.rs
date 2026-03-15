@@ -79,15 +79,15 @@ pub fn handle_dump(
                  allowed_chats:     {allowed}\n\
                  permission_entries: {perms}"
             )
-        }
+        },
         "queue" => {
             let pending = ctx.queue.pending_count().unwrap_or(0);
             format!("pending_messages:  {pending}")
-        }
+        },
         "audit" => {
             let len = ctx.audit.len();
             format!("audit_entries:     {len}")
-        }
+        },
         "config" => match ctx.config {
             Some(cfg) => {
                 format!(
@@ -124,7 +124,7 @@ pub fn handle_dump(
                     cfg.policy.default_effect,
                     cfg.policy.log_all_decisions,
                 )
-            }
+            },
             None => "AuraConfig not available in this handler context.".to_string(),
         },
         "channels" => {
@@ -133,13 +133,13 @@ pub fn handle_dump(
                 None => "disconnected (UserCommandTx not available)",
             };
             format!("daemon_pipeline:   {pipeline_status}")
-        }
+        },
         unknown => {
             return Ok(HandlerResponse::text(format!(
                 "Unknown component: {unknown}\n\
                  Available: security, queue, audit, config, channels"
             )));
-        }
+        },
     };
 
     let html = format!("<b>State Dump: {component}</b>\n\n<pre>{body}</pre>");
@@ -239,12 +239,11 @@ pub fn handle_goals(ctx: &HandlerContext<'_>) -> Result<HandlerResponse, AuraErr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::config::AuraConfig;
-    use crate::telegram::audit::AuditLog;
-    use crate::telegram::queue::MessageQueue;
-    use crate::telegram::security::SecurityGate;
     use rusqlite::Connection;
+
+    use super::*;
+    use crate::telegram::{audit::AuditLog, queue::MessageQueue, security::SecurityGate};
 
     fn make_ctx<'a>(
         sec: &'a mut SecurityGate,
@@ -275,7 +274,7 @@ mod tests {
                 assert!(html.contains("security"));
                 assert!(html.contains("locked"));
                 assert!(html.contains("pin_set"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -292,7 +291,7 @@ mod tests {
             HandlerResponse::Text(text) => {
                 assert!(text.contains("Unknown component"));
                 assert!(text.contains("foobar"));
-            }
+            },
             other => panic!("expected Text, got {other:?}"),
         }
     }
@@ -309,7 +308,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("config"));
                 assert!(html.contains("not available"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -336,7 +335,7 @@ mod tests {
                 assert!(html.contains("daemon.version"));
                 assert!(html.contains("voice.enabled"));
                 assert!(html.contains("policy.default_effect"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -353,7 +352,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("channels"));
                 assert!(html.contains("disconnected"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -373,7 +372,7 @@ mod tests {
                 assert!(html.contains("disconnected")); // no channel in test
                 assert!(html.contains("unlocked")); // not locked
                 assert!(html.contains("0")); // 0 pending
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -391,7 +390,7 @@ mod tests {
                 assert!(html.contains("Active Goals"));
                 assert!(html.contains("BDI"));
                 assert!(html.contains("disconnected"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -409,7 +408,7 @@ mod tests {
                 assert!(html.contains("Element Tree Graph"));
                 assert!(html.contains("com.android.settings"));
                 assert!(html.contains("AccessibilityService"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -426,7 +425,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Trace Request"));
                 assert!(html.contains("aura_daemon::neocortex"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }

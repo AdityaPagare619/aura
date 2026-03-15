@@ -10,17 +10,13 @@
 //! - Episodes older than 30 days with importance < 0.3
 //! - Accessed via full-text search on summaries
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
+use aura_types::{errors::MemError, ipc::MemoryTier, memory::MemoryResult};
 use lz4::block::{compress as lz4_compress, decompress as lz4_decompress};
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
-
-use aura_types::errors::MemError;
-use aura_types::ipc::MemoryTier;
-use aura_types::memory::MemoryResult;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -129,18 +125,17 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, MemError> {
     }
     let magic = &data[0..4];
     if magic != ARCHIVE_MAGIC {
-        return Err(MemError::SerializationFailed(
-            format!(
-                "bad archive magic: expected {:02X?}, got {:02X?}",
-                ARCHIVE_MAGIC, magic
-            ),
-        ));
+        return Err(MemError::SerializationFailed(format!(
+            "bad archive magic: expected {:02X?}, got {:02X?}",
+            ARCHIVE_MAGIC, magic
+        )));
     }
     let algo = data[4];
-    let orig_len =
-        u32::from_le_bytes(data[5..9].try_into().map_err(|_| {
-            MemError::SerializationFailed("invalid original-length field".into())
-        })?) as usize;
+    let orig_len = u32::from_le_bytes(
+        data[5..9]
+            .try_into()
+            .map_err(|_| MemError::SerializationFailed("invalid original-length field".into()))?,
+    ) as usize;
 
     // Handle empty data case - return empty vec directly
     if orig_len == 0 {
@@ -155,7 +150,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, MemError> {
                 "unknown compression algorithm: 0x{:02X}",
                 algo
             )));
-        }
+        },
     };
 
     if decoded.len() != orig_len {
@@ -169,15 +164,13 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, MemError> {
 }
 
 fn decompress_lz4(data: &[u8], _original_len: usize) -> Result<Vec<u8>, MemError> {
-    lz4_decompress(data, None).map_err(|e| {
-        MemError::SerializationFailed(format!("LZ4 decompression failed: {}", e))
-    })
+    lz4_decompress(data, None)
+        .map_err(|e| MemError::SerializationFailed(format!("LZ4 decompression failed: {}", e)))
 }
 
 fn decompress_zstd(data: &[u8], _original_len: usize) -> Result<Vec<u8>, MemError> {
-    zstd::decode_all(data).map_err(|e| {
-        MemError::SerializationFailed(format!("ZSTD decompression failed: {}", e))
-    })
+    zstd::decode_all(data)
+        .map_err(|e| MemError::SerializationFailed(format!("ZSTD decompression failed: {}", e)))
 }
 
 /// Estimate the compression ratio (for storage reporting).
@@ -233,9 +226,10 @@ impl ArchiveMemory {
     }
 
     fn migrate_sync(&self) -> Result<(), MemError> {
-        let conn = self.conn.try_lock().map_err(|_| {
-            MemError::MigrationFailed("could not lock db for migration".into())
-        })?;
+        let conn = self
+            .conn
+            .try_lock()
+            .map_err(|_| MemError::MigrationFailed("could not lock db for migration".into()))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS archive_blobs (
@@ -310,8 +304,7 @@ impl ArchiveMemory {
             let conn = conn.blocking_lock();
             let original_size = raw_content.len() as u32;
             let compressed = compress(&raw_content, compression_algo)?;
-            let ids_json =
-                serde_json::to_string(&source_ids).unwrap_or_else(|_| "[]".into());
+            let ids_json = serde_json::to_string(&source_ids).unwrap_or_else(|_| "[]".into());
 
             conn.execute(
                 "INSERT INTO archive_blobs (summary, compressed_data, original_size,
@@ -386,7 +379,7 @@ impl ArchiveMemory {
                 Some((summary, compressed)) => {
                     let data = decompress(&compressed)?;
                     Ok(Some((summary, data)))
-                }
+                },
                 None => Ok(None),
             }
         })
@@ -526,9 +519,7 @@ fn query_archive_fts(
 
     let mut results = Vec::new();
     for row in rows {
-        results.push(
-            row.map_err(|e| MemError::QueryFailed(format!("archive row failed: {}", e)))?,
-        );
+        results.push(row.map_err(|e| MemError::QueryFailed(format!("archive row failed: {}", e)))?);
     }
     Ok(results)
 }

@@ -67,18 +67,13 @@ pub enum FinancialEvent {
         description: String,
     },
     /// A spending event. Always positive (amount spent).
-    SpendingAction {
-        amount_cents: u64,
-        category: String,
-    },
+    SpendingAction { amount_cents: u64, category: String },
     /// A debt payment (reduces outstanding debt).
     DebtPayment { amount_cents: u64 },
     /// Income received.
     IncomeReceived { amount_cents: u64 },
     /// User set a monthly savings goal.
-    BudgetGoalSet {
-        monthly_savings_target_cents: u64,
-    },
+    BudgetGoalSet { monthly_savings_target_cents: u64 },
 }
 
 // ---------------------------------------------------------------------------
@@ -168,22 +163,22 @@ impl FinancialArc {
                     .total_savings_this_month_cents
                     .saturating_add(amount_cents);
                 self.push_savings_timestamp(now_ms);
-            }
+            },
             FinancialEvent::SpendingAction { .. } => {
                 self.push_spending_timestamp(now_ms);
-            }
+            },
             FinancialEvent::DebtPayment { .. } => {
                 self.recent_debt_payments = self.recent_debt_payments.saturating_add(1);
-            }
+            },
             FinancialEvent::IncomeReceived { .. } => {
                 // Income is a positive signal but we don't track amounts.
                 // Just noted for potential future scoring.
-            }
+            },
             FinancialEvent::BudgetGoalSet {
                 monthly_savings_target_cents,
             } => {
                 self.monthly_savings_target_cents = Some(monthly_savings_target_cents);
-            }
+            },
         }
 
         // Recompute rolling window counts from timestamps.
@@ -305,7 +300,7 @@ impl FinancialArc {
             Some(target) => {
                 let actual = self.total_savings_this_month_cents.max(0) as f32;
                 (actual / target as f32).clamp(0.0, 1.0)
-            }
+            },
         };
 
         // --- Weighted composite ---
@@ -341,9 +336,7 @@ impl FinancialArc {
         }
 
         // Enforce 24-hour cooldown.
-        if self.last_trigger_ms > 0
-            && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS
-        {
+        if self.last_trigger_ms > 0 && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS {
             return None;
         }
 
@@ -452,7 +445,10 @@ mod tests {
             );
         }
         let score = arc.score(T0 + TARGET_SAVINGS_ACTIONS_30D as u64 * ONE_HOUR_MS);
-        assert!(score > 0.5, "score should exceed neutral with full savings activity, got {score}");
+        assert!(
+            score > 0.5,
+            "score should exceed neutral with full savings activity, got {score}"
+        );
     }
 
     #[test]
@@ -519,7 +515,10 @@ mod tests {
         );
         let ctx = arc.to_llm_context();
         assert!(ctx.contains("[financial_arc]"), "must have arc tag");
-        assert!(ctx.contains("savings_actions_30d="), "must have savings count");
+        assert!(
+            ctx.contains("savings_actions_30d="),
+            "must have savings count"
+        );
         assert!(ctx.contains("health="), "must have health label");
     }
 

@@ -215,7 +215,7 @@ impl SycophancyGuard {
                         ),
                     }
                 }
-            }
+            },
         }
     }
 }
@@ -283,7 +283,7 @@ mod tests {
             SycophancyVerdict::Block(score) => {
                 // All 5 components maxed: (1+1+1+1+1)/5 = 1.0
                 assert!((score - 1.0).abs() < f32::EPSILON, "score={}", score);
-            }
+            },
             other => panic!("expected Block, got {:?}", other),
         }
     }

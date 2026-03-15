@@ -1,13 +1,14 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::RwLock;
-use tracing::{info, warn, error};
-use aura_types::extensions::{Ability, Lens, Recipe, Skill};
-use aura_types::manifest::{
-    CapabilityManifest, ExecutionTier, Permission, MAX_EXTENSION_CPU_PERCENT,
-    MAX_EXTENSION_EXECUTION_MS, MAX_EXTENSION_MEMORY_MB, MAX_MANIFEST_PERMISSIONS,
+use std::{collections::HashMap, sync::Arc, time::Instant};
+
+use aura_types::{
+    extensions::{Ability, Lens, Recipe, Skill},
+    manifest::{
+        CapabilityManifest, ExecutionTier, Permission, MAX_EXTENSION_CPU_PERCENT,
+        MAX_EXTENSION_EXECUTION_MS, MAX_EXTENSION_MEMORY_MB, MAX_MANIFEST_PERMISSIONS,
+    },
 };
+use tokio::sync::RwLock;
+use tracing::{error, info, warn};
 
 use super::sandbox::{ExtensionSandbox, SandboxState, SandboxStats, MAX_SANDBOXED_EXTENSIONS};
 
@@ -49,7 +50,7 @@ impl std::fmt::Display for LoaderError {
             Self::ManifestRejected(msg) => write!(f, "manifest rejected: {msg}"),
             Self::RegistryFull { kind, max } => {
                 write!(f, "{kind} registry full (max {max})")
-            }
+            },
             Self::SandboxError(msg) => write!(f, "sandbox error: {msg}"),
             Self::LifecycleError(msg) => write!(f, "lifecycle error: {msg}"),
             Self::PermissionError(msg) => write!(f, "permission error: {msg}"),
@@ -105,7 +106,9 @@ impl CapabilityLoader {
             skills: Arc::new(RwLock::new(HashMap::with_capacity(MAX_SKILLS))),
             lenses: Arc::new(RwLock::new(HashMap::with_capacity(MAX_LENSES))),
             recipes: Arc::new(RwLock::new(HashMap::with_capacity(MAX_RECIPES))),
-            sandboxes: Arc::new(RwLock::new(HashMap::with_capacity(MAX_SANDBOXED_EXTENSIONS))),
+            sandboxes: Arc::new(RwLock::new(HashMap::with_capacity(
+                MAX_SANDBOXED_EXTENSIONS,
+            ))),
         }
     }
 
@@ -132,8 +135,7 @@ impl CapabilityLoader {
         }
 
         // Create and activate sandbox.
-        let mut sandbox = ExtensionSandbox::new(manifest)
-            .map_err(LoaderError::SandboxError)?;
+        let mut sandbox = ExtensionSandbox::new(manifest).map_err(LoaderError::SandboxError)?;
         sandbox.activate();
 
         info!(
@@ -183,8 +185,7 @@ impl CapabilityLoader {
         }
 
         // Create and activate sandbox.
-        let mut sandbox = ExtensionSandbox::new(manifest)
-            .map_err(LoaderError::SandboxError)?;
+        let mut sandbox = ExtensionSandbox::new(manifest).map_err(LoaderError::SandboxError)?;
         sandbox.activate();
 
         info!(
@@ -207,11 +208,7 @@ impl CapabilityLoader {
     ///
     /// Lenses must be in `Functional` or `Observer` tier — they only
     /// transform context, never mutate state.
-    pub async fn register_lens(
-        &self,
-        id: String,
-        lens: Arc<dyn Lens>,
-    ) -> Result<(), LoaderError> {
+    pub async fn register_lens(&self, id: String, lens: Arc<dyn Lens>) -> Result<(), LoaderError> {
         let manifest = lens.manifest();
         self.full_manifest_validation(manifest)?;
 
@@ -234,14 +231,10 @@ impl CapabilityLoader {
             });
         }
 
-        let mut sandbox = ExtensionSandbox::new(manifest)
-            .map_err(LoaderError::SandboxError)?;
+        let mut sandbox = ExtensionSandbox::new(manifest).map_err(LoaderError::SandboxError)?;
         sandbox.activate();
 
-        info!(
-            "Registered Lens: {} (v{})",
-            manifest.name, manifest.version
-        );
+        info!("Registered Lens: {} (v{})", manifest.name, manifest.version);
         guard.insert(id.clone(), lens);
         drop(guard);
 
@@ -431,7 +424,7 @@ impl CapabilityLoader {
                             manifest.name, perm
                         )));
                     }
-                }
+                },
                 ExecutionTier::Observer => {
                     if matches!(
                         perm,
@@ -446,10 +439,10 @@ impl CapabilityLoader {
                             manifest.name, perm
                         )));
                     }
-                }
+                },
                 ExecutionTier::Advisor | ExecutionTier::Autonomous => {
                     // No tier restrictions for Advisor/Autonomous.
-                }
+                },
             }
         }
         Ok(())
@@ -471,15 +464,15 @@ impl CapabilityLoader {
                         "third-party '{}' cannot request WriteSemanticMemory",
                         manifest.name
                     )));
-                }
+                },
                 Permission::NetworkAccess => {
                     return Err(LoaderError::PermissionError(format!(
                         "third-party '{}' cannot request unrestricted NetworkAccess \
                          (use NetworkEgress with specific hosts)",
                         manifest.name
                     )));
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         Ok(())

@@ -8,8 +8,8 @@
 //! 2. **Episodic Memory** — stores the interaction as a retrievable episode.
 //! 3. **BDI Goals** — updates beliefs with execution evidence.
 //! 4. **Identity** — adjusts relationship trust via interaction recording.
-//! 5. **Anti-Sycophancy** — enriches the sycophancy guard with outcome-derived
-//!    behavioural signals (overconfidence, fallback patterns).
+//! 5. **Anti-Sycophancy** — enriches the sycophancy guard with outcome-derived behavioural signals
+//!    (overconfidence, fallback patterns).
 //!
 //! ## Ownership
 //!
@@ -18,16 +18,15 @@
 //! destructures [`LoopSubsystems`] before calling.  This satisfies the borrow
 //! checker without introducing `Arc<Mutex<>>` or trait-based indirection.
 
+use aura_types::outcome::{ExecutionOutcome, OutcomeResult, RouteKind, UserReaction};
 use tracing::{debug, info, warn};
 
-use aura_types::outcome::{ExecutionOutcome, OutcomeResult, RouteKind, UserReaction};
-
-use crate::arc::ArcManager;
-use crate::goals::scheduler::{BdiScheduler, Belief, BeliefSource};
-use crate::identity::anti_sycophancy::ResponseRecord;
-use crate::identity::relationship::InteractionType;
-use crate::identity::IdentityEngine;
-use crate::memory::AuraMemory;
+use crate::{
+    arc::ArcManager,
+    goals::scheduler::{BdiScheduler, Belief, BeliefSource},
+    identity::{anti_sycophancy::ResponseRecord, relationship::InteractionType, IdentityEngine},
+    memory::AuraMemory,
+};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -178,9 +177,7 @@ impl OutcomeBus {
         // remains functional.
         let learning_consented = identity.consent_tracker.has_consent("learning", now_ms);
         if !learning_consented {
-            tracing::info!(
-                "learning consent not granted — skipping learning/memory dispatch"
-            );
+            tracing::info!("learning consent not granted — skipping learning/memory dispatch");
         }
 
         let outcomes: Vec<ExecutionOutcome> = self.pending.drain(..).collect();
@@ -191,29 +188,27 @@ impl OutcomeBus {
             match outcome.result {
                 OutcomeResult::Success => {
                     self.recent_successes = self.recent_successes.saturating_add(1);
-                }
+                },
                 OutcomeResult::Failure | OutcomeResult::PartialSuccess => {
                     self.recent_failures = self.recent_failures.saturating_add(1);
-                }
+                },
                 OutcomeResult::UserCancelled => {
                     // Cancellations don't count as success or failure.
-                }
+                },
                 OutcomeResult::PolicyBlocked => {
                     self.recent_failures = self.recent_failures.saturating_add(1);
-                }
+                },
                 OutcomeResult::Timeout => {
                     self.recent_failures = self.recent_failures.saturating_add(1);
-                }
+                },
             }
 
             // Capture capability summary for GoalRegistry wiring.
             // The outcome's intent (task description) serves as the capability_id.
             let succeeded = matches!(outcome.result, OutcomeResult::Success);
             if !matches!(outcome.result, OutcomeResult::UserCancelled) {
-                self.recent_capability_outcomes.push((
-                    outcome.intent.clone(),
-                    succeeded,
-                ));
+                self.recent_capability_outcomes
+                    .push((outcome.intent.clone(), succeeded));
             }
 
             // 1. Learning + Dreaming — gated on consent
@@ -253,8 +248,7 @@ impl OutcomeBus {
         } else {
             debug!(
                 total = self.total_dispatched,
-                learning_consented,
-                "OutcomeBus outcome dispatched"
+                learning_consented, "OutcomeBus outcome dispatched"
             );
         }
     }
@@ -274,11 +268,7 @@ impl Default for OutcomeBus {
 ///
 /// Feeds:
 /// - Skill registry outcome tracking
-fn dispatch_to_learning(
-    arc: &mut ArcManager,
-    outcome: &ExecutionOutcome,
-    now_ms: u64,
-) {
+fn dispatch_to_learning(arc: &mut ArcManager, outcome: &ExecutionOutcome, now_ms: u64) {
     // --- Skill registry: record outcome for the intent as a "skill" ---
     let skill_success = matches!(
         outcome.result,
@@ -292,12 +282,10 @@ fn dispatch_to_learning(
         outcome.intent.hash(&mut h);
         h.finish()
     };
-    let _ = arc.learning.skills.record_outcome(
-        intent_id,
-        skill_success,
-        outcome.duration_ms,
-        now_ms,
-    );
+    let _ =
+        arc.learning
+            .skills
+            .record_outcome(intent_id, skill_success, outcome.duration_ms, now_ms);
 
     debug!(
         intent = %outcome.intent,
@@ -345,11 +333,7 @@ fn result_to_concept(result: OutcomeResult) -> String {
 /// The episode captures what happened, how well it went, and contextual tags.
 /// This allows future retrieval by the dreaming engine, the contextor, and
 /// the proactive engine when they need to recall past interaction quality.
-async fn dispatch_to_memory(
-    memory: &AuraMemory,
-    outcome: &ExecutionOutcome,
-    now_ms: u64,
-) {
+async fn dispatch_to_memory(memory: &AuraMemory, outcome: &ExecutionOutcome, now_ms: u64) {
     // Emotional valence: map effectiveness score from [0,1] to [-1,1]
     // where 0.5 effectiveness → 0.0 valence (neutral).
     // effectiveness = result_weight * 0.5 + confidence * 0.3 + reaction_weight * 0.2
@@ -369,7 +353,8 @@ async fn dispatch_to_memory(
         UserReaction::Repetition => 0.1,
         UserReaction::ExplicitNegative => 0.0,
     };
-    let effectiveness = (result_weight * 0.5 + outcome.confidence * 0.3 + reaction_weight * 0.2).clamp(0.0, 1.0);
+    let effectiveness =
+        (result_weight * 0.5 + outcome.confidence * 0.3 + reaction_weight * 0.2).clamp(0.0, 1.0);
     let emotional_valence = (effectiveness - 0.5) * 2.0;
 
     // Base importance: combine confidence and result severity.
@@ -414,17 +399,20 @@ async fn dispatch_to_memory(
         },
     );
 
-    match memory.store_episodic(content, emotional_valence, base_importance, tags, now_ms).await {
+    match memory
+        .store_episodic(content, emotional_valence, base_importance, tags, now_ms)
+        .await
+    {
         Ok(episode_id) => {
             debug!(episode_id, intent = %outcome.intent, "episodic memory stored");
-        }
+        },
         Err(e) => {
             warn!(
                 intent = %outcome.intent,
                 error = %e,
                 "failed to store episodic memory for outcome"
             );
-        }
+        },
     }
 }
 
@@ -465,11 +453,7 @@ fn result_tag(result: OutcomeResult) -> &'static str {
 /// These beliefs feed the deliberation cycle: desires become intentions
 /// only when the belief base shows they are feasible.  Outcome beliefs
 /// provide the "did it work last time?" evidence.
-fn dispatch_to_goals(
-    bdi: &mut BdiScheduler,
-    outcome: &ExecutionOutcome,
-    now_ms: u64,
-) {
+fn dispatch_to_goals(bdi: &mut BdiScheduler, outcome: &ExecutionOutcome, now_ms: u64) {
     // Belief 1: per-intent outcome tracking
     let intent_belief = Belief {
         key: format!("outcome:{}", outcome.intent),
@@ -528,11 +512,7 @@ fn dispatch_to_goals(
 /// - Successful interactions build trust (Positive).
 /// - Failed interactions erode trust slightly (Negative).
 /// - Cancelled/blocked interactions are neutral (user or policy choice, not AURA failure).
-fn dispatch_to_identity(
-    identity: &mut IdentityEngine,
-    outcome: &ExecutionOutcome,
-    now_ms: u64,
-) {
+fn dispatch_to_identity(identity: &mut IdentityEngine, outcome: &ExecutionOutcome, now_ms: u64) {
     let interaction = match outcome.result {
         OutcomeResult::Success | OutcomeResult::PartialSuccess => InteractionType::Positive,
         OutcomeResult::Failure | OutcomeResult::Timeout => InteractionType::Negative,
@@ -558,22 +538,19 @@ fn dispatch_to_identity(
 /// the zero-template principle).  Instead, it derives structural signals from
 /// the outcome metadata:
 ///
-/// - **agreed**: Outcome was successful AND confidence was high → AURA likely
-///   affirmed the user's request without pushback.
-/// - **hedged**: Confidence was low → AURA was uncertain, which manifests as
-///   hedging language in practice.
-/// - **reversed_opinion**: Outcome was a fallback → AURA changed strategy
-///   mid-execution, analogous to opinion reversal.
-/// - **praised**: Always false here — praise detection requires response content
-///   analysis which happens in the response pipeline, not the outcome bus.
+/// - **agreed**: Outcome was successful AND confidence was high → AURA likely affirmed the user's
+///   request without pushback.
+/// - **hedged**: Confidence was low → AURA was uncertain, which manifests as hedging language in
+///   practice.
+/// - **reversed_opinion**: Outcome was a fallback → AURA changed strategy mid-execution, analogous
+///   to opinion reversal.
+/// - **praised**: Always false here — praise detection requires response content analysis which
+///   happens in the response pipeline, not the outcome bus.
 /// - **challenged**: Outcome was PolicyBlocked → AURA pushed back on the request.
 ///
 /// These are structural/behavioural signals, not keyword-based.  The sycophancy
 /// guard's sliding window will accumulate these patterns and detect trends.
-fn dispatch_to_anti_sycophancy(
-    identity: &mut IdentityEngine,
-    outcome: &ExecutionOutcome,
-) {
+fn dispatch_to_anti_sycophancy(identity: &mut IdentityEngine, outcome: &ExecutionOutcome) {
     let record = ResponseRecord {
         agreed: outcome.is_success() && outcome.confidence >= 0.7,
         hedged: outcome.confidence < 0.4,

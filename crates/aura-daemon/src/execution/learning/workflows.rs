@@ -14,8 +14,8 @@
 //! - **Invariants**: Must have observed a strict sequence `>= 3` times before synthesizing.
 
 use std::collections::{HashMap, VecDeque};
-use aura_types::actions::ActionType;
-use aura_types::etg::ActionPlan;
+
+use aura_types::{actions::ActionType, etg::ActionPlan};
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of execution traces retained in the history buffer.
@@ -85,7 +85,9 @@ impl WorkflowObserver {
             // We only care about workflows that are at least 3 steps long
             if trace.steps.len() >= 3 {
                 let key = serde_json::to_string(&trace.steps).unwrap_or_default();
-                let entry = sequence_counts.entry(key).or_insert_with(|| (trace.steps.clone(), 0));
+                let entry = sequence_counts
+                    .entry(key)
+                    .or_insert_with(|| (trace.steps.clone(), 0));
                 entry.1 += 1;
             }
         }
@@ -109,8 +111,9 @@ impl WorkflowObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::actions::ActionType;
+
+    use super::*;
 
     #[test]
     fn test_workflow_extraction() {
@@ -119,7 +122,9 @@ mod tests {
             goal_description: "Check messages".to_string(),
             steps: vec![
                 aura_types::dsl::DslStep {
-                    action: ActionType::OpenApp { package: "com.whatsapp".to_string() },
+                    action: ActionType::OpenApp {
+                        package: "com.whatsapp".to_string(),
+                    },
                     target: None,
                     timeout_ms: 1000,
                     on_failure: Default::default(),
@@ -156,7 +161,9 @@ mod tests {
         observer.observe_success(&plan, 200);
         observer.observe_success(&plan, 300);
 
-        let candidate = observer.extract_automation_candidate().expect("Should extract candidate");
+        let candidate = observer
+            .extract_automation_candidate()
+            .expect("Should extract candidate");
         assert_eq!(candidate.frequency, 3);
         assert_eq!(candidate.sequence.len(), 3);
     }

@@ -248,8 +248,7 @@ impl ConnectivityManager {
     /// Only one callback is supported; calling this again replaces the previous one.
     pub fn set_on_change<F>(&mut self, callback: F)
     where
-        F: Fn(NetworkType, NetworkQuality) + Send + 'static,
-    {
+        F: Fn(NetworkType, NetworkQuality) + Send + 'static, {
         self.on_change = Some(Box::new(callback));
     }
 
@@ -314,7 +313,7 @@ impl ConnectivityManager {
                     // WiFi without RSSI data — assume Good.
                     NetworkQuality::Good
                 }
-            }
+            },
             NetworkType::Cellular => {
                 // Cellular is always at most Fair if metered, Good if unmetered.
                 if self.is_metered {
@@ -322,7 +321,7 @@ impl ConnectivityManager {
                 } else {
                     NetworkQuality::Good
                 }
-            }
+            },
             NetworkType::Ethernet => NetworkQuality::Excellent,
             NetworkType::None => NetworkQuality::Offline,
         }
@@ -607,8 +606,10 @@ mod tests {
 
     #[test]
     fn test_change_callback_fires() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
 
         let fired = Arc::new(AtomicBool::new(false));
         let fired_clone = fired.clone();

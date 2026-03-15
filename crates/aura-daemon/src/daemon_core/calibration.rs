@@ -4,10 +4,9 @@
 //! Runs during onboarding Phase 5 (or standalone) to understand what the
 //! hardware can do so AURA can pick the right model tier and budget.
 
+use aura_types::errors::OnboardingError;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-
-use aura_types::errors::OnboardingError;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -467,7 +466,7 @@ impl CalibrationResult {
                 let cal: Self = serde_json::from_slice(&data)
                     .map_err(|e| OnboardingError::CalibrationFailed(format!("deserialize: {e}")))?;
                 Ok(Some(cal))
-            }
+            },
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::CalibrationFailed(format!("load: {e}"))),
         }

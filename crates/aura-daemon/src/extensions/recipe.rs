@@ -1,6 +1,9 @@
 use std::collections::HashMap;
-use aura_types::extensions::{Recipe, RecipeStep};
-use aura_types::manifest::CapabilityManifest;
+
+use aura_types::{
+    extensions::{Recipe, RecipeStep},
+    manifest::CapabilityManifest,
+};
 use serde::{Deserialize, Serialize};
 
 /// Recipe template for privacy-safe export and import.
@@ -29,9 +32,9 @@ pub struct TemplateStep {
 }
 
 impl RecipeTemplate {
-    /// Extracts a template from a concrete Recipe, replacing specific arguments with role placeholders.
-    /// This is a simplified version; a real implementation would use LLM or advanced heuristics
-    /// to detect PII and replace it with semantic roles.
+    /// Extracts a template from a concrete Recipe, replacing specific arguments with role
+    /// placeholders. This is a simplified version; a real implementation would use LLM or
+    /// advanced heuristics to detect PII and replace it with semantic roles.
     pub fn from_recipe(recipe: &Recipe, roles: Vec<RoleBinding>) -> Self {
         let mut template_steps = Vec::new();
 
@@ -62,7 +65,11 @@ impl RecipeTemplate {
     }
 
     /// Binds a Template back into an executable Recipe by providing concrete values for the roles.
-    pub fn instantiate(&self, bindings: &HashMap<String, String>, new_manifest: CapabilityManifest) -> Recipe {
+    pub fn instantiate(
+        &self,
+        bindings: &HashMap<String, String>,
+        new_manifest: CapabilityManifest,
+    ) -> Recipe {
         let mut steps = Vec::new();
 
         for t_step in &self.template_steps {

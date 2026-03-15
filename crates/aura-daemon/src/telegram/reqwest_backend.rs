@@ -23,9 +23,9 @@ impl ReqwestHttpBackend {
             .timeout(Duration::from_secs(30))
             .build()
             .expect("reqwest client build");
-        
+
         debug!(base_url = %base_url, "initialized reqwest HTTP backend");
-        
+
         Self { client, base_url }
     }
 
@@ -42,43 +42,39 @@ impl ReqwestHttpBackend {
 impl HttpBackend for ReqwestHttpBackend {
     async fn get(&self, url: &str) -> Result<Vec<u8>, AuraError> {
         let full_url = self.build_url(url);
-        
+
         debug!(url = %full_url, "GET request");
-        
-        let response = self.client
-            .get(&full_url)
-            .send()
-            .await
-            .map_err(|e| {
-                warn!(error = %e, url = %full_url, "HTTP GET failed");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-        
+
+        let response = self.client.get(&full_url).send().await.map_err(|e| {
+            warn!(error = %e, url = %full_url, "HTTP GET failed");
+            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+        })?;
+
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!(status = %status, body = %body, "HTTP GET returned error");
-            return Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed));
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
         }
-        
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "failed to read response body");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-        
+
+        let bytes = response.bytes().await.map_err(|e| {
+            warn!(error = %e, "failed to read response body");
+            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+        })?;
+
         debug!(bytes = bytes.len(), "GET request successful");
         Ok(bytes.to_vec())
     }
 
     async fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError> {
         let full_url = self.build_url(url);
-        
+
         debug!(url = %full_url, bytes = body.len(), "POST JSON request");
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&full_url)
             .header("Content-Type", "application/json")
             .body(body.to_vec())
@@ -88,22 +84,21 @@ impl HttpBackend for ReqwestHttpBackend {
                 warn!(error = %e, url = %full_url, "HTTP POST failed");
                 AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
             })?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!(status = %status, body = %body, "HTTP POST returned error");
-            return Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed));
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
         }
-        
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "failed to read response body");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-        
+
+        let bytes = response.bytes().await.map_err(|e| {
+            warn!(error = %e, "failed to read response body");
+            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+        })?;
+
         debug!(bytes = bytes.len(), "POST JSON request successful");
         Ok(bytes.to_vec())
     }
@@ -115,16 +110,16 @@ impl HttpBackend for ReqwestHttpBackend {
         file_field: Option<(&str, Vec<u8>, &str)>,
     ) -> Result<Vec<u8>, AuraError> {
         let full_url = self.build_url(url);
-        
+
         debug!(url = %full_url, fields = fields.len(), has_file = file_field.is_some(), "POST multipart request");
-        
+
         let mut form = multipart::Form::new();
-        
+
         // Convert borrowed fields to owned values
         for (key, value) in fields {
             form = form.text(key.to_string(), value);
         }
-        
+
         if let Some((field_name, file_data, mime_type)) = file_field {
             let part = multipart::Part::bytes(file_data)
                 .mime_str(mime_type)
@@ -134,8 +129,9 @@ impl HttpBackend for ReqwestHttpBackend {
                 })?;
             form = form.part(field_name.to_string(), part);
         }
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&full_url)
             .multipart(form)
             .send()
@@ -144,22 +140,21 @@ impl HttpBackend for ReqwestHttpBackend {
                 warn!(error = %e, url = %full_url, "HTTP multipart POST failed");
                 AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
             })?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!(status = %status, body = %body, "HTTP multipart POST returned error");
-            return Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed));
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
         }
-        
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "failed to read multipart response body");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-        
+
+        let bytes = response.bytes().await.map_err(|e| {
+            warn!(error = %e, "failed to read multipart response body");
+            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+        })?;
+
         debug!(bytes = bytes.len(), "POST multipart request successful");
         Ok(bytes.to_vec())
     }

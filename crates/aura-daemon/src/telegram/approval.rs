@@ -8,14 +8,15 @@
 //! The flow:
 //! 1. AURA's planner proposes an action.
 //! 2. PolicyGate evaluates the action against the current trust level.
-//! 3. If approval is required, a pending request is created and the user
-//!    is prompted via Telegram with approve/reject buttons.
-//! 4. The action executes only after explicit approval (or auto-approves
-//!    at high trust levels).
+//! 3. If approval is required, a pending request is created and the user is prompted via Telegram
+//!    with approve/reject buttons.
+//! 4. The action executes only after explicit approval (or auto-approves at high trust levels).
 //! 5. Expired requests are automatically rejected after the TTL.
 
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use serde::{Deserialize, Serialize};
 use tracing::{instrument, warn};
@@ -213,7 +214,10 @@ impl PolicyGate {
         }
 
         req.state = ApprovalState::Approved;
-        Ok(self.requests.get(&id).expect("request was just modified via get_mut; key must exist"))
+        Ok(self
+            .requests
+            .get(&id)
+            .expect("request was just modified via get_mut; key must exist"))
     }
 
     /// Reject a pending request.
@@ -229,7 +233,10 @@ impl PolicyGate {
         }
 
         req.state = ApprovalState::Rejected;
-        Ok(self.requests.get(&id).expect("request was just modified via get_mut; key must exist"))
+        Ok(self
+            .requests
+            .get(&id)
+            .expect("request was just modified via get_mut; key must exist"))
     }
 
     /// Expire all timed-out requests.
@@ -355,10 +362,7 @@ mod tests {
     fn test_high_risk_always_needs_approval() {
         let mut gate = PolicyGate::new(300);
         let result = gate.evaluate("delete file".into(), RiskLevel::High, 42);
-        assert!(
-            result.is_some(),
-            "high risk always requires user approval"
-        );
+        assert!(result.is_some(), "high risk always requires user approval");
     }
 
     #[test]

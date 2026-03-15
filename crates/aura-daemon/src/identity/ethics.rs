@@ -166,7 +166,7 @@ impl PolicyGate {
                 PolicyVerdict::Block {
                     reason: format!("{} (escalated: trust={:.2})", reason, t),
                 }
-            }
+            },
             // High trust: downgrade Audit → Allow
             (PolicyVerdict::Audit { reason }, t) if t > 0.6 => {
                 tracing::info!(
@@ -175,7 +175,7 @@ impl PolicyGate {
                     "high trust — downgrading audit to allow"
                 );
                 PolicyVerdict::Allow
-            }
+            },
             // Medium trust or Block/Allow: no change
             _ => base_verdict,
         }
@@ -505,7 +505,7 @@ impl TruthFramework {
                             domain_name
                         ));
                     }
-                }
+                },
                 super::epistemic::EpistemicLevel::CanDiscover => {
                     // AURA doesn't know but COULD find out
                     let has_hedge = lower.contains("i could check")
@@ -518,7 +518,7 @@ impl TruthFramework {
                             domain_name
                         ));
                     }
-                }
+                },
                 super::epistemic::EpistemicLevel::Believes => {
                     // AURA has some evidence but not strong — mild penalty
                     // without hedge language
@@ -532,10 +532,10 @@ impl TruthFramework {
                             domain_name
                         ));
                     }
-                }
+                },
                 super::epistemic::EpistemicLevel::Knows => {
                     // Full confidence — no penalty needed
-                }
+                },
             }
         }
 

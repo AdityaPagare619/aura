@@ -16,23 +16,31 @@
 //! The main entry point is `InferenceEngine::infer()`, which decides the mode
 //! and runs the full pipeline including cascade retry and reflection.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
-use aura_types::actions::{ActionType, ElementAssertion, TargetSelector};
-use aura_types::dsl::{DslStep, FailureStrategy};
-use aura_types::etg::{ActionPlan, PlanSource};
-use aura_types::ipc::{InferenceMode, ModelParams, NeocortexToDaemon};
+use aura_types::{
+    actions::{ActionType, ElementAssertion, TargetSelector},
+    dsl::{DslStep, FailureStrategy},
+    etg::{ActionPlan, PlanSource},
+    ipc::{InferenceMode, ModelParams, NeocortexToDaemon},
+};
 use tracing::{debug, error, info, warn};
 
 #[allow(unused_imports)] // `context::` module alias used at context::DEFAULT_CONTEXT_BUDGET
 use crate::context::{self, AssembledPrompt, TokenTracker};
-use crate::grammar::{self, ChainOfThoughtOutput, GrammarKind};
-use crate::model::{self, ModelManager};
-use crate::model_capabilities::ModelCapabilities;
-use crate::prompts::{self, PromptSlots, ReActStep};
-use crate::tool_format::{self, ParsedOutput};
+use crate::{
+    grammar::{self, ChainOfThoughtOutput, GrammarKind},
+    model::{self, ModelManager},
+    model_capabilities::ModelCapabilities,
+    prompts::{self, PromptSlots, ReActStep},
+    tool_format::{self, ParsedOutput},
+};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -254,13 +262,13 @@ impl InferenceEngine {
             Some(m) => {
                 m.last_used = Instant::now();
                 m.is_stub()
-            }
+            },
             None => {
                 return NeocortexToDaemon::Error {
                     code: error_codes::MODEL_NOT_LOADED,
                     message: "model not loaded".into(),
                 };
-            }
+            },
         };
 
         let start = Instant::now();
@@ -275,12 +283,12 @@ impl InferenceEngine {
         let use_dgs = prompt.system_prompt.contains("DGS TEMPLATE:");
         // LLM-MED-2 / GAP-MED-007: Tiered Best-of-N sampling strategy.
         // - Strategist + CoT: full BON (N=3) — maximum quality for planning tasks.
-        // - Normal + high_stakes: lightweight BON (N=2) — quality boost for important
-        //   but non-planning queries (e.g. financial questions, health advice).
+        // - Normal + high_stakes: lightweight BON (N=2) — quality boost for important but
+        //   non-planning queries (e.g. financial questions, health advice).
         // - All other modes: no BON — latency-sensitive or low-stakes.
         let use_bon = match mode {
             InferenceMode::Strategist if prompt.cot_enabled => true,
-            InferenceMode::Normal if prompt.high_stakes => true,
+            InferenceMode::Conversational if prompt.high_stakes => true,
             _ => false,
         };
 
@@ -363,7 +371,7 @@ impl InferenceEngine {
             Err(e) => {
                 warn!(error = %e, "output parsing failed, will return raw");
                 None
-            }
+            },
         };
 
         // Estimate confidence
@@ -398,7 +406,6 @@ impl InferenceEngine {
                 }
             }
         }
-        
 
         let elapsed = start.elapsed().as_millis() as u64;
         info!(
@@ -515,7 +522,7 @@ impl InferenceEngine {
                 None => {
                     debug!("already at highest tier, accepting output");
                     return Ok(outcome);
-                }
+                },
             };
 
             send_progress(NeocortexToDaemon::Progress {
@@ -541,11 +548,11 @@ impl InferenceEngine {
                     );
                     last_outcome = Some(outcome);
                     // Loop again with the new model
-                }
+                },
                 Err(e) => {
                     warn!(error = %e, "cascade escalation failed, accepting current output");
                     return Ok(outcome);
-                }
+                },
             }
         }
     }
@@ -722,7 +729,7 @@ impl InferenceEngine {
             Err(e) => {
                 warn!(error = %e, "ReAct final output parsing failed");
                 None
-            }
+            },
         };
 
         let mut confidence = estimate_confidence_from_output(&effective_output, mode, None, false);
@@ -792,8 +799,8 @@ impl InferenceEngine {
     ) -> Result<InferenceOutcome, NeocortexToDaemon> {
         // LLM-MED-2: pick sample count based on mode tier.
         let n = match mode {
-            InferenceMode::Strategist => BON_SAMPLES,   // N=3
-            _                         => BON_SAMPLES_NORMAL, // N=2 (Normal high-stakes)
+            InferenceMode::Strategist => BON_SAMPLES, // N=3
+            _ => BON_SAMPLES_NORMAL,                  // N=2 (Normal high-stakes)
         };
         let mut outcomes: Vec<InferenceOutcome> = Vec::with_capacity(n);
         let slots = PromptSlots {
@@ -838,7 +845,7 @@ impl InferenceEngine {
                 Err(_err) => {
                     warn!(sample = i, "BoN sample failed, skipping");
                     continue;
-                }
+                },
             };
 
             if gen_result.was_cancelled {
@@ -920,7 +927,7 @@ impl InferenceEngine {
             None => {
                 warn!("No model loaded during reflection, skipping.");
                 return outcome;
-            }
+            },
         };
 
         send_progress(NeocortexToDaemon::Progress {
@@ -961,15 +968,15 @@ impl InferenceEngine {
         // model. This is NOT an error — it's a deliberate speed/quality tradeoff:
         //
         // Why the smallest model works for reflection:
-        //   1. Reflection is binary (accept/reject), not generative — needs pattern
-        //      matching, not creative reasoning.
-        //   2. Latency budget: 100-300ms at temp=0.1, max_tokens=50. Using the 8B
-        //      model for self-review would double inference time for marginal gain.
-        //   3. The reflection prompt (see prompts::reflection_config()) is tightly
-        //      constrained via GBNF grammar (GrammarKind::ReflectionVerdict),
-        //      limiting output to a structured verdict format.
-        //   4. Empirical: 1.5B achieves >95% agreement with 8B on binary verdicts
-        //      for well-structured reflection prompts.
+        //   1. Reflection is binary (accept/reject), not generative — needs pattern matching, not
+        //      creative reasoning.
+        //   2. Latency budget: 100-300ms at temp=0.1, max_tokens=50. Using the 8B model for
+        //      self-review would double inference time for marginal gain.
+        //   3. The reflection prompt (see prompts::reflection_config()) is tightly constrained via
+        //      GBNF grammar (GrammarKind::ReflectionVerdict), limiting output to a structured
+        //      verdict format.
+        //   4. Empirical: 1.5B achieves >95% agreement with 8B on binary verdicts for
+        //      well-structured reflection prompts.
         //
         // Future: If reflection quality degrades with more complex tasks, consider
         // upgrading to Cortex3_8B for the Strategist mode reflection pass only.
@@ -980,7 +987,7 @@ impl InferenceEngine {
         };
 
         let switched = manager.cascade_to(reflection_tier, &params).is_ok();
-        
+
         // Execute the reflection generation
         let gen_result = match self.generate_tokens(manager, &reflection_assembled, send_progress) {
             Ok(res) => res,
@@ -994,7 +1001,7 @@ impl InferenceEngine {
                     let _ = manager.cascade_to(original_tier, &switch_back_params);
                 }
                 return outcome;
-            }
+            },
         };
 
         // Switch back to original tier if we successfully switched before.
@@ -1033,13 +1040,13 @@ impl InferenceEngine {
                     );
                     outcome.confidence *= 0.85;
                 }
-            }
+            },
             Err(_) => {
                 warn!(
                     raw = ?gen_result.text,
                     "reflection: could not parse verdict JSON, treating as implicit pass"
                 );
-            }
+            },
         }
 
         outcome
@@ -1071,7 +1078,7 @@ impl InferenceEngine {
                     code: error_codes::MODEL_NOT_LOADED,
                     message: "model not loaded during token generation".into(),
                 });
-            }
+            },
         };
 
         let backend = aura_llama_sys::backend();
@@ -1123,30 +1130,30 @@ impl InferenceEngine {
         // the guard pattern below.
         let grammar_active = if let Some(grammar_kind) = prompt.grammar_kind {
             match grammar::compile_grammar(grammar_kind) {
-                Ok(compiled) => {
-                    match backend.set_grammar(&compiled.gbnf_string) {
-                        Ok(()) => {
-                            info!(?grammar_kind, "Layer 0: GBNF grammar activated for constrained decoding");
-                            true
-                        }
-                        Err(e) => {
-                            warn!(
-                                error = %e,
-                                ?grammar_kind,
-                                "Layer 0: grammar activation failed, falling back to post-hoc validation"
-                            );
-                            false
-                        }
-                    }
-                }
-                Err(e) => {
+                Some(compiled) => match backend.set_grammar(&compiled.gbnf_string) {
+                    Ok(()) => {
+                        info!(
+                            ?grammar_kind,
+                            "Layer 0: GBNF grammar activated for constrained decoding"
+                        );
+                        true
+                    },
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            ?grammar_kind,
+                            "Layer 0: grammar activation failed, falling back to post-hoc validation"
+                        );
+                        false
+                    },
+                },
+                None => {
                     warn!(
-                        error = %e,
                         ?grammar_kind,
-                        "Layer 0: grammar compilation failed, falling back to post-hoc validation"
+                        "Layer 0: grammar compilation returned None, falling back to post-hoc validation"
                     );
                     false
-                }
+                },
             }
         } else {
             false
@@ -1278,8 +1285,7 @@ impl InferenceEngine {
             let mlp = (logprob_sum / logprob_count as f64) as f32;
             debug!(
                 mean_logprob = mlp,
-                logprob_count,
-                "computed mean logprob from token generation"
+                logprob_count, "computed mean logprob from token generation"
             );
             Some(mlp)
         } else {
@@ -1351,7 +1357,7 @@ fn decode_tokens(manager: &ModelManager, tokens: &[aura_llama_sys::LlamaToken]) 
         None => {
             error!("attempted to decode tokens without a loaded model");
             return String::new();
-        }
+        },
     };
 
     aura_llama_sys::backend()
@@ -1369,7 +1375,10 @@ fn convert_outcome_to_ipc(outcome: InferenceOutcome, mode: InferenceMode) -> Neo
     // If we have a parsed output, use it directly
     if let Some(parsed) = outcome.parsed {
         return match parsed {
-            ParsedOutput::Plan(plan) => NeocortexToDaemon::PlanReady { plan, tokens_used: 0 },
+            ParsedOutput::Plan(plan) => NeocortexToDaemon::PlanReady {
+                plan,
+                tokens_used: 0,
+            },
             ParsedOutput::Steps(steps) => NeocortexToDaemon::ComposedScript { steps },
             ParsedOutput::Reply(text) => NeocortexToDaemon::ConversationReply {
                 text,
@@ -1382,7 +1391,10 @@ fn convert_outcome_to_ipc(outcome: InferenceOutcome, mode: InferenceMode) -> Neo
     // Fallback: parse from raw output
     match tool_format::parse_for_mode(mode, &outcome.raw_output) {
         Ok(parsed) => match parsed {
-            ParsedOutput::Plan(plan) => NeocortexToDaemon::PlanReady { plan, tokens_used: 0 },
+            ParsedOutput::Plan(plan) => NeocortexToDaemon::PlanReady {
+                plan,
+                tokens_used: 0,
+            },
             ParsedOutput::Steps(steps) => NeocortexToDaemon::ComposedScript { steps },
             ParsedOutput::Reply(text) => NeocortexToDaemon::ConversationReply {
                 text,
@@ -1398,7 +1410,7 @@ fn convert_outcome_to_ipc(outcome: InferenceOutcome, mode: InferenceMode) -> Neo
                 mood_hint: Some(0.0),
                 tokens_used: 0,
             }
-        }
+        },
     }
 }
 
@@ -1430,7 +1442,7 @@ fn unwrap_cot_output(raw: &str) -> (String, Option<String>) {
         Ok(cot) if !cot.thinking.is_empty() => {
             debug!(thinking_len = cot.thinking.len(), "unwrapped CoT thinking");
             (cot.action, Some(cot.thinking))
-        }
+        },
         Ok(cot) => (cot.action, None),
         Err(_) => (raw.to_string(), None),
     }
@@ -1527,20 +1539,20 @@ fn strip_stop_sequences(text: &str, stop_sequences: &[&str]) -> String {
 /// Instead of flat additive magic numbers, each signal contributes an
 /// independent likelihood ratio. The signals are:
 ///
-/// 1. **Logprob channel** (weight 0.40): Mean log-probability from the model,
-///    mapped through a sigmoid-like transfer function calibrated to the
-///    typical range of [-4.0, 0.0] for quantized 1.5B–8B LLMs.
+/// 1. **Logprob channel** (weight 0.40): Mean log-probability from the model, mapped through a
+///    sigmoid-like transfer function calibrated to the typical range of [-4.0, 0.0] for quantized
+///    1.5B–8B LLMs.
 ///
-/// 2. **Structural validity channel** (weight 0.30): Whether the output
-///    matches the expected schema for its mode (JSON structure for Planner,
-///    array for Composer, non-trivial text for Conversational).
+/// 2. **Structural validity channel** (weight 0.30): Whether the output matches the expected schema
+///    for its mode (JSON structure for Planner, array for Composer, non-trivial text for
+///    Conversational).
 ///
-/// 3. **Length normality channel** (weight 0.15): Gaussian-shaped score
-///    where the mode-specific expected length yields maximum confidence,
-///    with symmetric decay for too-short or too-long outputs.
+/// 3. **Length normality channel** (weight 0.15): Gaussian-shaped score where the mode-specific
+///    expected length yields maximum confidence, with symmetric decay for too-short or too-long
+///    outputs.
 ///
-/// 4. **Termination channel** (weight 0.15): Whether generation stopped
-///    naturally (EOS or stop sequence) vs being truncated.
+/// 4. **Termination channel** (weight 0.15): Whether generation stopped naturally (EOS or stop
+///    sequence) vs being truncated.
 ///
 /// Final confidence = weighted sum of channel scores, clamped to [0.05, 0.99].
 fn estimate_confidence_from_output(
@@ -1564,7 +1576,7 @@ fn estimate_confidence_from_output(
             let k = 2.0_f32;
             let midpoint = -1.5_f32;
             1.0 / (1.0 + (-k * (lp - midpoint)).exp())
-        }
+        },
         None => 0.5, // Uninformative prior
     };
 
@@ -1580,13 +1592,17 @@ fn estimate_confidence_from_output(
 
             // Full schema match = 1.0, partial = 0.5, nothing = 0.1
             if has_goal && has_steps && has_action {
-                if has_target { 1.0 } else { 0.9 }
+                if has_target {
+                    1.0
+                } else {
+                    0.9
+                }
             } else if has_goal || has_steps {
                 0.5
             } else {
                 0.1
             }
-        }
+        },
         InferenceMode::Composer => {
             let trimmed = output.trim();
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
@@ -1601,7 +1617,7 @@ fn estimate_confidence_from_output(
             } else {
                 0.1
             }
-        }
+        },
         InferenceMode::Conversational => {
             // Any non-trivial, coherent text scores well
             let len = output.len();
@@ -1612,7 +1628,7 @@ fn estimate_confidence_from_output(
             } else {
                 0.15
             }
-        }
+        },
     };
 
     // ── Channel 3: Length normality ──
@@ -1644,13 +1660,11 @@ fn estimate_confidence_from_output(
 ///
 /// Uses an AFINN-inspired approach with three improvements over naive counting:
 ///
-/// 1. **Weighted valence**: Each word carries an intensity score [-3.0, +3.0]
-///    instead of a flat ±1.
-/// 2. **Negation awareness**: Words preceded by negators ("not", "don't", etc.)
-///    have their valence flipped.
-/// 3. **Normalization**: Final valence is divided by `sqrt(word_count)` to
-///    prevent long texts from always scoring extreme values (diminishing
-///    returns on additional sentiment signals).
+/// 1. **Weighted valence**: Each word carries an intensity score [-3.0, +3.0] instead of a flat ±1.
+/// 2. **Negation awareness**: Words preceded by negators ("not", "don't", etc.) have their valence
+///    flipped.
+/// 3. **Normalization**: Final valence is divided by `sqrt(word_count)` to prevent long texts from
+///    always scoring extreme values (diminishing returns on additional sentiment signals).
 ///
 /// Returns a value in [-1.0, 1.0] representing negative to positive affect.
 fn estimate_mood(text: &str) -> f32 {
@@ -1658,23 +1672,53 @@ fn estimate_mood(text: &str) -> f32 {
     // Scores are calibrated: ±1.0 = mild, ±2.0 = moderate, ±3.0 = strong.
     const LEXICON: &[(&str, f32)] = &[
         // Positive
-        ("happy", 2.5), ("great", 2.0), ("awesome", 3.0), ("love", 3.0),
-        ("wonderful", 2.5), ("excellent", 2.5), ("sure", 1.0), ("yes", 0.5),
-        ("perfect", 2.5), ("good", 1.5), ("nice", 1.5), ("enjoy", 2.0),
-        ("glad", 2.0), ("fantastic", 3.0), ("amazing", 2.5), ("thank", 1.0),
-        ("helpful", 1.5), ("exciting", 2.0), ("brilliant", 2.5),
+        ("happy", 2.5),
+        ("great", 2.0),
+        ("awesome", 3.0),
+        ("love", 3.0),
+        ("wonderful", 2.5),
+        ("excellent", 2.5),
+        ("sure", 1.0),
+        ("yes", 0.5),
+        ("perfect", 2.5),
+        ("good", 1.5),
+        ("nice", 1.5),
+        ("enjoy", 2.0),
+        ("glad", 2.0),
+        ("fantastic", 3.0),
+        ("amazing", 2.5),
+        ("thank", 1.0),
+        ("helpful", 1.5),
+        ("exciting", 2.0),
+        ("brilliant", 2.5),
         // Negative
-        ("sorry", -1.5), ("error", -2.0), ("fail", -2.5), ("failed", -2.5),
-        ("unfortunately", -2.0), ("wrong", -2.0), ("bad", -2.0), ("terrible", -3.0),
-        ("awful", -3.0), ("hate", -3.0), ("sad", -2.0), ("angry", -2.5),
-        ("annoying", -2.0), ("frustrating", -2.0), ("confused", -1.5),
-        ("problem", -1.5), ("issue", -1.0), ("broken", -2.0), ("unable", -1.5),
-        ("impossible", -2.0), ("dangerous", -2.5), ("worried", -1.5),
+        ("sorry", -1.5),
+        ("error", -2.0),
+        ("fail", -2.5),
+        ("failed", -2.5),
+        ("unfortunately", -2.0),
+        ("wrong", -2.0),
+        ("bad", -2.0),
+        ("terrible", -3.0),
+        ("awful", -3.0),
+        ("hate", -3.0),
+        ("sad", -2.0),
+        ("angry", -2.5),
+        ("annoying", -2.0),
+        ("frustrating", -2.0),
+        ("confused", -1.5),
+        ("problem", -1.5),
+        ("issue", -1.0),
+        ("broken", -2.0),
+        ("unable", -1.5),
+        ("impossible", -2.0),
+        ("dangerous", -2.5),
+        ("worried", -1.5),
     ];
 
     const NEGATORS: &[&str] = &[
-        "not", "don't", "dont", "doesn't", "doesnt", "didn't", "didnt",
-        "can't", "cant", "cannot", "won't", "wont", "never", "no",
+        "not", "don't", "dont", "doesn't", "doesnt", "didn't", "didnt", "can't", "cant", "cannot",
+        "won't", "wont", "never", "no",
     ];
 
     let lower = text.to_lowercase();
@@ -1946,10 +1990,16 @@ mod tests {
     fn mood_estimation_negation_flips_valence() {
         // "not happy" should yield negative, "not sorry" should yield positive
         let negated_positive = estimate_mood("I am not happy about this.");
-        assert!(negated_positive < 0.0, "expected negated-positive to be negative, got {negated_positive}");
+        assert!(
+            negated_positive < 0.0,
+            "expected negated-positive to be negative, got {negated_positive}"
+        );
 
         let negated_negative = estimate_mood("I am not sorry at all.");
-        assert!(negated_negative > 0.0, "expected negated-negative to be positive, got {negated_negative}");
+        assert!(
+            negated_negative > 0.0,
+            "expected negated-negative to be positive, got {negated_negative}"
+        );
     }
 
     #[test]
@@ -1995,7 +2045,7 @@ mod tests {
             NeocortexToDaemon::PlanReady { plan } => {
                 assert!(!plan.steps.is_empty());
                 assert!(plan.confidence > 0.0);
-            }
+            },
             other => panic!("expected PlanReady, got {other:?}"),
         }
 
@@ -2013,7 +2063,7 @@ mod tests {
         match result {
             NeocortexToDaemon::ComposedScript { steps } => {
                 assert!(!steps.is_empty());
-            }
+            },
             other => panic!("expected ComposedScript, got {other:?}"),
         }
     }
@@ -2030,7 +2080,7 @@ mod tests {
             NeocortexToDaemon::ConversationReply { text, mood_hint } => {
                 assert!(!text.is_empty());
                 assert!(mood_hint.is_some());
-            }
+            },
             other => panic!("expected ConversationReply, got {other:?}"),
         }
     }
@@ -2273,7 +2323,7 @@ Action: {\"tool\": \"open_app\"}";
         match ipc {
             NeocortexToDaemon::ConversationReply { text, .. } => {
                 assert_eq!(text, "Hello there!");
-            }
+            },
             other => panic!("expected ConversationReply, got {other:?}"),
         }
     }
@@ -2292,7 +2342,7 @@ Action: {\"tool\": \"open_app\"}";
         match ipc {
             NeocortexToDaemon::ConversationReply { text, .. } => {
                 assert!(text.contains("unparseable"));
-            }
+            },
             other => panic!("expected fallback ConversationReply, got {other:?}"),
         }
     }
@@ -2378,7 +2428,7 @@ Action: {\"tool\": \"open_app\"}";
         match result {
             NeocortexToDaemon::Error { code, .. } => {
                 assert_eq!(code, error_codes::MODEL_NOT_LOADED);
-            }
+            },
             other => panic!("expected Error, got {other:?}"),
         }
     }

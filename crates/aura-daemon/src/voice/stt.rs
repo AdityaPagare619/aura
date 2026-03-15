@@ -454,12 +454,18 @@ mod tests {
 
         let partial = stt.feed_audio(&samples).unwrap();
         // Feeding silence (zero samples) — partial text should be empty.
-        assert!(partial.text.is_empty(),
-            "expected empty partial text from silence, got: '{}'", partial.text);
+        assert!(
+            partial.text.is_empty(),
+            "expected empty partial text from silence, got: '{}'",
+            partial.text
+        );
 
         let result = stt.finalize_streaming().unwrap();
         // Finalize should produce a non-empty transcription (even mock returns something).
-        assert!(!result.is_empty(), "finalize_streaming should return non-empty result");
+        assert!(
+            !result.is_empty(),
+            "finalize_streaming should return non-empty result"
+        );
     }
 
     #[test]
@@ -512,7 +518,10 @@ mod tests {
         let partial = stt.feed_audio(&samples).unwrap();
         // After reset, feed_audio should succeed without error (already asserted by unwrap above).
         // Partial text from silence samples is expected to be empty.
-        assert!(partial.text.is_empty(),
-            "expected empty partial text from silence after reset, got: '{}'", partial.text);
+        assert!(
+            partial.text.is_empty(),
+            "expected empty partial text from silence after reset, got: '{}'",
+            partial.text
+        );
     }
 }

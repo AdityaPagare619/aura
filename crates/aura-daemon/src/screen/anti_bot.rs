@@ -2,16 +2,15 @@
 //! detection on apps and the Android system itself.
 //!
 //! Three mechanisms:
-//! 1. **Token-bucket rate limiter** — sustained 60/min (Normal), 30/min (Safety),
-//!    90/min (Power). Burst of 10/5/15 in a 5-second window.
-//! 2. **Random inter-action delay** — 150–500ms (Normal), 300–800ms (Safety),
-//!    100–300ms (Power). Extra delay after `Type` proportional to text length.
+//! 1. **Token-bucket rate limiter** — sustained 60/min (Normal), 30/min (Safety), 90/min (Power).
+//!    Burst of 10/5/15 in a 5-second window.
+//! 2. **Random inter-action delay** — 150–500ms (Normal), 300–800ms (Safety), 100–300ms (Power).
+//!    Extra delay after `Type` proportional to text length.
 //! 3. **Action timing jitter** — all delays include ±15% gaussian-like jitter.
 
 use std::time::Instant;
 
-use aura_types::actions::ActionType;
-use aura_types::config::ExecutionConfig;
+use aura_types::{actions::ActionType, config::ExecutionConfig};
 use tracing::debug;
 
 /// Timing profile extracted from `ExecutionConfig` with burst limits.
@@ -285,7 +284,7 @@ impl AntiBot {
                 match oldest {
                     None => oldest = Some(ts),
                     Some(o) if ts < o => oldest = Some(ts),
-                    _ => {}
+                    _ => {},
                 }
             }
         }
@@ -303,7 +302,7 @@ impl AntiBot {
         let extra = match action {
             ActionType::Type { text } => {
                 text.len() as u64 * self.profile.type_delay_per_char_ms as u64
-            }
+            },
             _ => 0,
         };
 

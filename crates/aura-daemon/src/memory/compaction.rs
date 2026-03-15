@@ -3,11 +3,10 @@
 //! When a user session runs long, working memory fills up.
 //! Instead of simply evicting old memories (which loses immediate context)
 //! or relying purely on ranking (which fragments the timeline),
-//! the `ContextCompactor` identifies continuous chunks of older 
+//! the `ContextCompactor` identifies continuous chunks of older
 //! working memories and compresses them into dense summary slots.
 
-use aura_types::events::EventSource;
-use aura_types::memory::WorkingSlot;
+use aura_types::{events::EventSource, memory::WorkingSlot};
 use tracing::{debug, instrument};
 
 /// Engine for compacting working memory context during long sessions.
@@ -38,7 +37,11 @@ impl ContextCompactor {
             return Vec::new();
         }
 
-        temporal.into_iter().take(candidates_count).map(|(idx, _)| idx).collect()
+        temporal
+            .into_iter()
+            .take(candidates_count)
+            .map(|(idx, _)| idx)
+            .collect()
     }
 
     /// Compacts a list of slots into a single summarized slot.
@@ -81,13 +84,31 @@ impl Default for ContextCompactor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_compaction() {
         let compactor = ContextCompactor::new();
-        let s1 = WorkingSlot { content: "A".to_string(), source: EventSource::UserCommand, importance: 0.8, timestamp_ms: 100, ttl_ms: 0 };
-        let s2 = WorkingSlot { content: "B".to_string(), source: EventSource::UserCommand, importance: 0.2, timestamp_ms: 110, ttl_ms: 0 };
-        let s3 = WorkingSlot { content: "C".to_string(), source: EventSource::UserCommand, importance: 0.3, timestamp_ms: 120, ttl_ms: 0 };
+        let s1 = WorkingSlot {
+            content: "A".to_string(),
+            source: EventSource::UserCommand,
+            importance: 0.8,
+            timestamp_ms: 100,
+            ttl_ms: 0,
+        };
+        let s2 = WorkingSlot {
+            content: "B".to_string(),
+            source: EventSource::UserCommand,
+            importance: 0.2,
+            timestamp_ms: 110,
+            ttl_ms: 0,
+        };
+        let s3 = WorkingSlot {
+            content: "C".to_string(),
+            source: EventSource::UserCommand,
+            importance: 0.3,
+            timestamp_ms: 120,
+            ttl_ms: 0,
+        };
 
         let slots = [&s1, &s2, &s3];
         let result = compactor.compact(&slots, 200);
@@ -108,12 +129,16 @@ mod tests {
             timestamp_ms: 100,
             ttl_ms: 0,
         };
-        let slots_data: Vec<WorkingSlot> = (0..10).map(|i| make_slot(&format!("slot{i}"))).collect();
+        let slots_data: Vec<WorkingSlot> =
+            (0..10).map(|i| make_slot(&format!("slot{i}"))).collect();
         let refs: Vec<&WorkingSlot> = slots_data.iter().collect();
         let result = compactor.compact(&refs, 200);
         // Every slot must be present.
         for i in 0..10 {
-            assert!(result.content.contains(&format!("slot{i}")), "slot{i} missing from compacted content");
+            assert!(
+                result.content.contains(&format!("slot{i}")),
+                "slot{i} missing from compacted content"
+            );
         }
     }
 }

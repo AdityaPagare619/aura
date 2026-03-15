@@ -15,42 +15,44 @@
 //!
 //! On host (non-Android), phases 1 and 6 are stubs.
 
-use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    path::Path,
+    sync::{atomic::AtomicBool, Arc},
+    time::Instant,
+};
 
 use aura_types::config::AuraConfig;
 use rusqlite::Connection;
 
-use crate::arc::ArcManager;
-use crate::bridge::router::RouterHandle;
-use crate::bridge::BridgeHandle;
-use crate::daemon_core::channels::{DaemonChannels, InputSource};
-use crate::daemon_core::checkpoint::{load_checkpoint, DaemonCheckpoint};
-use crate::daemon_core::onboarding::OnboardingEngine;
-use crate::execution::cycle::CycleDetector;
-use crate::execution::etg::EtgStore;
-use crate::execution::executor::Executor;
-use crate::execution::monitor::ExecutionMonitor;
-use crate::execution::planner::EnhancedPlanner;
-use crate::goals::conflicts::ConflictResolver;
-use crate::goals::decomposer::GoalDecomposer;
-use crate::goals::registry::GoalRegistry;
-use crate::goals::scheduler::BdiScheduler;
-use crate::goals::tracker::GoalTracker;
-use crate::identity::IdentityEngine;
-use crate::ipc::client::NeocortexClient;
-use crate::memory::AuraMemory;
-use crate::pipeline::amygdala::Amygdala;
-use crate::pipeline::contextor::Contextor;
-use crate::pipeline::parser::{CommandParser, EventParser};
-use crate::platform::PlatformState;
-use crate::routing::classifier::RouteClassifier;
-use crate::routing::system1::System1;
-use crate::routing::system2::System2;
-use crate::screen::anti_bot::AntiBot;
-use crate::extensions::{CapabilityLoader, ExtensionDiscovery};
+use crate::{
+    arc::ArcManager,
+    bridge::{router::RouterHandle, BridgeHandle},
+    daemon_core::{
+        channels::{DaemonChannels, InputSource},
+        checkpoint::{load_checkpoint, DaemonCheckpoint},
+        onboarding::OnboardingEngine,
+    },
+    execution::{
+        cycle::CycleDetector, etg::EtgStore, executor::Executor, monitor::ExecutionMonitor,
+        planner::EnhancedPlanner,
+    },
+    extensions::{CapabilityLoader, ExtensionDiscovery},
+    goals::{
+        conflicts::ConflictResolver, decomposer::GoalDecomposer, registry::GoalRegistry,
+        scheduler::BdiScheduler, tracker::GoalTracker,
+    },
+    identity::IdentityEngine,
+    ipc::client::NeocortexClient,
+    memory::AuraMemory,
+    pipeline::{
+        amygdala::Amygdala,
+        contextor::Contextor,
+        parser::{CommandParser, EventParser},
+    },
+    platform::PlatformState,
+    routing::{classifier::RouteClassifier, system1::System1, system2::System2},
+    screen::anti_bot::AntiBot,
+};
 
 // ---------------------------------------------------------------------------
 // SubSystems — all processing modules instantiated during startup
@@ -369,13 +371,13 @@ pub fn startup(config: AuraConfig) -> Result<(DaemonState, StartupReport), Start
     match onboarding_status {
         OnboardingStatus::FirstRun => {
             tracing::info!("onboarding: first run detected — onboarding required");
-        }
+        },
         OnboardingStatus::Interrupted => {
             tracing::info!("onboarding: interrupted session detected — will resume");
-        }
+        },
         OnboardingStatus::Completed => {
             tracing::debug!("onboarding: already completed");
-        }
+        },
     }
 
     let total_ms = overall_start.elapsed().as_millis() as u64;
@@ -548,11 +550,11 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
             Ok(store) => {
                 tracing::info!(path = %etg_path_str, "ETG: persistent store opened");
                 store
-            }
+            },
             Err(e) => {
                 tracing::warn!(error = %e, "ETG: persistent open failed, using in-memory");
                 EtgStore::in_memory()
-            }
+            },
         }
     };
 
@@ -623,7 +625,8 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
 
     // -- 8.5. Extensions (non-critical) ------------------------------------
     let capability_loader = init_non_critical("capability_loader", || CapabilityLoader::new());
-    let extension_discovery = init_non_critical("extension_discovery", || ExtensionDiscovery::new());
+    let extension_discovery =
+        init_non_critical("extension_discovery", || ExtensionDiscovery::new());
     tracing::info!(
         capability_loader = capability_loader.is_some(),
         extension_discovery = extension_discovery.is_some(),
@@ -680,8 +683,7 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
 /// `StartupError::SubSystemInit`.
 fn init_critical<T, F>(name: &'static str, f: F) -> Result<T, StartupError>
 where
-    F: FnOnce() -> Result<T, StartupError>,
-{
+    F: FnOnce() -> Result<T, StartupError>, {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(result) => result,
         Err(panic) => {
@@ -691,7 +693,7 @@ where
                 subsystem: name,
                 reason: msg,
             })
-        }
+        },
     }
 }
 
@@ -699,8 +701,7 @@ where
 /// returns `None` and logs a warning. The daemon continues in degraded mode.
 fn init_non_critical<T, F>(name: &'static str, f: F) -> Option<T>
 where
-    F: FnOnce() -> T,
-{
+    F: FnOnce() -> T, {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
         Err(panic) => {
@@ -711,7 +712,7 @@ where
                 "non-critical subsystem init failed — running in degraded mode"
             );
             None
-        }
+        },
     }
 }
 
@@ -774,7 +775,7 @@ fn phase_onboarding_check(db: &Connection) -> OnboardingStatus {
             // treat as first run — onboarding will create the table.
             tracing::warn!(error = %e, "onboarding status check failed — assuming first run");
             OnboardingStatus::FirstRun
-        }
+        },
     }
 }
 
@@ -856,8 +857,10 @@ mod tests {
 
     #[test]
     fn test_startup_with_existing_checkpoint() {
-        use crate::daemon_core::checkpoint::{save_checkpoint, DaemonCheckpoint};
-        use crate::daemon_core::startup::checkpoint_path_from_config;
+        use crate::daemon_core::{
+            checkpoint::{save_checkpoint, DaemonCheckpoint},
+            startup::checkpoint_path_from_config,
+        };
 
         let (_dir, config) = temp_config();
 

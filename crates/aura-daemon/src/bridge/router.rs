@@ -7,10 +7,10 @@
 //! [`ResponseRouter`] solves this by:
 //!
 //! 1. Taking **exclusive ownership** of the single `DaemonResponseRx`.
-//! 2. Maintaining a registry of per-bridge output channels, keyed by
-//!    [`InputSource::variant_key()`] (e.g. `"voice"`, `"telegram"`).
-//! 3. Running as a long-lived `tokio` task that reads each response and
-//!    forwards it to the correct bridge's dedicated channel.
+//! 2. Maintaining a registry of per-bridge output channels, keyed by [`InputSource::variant_key()`]
+//!    (e.g. `"voice"`, `"telegram"`).
+//! 3. Running as a long-lived `tokio` task that reads each response and forwards it to the correct
+//!    bridge's dedicated channel.
 //!
 //! # Lifecycle
 //!
@@ -24,8 +24,8 @@
 //! ResponseRouter::run()               → spawned as tokio task
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
+
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
@@ -118,7 +118,10 @@ impl ResponseRouter {
         }
         let (tx, rx) = mpsc::channel(PER_BRIDGE_CAPACITY);
         reg.bridges.insert(variant_key, tx);
-        info!(bridge = variant_key, "bridge registered with response router");
+        info!(
+            bridge = variant_key,
+            "bridge registered with response router"
+        );
         Ok(rx)
     }
 
@@ -130,7 +133,10 @@ impl ResponseRouter {
         let mut reg = self.registry.lock().await;
         let removed = reg.bridges.remove(variant_key).is_some();
         if removed {
-            info!(bridge = variant_key, "bridge unregistered from response router");
+            info!(
+                bridge = variant_key,
+                "bridge unregistered from response router"
+            );
         }
         removed
     }
@@ -166,7 +172,7 @@ impl ResponseRouter {
                     Ok(()) => {
                         routed += 1;
                         debug!(bridge = key, total_routed = routed, "response routed");
-                    }
+                    },
                     Err(mpsc::error::TrySendError::Full(resp)) => {
                         dropped += 1;
                         warn!(
@@ -175,7 +181,7 @@ impl ResponseRouter {
                             total_dropped = dropped,
                             "bridge channel full — response dropped (backpressure)"
                         );
-                    }
+                    },
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         dropped += 1;
                         reg.bridges.remove(key);
@@ -184,7 +190,7 @@ impl ResponseRouter {
                             total_dropped = dropped,
                             "bridge channel closed — unregistered automatically"
                         );
-                    }
+                    },
                 }
             } else {
                 dropped += 1;
@@ -251,9 +257,10 @@ pub enum RouterError {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
+
     use super::*;
     use crate::daemon_core::channels::{DaemonResponse, InputSource};
-    use tokio::sync::mpsc;
 
     /// Helper: create a (response_tx, ResponseRouter) pair.
     fn make_router() -> (mpsc::Sender<DaemonResponse>, ResponseRouter) {
@@ -282,7 +289,10 @@ mod tests {
             .expect("send");
 
         // The voice bridge should receive it.
-        let resp = voice_rx.recv().await.expect("voice should receive response");
+        let resp = voice_rx
+            .recv()
+            .await
+            .expect("voice should receive response");
         assert_eq!(resp.text, "hello voice");
         assert_eq!(resp.destination.variant_key(), "voice");
 
@@ -295,7 +305,10 @@ mod tests {
     async fn test_register_and_route_telegram() {
         let (resp_tx, router) = make_router();
 
-        let mut tg_rx = router.register("telegram").await.expect("register telegram");
+        let mut tg_rx = router
+            .register("telegram")
+            .await
+            .expect("register telegram");
         let handle = router.spawn();
 
         resp_tx
@@ -307,9 +320,15 @@ mod tests {
             .await
             .expect("send");
 
-        let resp = tg_rx.recv().await.expect("telegram should receive response");
+        let resp = tg_rx
+            .recv()
+            .await
+            .expect("telegram should receive response");
         assert_eq!(resp.text, "hi telegram");
-        assert!(matches!(resp.destination, InputSource::Telegram { chat_id: 42 }));
+        assert!(matches!(
+            resp.destination,
+            InputSource::Telegram { chat_id: 42 }
+        ));
 
         drop(resp_tx);
         handle.join_handle.await.expect("router should finish");
@@ -320,7 +339,10 @@ mod tests {
         let (resp_tx, router) = make_router();
 
         let mut voice_rx = router.register("voice").await.expect("register voice");
-        let mut tg_rx = router.register("telegram").await.expect("register telegram");
+        let mut tg_rx = router
+            .register("telegram")
+            .await
+            .expect("register telegram");
         assert_eq!(router.bridge_count().await, 2);
 
         let handle = router.spawn();
@@ -366,7 +388,10 @@ mod tests {
         router.register("voice").await.expect("first register");
         let result = router.register("voice").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RouterError::AlreadyRegistered("voice")));
+        assert!(matches!(
+            result.unwrap_err(),
+            RouterError::AlreadyRegistered("voice")
+        ));
     }
 
     #[tokio::test]
@@ -429,7 +454,10 @@ mod tests {
         drop(resp_tx);
 
         // The router task should complete without panic.
-        handle.join_handle.await.expect("router should finish cleanly");
+        handle
+            .join_handle
+            .await
+            .expect("router should finish cleanly");
     }
 
     #[tokio::test]

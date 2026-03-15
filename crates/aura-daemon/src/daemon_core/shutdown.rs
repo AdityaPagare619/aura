@@ -8,13 +8,19 @@
 //!
 //! The entire sequence is wrapped in a timeout (default 5 s).
 
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
-use crate::daemon_core::channels::DaemonChannels;
-use crate::daemon_core::checkpoint::{save_checkpoint, DaemonCheckpoint};
+use crate::daemon_core::{
+    channels::DaemonChannels,
+    checkpoint::{save_checkpoint, DaemonCheckpoint},
+};
 
 // ---------------------------------------------------------------------------
 // Shutdown result
@@ -100,10 +106,10 @@ pub fn graceful_shutdown(
         Ok(()) => {
             report.checkpoint_saved = true;
             tracing::info!("final checkpoint saved");
-        }
+        },
         Err(e) => {
             tracing::error!(error = %e, "failed to save final checkpoint");
-        }
+        },
     }
 
     if Instant::now() >= deadline {
@@ -121,11 +127,11 @@ pub fn graceful_shutdown(
             Ok(()) => {
                 report.db_closed = true;
                 tracing::info!("database closed cleanly");
-            }
+            },
             Err((conn, e)) => {
                 tracing::error!(error = %e, "database close failed — dropping connection");
                 drop(conn);
-            }
+            },
         }
     } else {
         report.db_closed = true; // nothing to close
@@ -251,9 +257,15 @@ mod tests {
         let report = graceful_shutdown(channels, &checkpoint, &cp_path, None, cancel.clone(), 5);
 
         assert!(report.checkpoint_saved, "checkpoint should be saved");
-        assert!(report.db_closed, "db should be marked closed (none provided)");
+        assert!(
+            report.db_closed,
+            "db should be marked closed (none provided)"
+        );
         assert_eq!(report.messages_drained, 0);
-        assert!(report.elapsed_ms < 5000, "should complete well within timeout");
+        assert!(
+            report.elapsed_ms < 5000,
+            "should complete well within timeout"
+        );
         assert!(cancel.load(Ordering::Acquire), "cancel flag should be set");
     }
 

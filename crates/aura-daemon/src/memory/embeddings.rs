@@ -34,8 +34,10 @@
 //! The `debug_assert_eq!` in [`cosine_similarity`] will catch length mismatches
 //! in debug builds; in release builds the lengths must be enforced by callers.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{Arc, RwLock},
+};
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -82,15 +84,13 @@ const CHAR_TRIGRAM_WEIGHT: f32 = 0.3;
 // ---------------------------------------------------------------------------
 
 static STOP_WORDS: &[&str] = &[
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-    "should", "may", "might", "must", "can", "could", "to", "of", "in",
-    "for", "on", "with", "at", "by", "from", "as", "into", "through",
-    "during", "before", "after", "above", "below", "between", "out", "off",
-    "over", "under", "again", "further", "then", "once", "this", "that",
-    "these", "those", "it", "its", "and", "but", "or", "nor", "not", "so",
-    "yet", "both", "each", "all", "any", "few", "more", "most", "other",
-    "some", "such", "no", "only", "own", "same", "than", "too", "very",
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "shall", "should", "may", "might", "must", "can",
+    "could", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
+    "during", "before", "after", "above", "below", "between", "out", "off", "over", "under",
+    "again", "further", "then", "once", "this", "that", "these", "those", "it", "its", "and",
+    "but", "or", "nor", "not", "so", "yet", "both", "each", "all", "any", "few", "more", "most",
+    "other", "some", "such", "no", "only", "own", "same", "than", "too", "very",
 ];
 
 fn is_stop_word(word: &str) -> bool {
@@ -167,10 +167,9 @@ fn cache_insert(key: u64, embedding: Vec<f32>) {
 ///
 /// Algorithm:
 /// 1. Tokenize: split on whitespace/punctuation, lowercase, remove stop words
-/// 2. For each feature (unigram, bigram, char-trigram):
-///    a. Compute bucket = fnv_hash(feature) % 384
-///    b. Compute sign = +1 or -1 from a second independent hash
-///    c. Accumulate sign × weight into the bucket
+/// 2. For each feature (unigram, bigram, char-trigram): a. Compute bucket = fnv_hash(feature) % 384
+///    b. Compute sign = +1 or -1 from a second independent hash c. Accumulate sign × weight into
+///    the bucket
 /// 3. L2-normalize to unit vector
 ///
 /// The **sign-hashing trick** (Weinberger et al. 2009) prevents hash-collision
@@ -386,14 +385,13 @@ fn tokenize(text: &str) -> Vec<String> {
 /// # Parameters
 ///
 /// - `text` — input text to embed.
-/// - `expected_neural_dim` — the embedding dimension the neocortex model is
-///   expected to return. Pass the value from `ModelCapabilities.embedding_dim`
-///   when available, or [`DIM_NEURAL_FALLBACK`] when the neocortex is known to
-///   be running but the exact dim has not been queried yet. Pass `None` to
-///   skip the neural path entirely (no IPC call is made; equivalent to calling
-///   [`embed_with_quality`]).
-/// - `client` — optional mutable reference to an active [`NeocortexClient`].
-///   When `None`, the neural path is skipped regardless of `expected_neural_dim`.
+/// - `expected_neural_dim` — the embedding dimension the neocortex model is expected to return.
+///   Pass the value from `ModelCapabilities.embedding_dim` when available, or
+///   [`DIM_NEURAL_FALLBACK`] when the neocortex is known to be running but the exact dim has not
+///   been queried yet. Pass `None` to skip the neural path entirely (no IPC call is made;
+///   equivalent to calling [`embed_with_quality`]).
+/// - `client` — optional mutable reference to an active [`NeocortexClient`]. When `None`, the
+///   neural path is skipped regardless of `expected_neural_dim`.
 ///
 /// # Dimension validation
 ///
@@ -438,19 +436,19 @@ pub async fn embed_neural_or_tfidf(
                              Check ModelCapabilities.embedding_dim matches the loaded GGUF."
                         );
                     }
-                }
+                },
                 Ok(_) => {
                     tracing::warn!(
                         "Neocortex returned unexpected response to Embed request; \
                          falling back to TF-IDF."
                     );
-                }
+                },
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
                         "Neural embedding IPC call failed; falling back to TF-IDF."
                     );
-                }
+                },
             }
         }
     }
@@ -466,9 +464,8 @@ pub async fn embed_neural_or_tfidf(
 ///
 /// # Parameters
 ///
-/// - `expected_neural_dim` — the model's embedding dimension, used to
-///   validate the returned vector. Pass [`DIM_NEURAL_FALLBACK`] if unknown.
-///   Pass `None` to disable neural path entirely.
+/// - `expected_neural_dim` — the model's embedding dimension, used to validate the returned vector.
+///   Pass [`DIM_NEURAL_FALLBACK`] if unknown. Pass `None` to disable neural path entirely.
 ///
 /// See [`embed_neural_or_tfidf`] for full semantics.
 pub async fn embed_best_effort(
@@ -476,7 +473,9 @@ pub async fn embed_best_effort(
     expected_neural_dim: Option<u32>,
     client: Option<&mut crate::ipc::client::NeocortexClient>,
 ) -> Vec<f32> {
-    embed_neural_or_tfidf(text, expected_neural_dim, client).await.0
+    embed_neural_or_tfidf(text, expected_neural_dim, client)
+        .await
+        .0
 }
 
 // ---------------------------------------------------------------------------
@@ -613,7 +612,11 @@ fn sign_hash(s: &str) -> f32 {
         hash ^= byte as u64;
         hash = hash.wrapping_mul(FNV_PRIME);
     }
-    if hash & 1 == 0 { 1.0 } else { -1.0 }
+    if hash & 1 == 0 {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 /// Dot product of two f32 slices.
@@ -908,8 +911,7 @@ mod tests {
         );
 
         // Case 2: expected_neural_dim = None → skip neural path entirely.
-        let (vec_no_dim, quality_no_dim) =
-            embed_neural_or_tfidf("hello world", None, None).await;
+        let (vec_no_dim, quality_no_dim) = embed_neural_or_tfidf("hello world", None, None).await;
         assert_eq!(
             quality_no_dim,
             EmbeddingQuality::TfIdf,

@@ -261,7 +261,8 @@ impl RoutineManager {
     ) -> Result<(), ArcError> {
         // --- Phase 1: Compute timing statistics for this action ---
         // Collect all observation hours for this action.
-        let obs_hours: Vec<f32> = self.observations
+        let obs_hours: Vec<f32> = self
+            .observations
             .iter()
             .filter(|obs| obs.action_hash == action_hash)
             .map(|obs| obs.hour as f32)
@@ -275,7 +276,11 @@ impl RoutineManager {
         let n = obs_hours.len() as f32;
         let mean_hour = obs_hours.iter().sum::<f32>() / n;
         let variance = if obs_hours.len() > 1 {
-            obs_hours.iter().map(|h| (h - mean_hour).powi(2)).sum::<f32>() / (n - 1.0)
+            obs_hours
+                .iter()
+                .map(|h| (h - mean_hour).powi(2))
+                .sum::<f32>()
+                / (n - 1.0)
         } else {
             0.0
         };
@@ -323,7 +328,7 @@ impl RoutineManager {
         // Factor 3: Timing consistency (lower variance = higher confidence)
         // A routine with σ=0 gets consistency=1.0; σ=2 hours gets ~0.33
         let timing_consistency = 1.0 / (1.0 + std_dev);
-        
+
         let confidence = (day_coverage * count_saturation * timing_consistency).clamp(0.0, 1.0);
 
         // --- Phase 4: Update or create routine ---
@@ -336,7 +341,12 @@ impl RoutineManager {
             existing.avg_time_of_day = avg_hour;
             existing.days_active = matching_days;
             existing.confidence = confidence;
-            debug!(hash = action_hash, times = match_count, confidence, "routine updated");
+            debug!(
+                hash = action_hash,
+                times = match_count,
+                confidence,
+                "routine updated"
+            );
             return Ok(());
         }
 

@@ -313,8 +313,14 @@ impl EntityExtractor {
             ("hrs", "h"),
         ];
 
-        let words: Vec<&str> = lower.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
-        let input_words: Vec<&str> = input.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
+        let words: Vec<&str> = lower
+            .split_whitespace()
+            .take(MAX_PIPELINE_ENTITIES)
+            .collect();
+        let input_words: Vec<&str> = input
+            .split_whitespace()
+            .take(MAX_PIPELINE_ENTITIES)
+            .collect();
         for i in 0..words.len().saturating_sub(1) {
             if let Some(num) = parse_number_word(words[i]) {
                 for (unit, suffix) in &units {
@@ -340,7 +346,10 @@ impl EntityExtractor {
 
     fn extract_numbers(&self, _input: &str, lower: &str, out: &mut Vec<Entity>) {
         // Extract number words not already captured by duration/time.
-        let words: Vec<&str> = lower.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
+        let words: Vec<&str> = lower
+            .split_whitespace()
+            .take(MAX_PIPELINE_ENTITIES)
+            .collect();
         for (i, word) in words.iter().enumerate() {
             if let Some(num) = parse_number_word(word) {
                 let start = byte_offset_of_word(lower, &words, i);
@@ -713,7 +722,10 @@ mod tests {
             .iter()
             .filter(|e| e.entity_type == EntityType::Contact)
             .collect();
-        assert!(contacts.is_empty(), "contact extraction is stubbed — LLM handles this");
+        assert!(
+            contacts.is_empty(),
+            "contact extraction is stubbed — LLM handles this"
+        );
     }
 
     #[test]
@@ -726,7 +738,10 @@ mod tests {
             .iter()
             .filter(|e| e.entity_type == EntityType::App)
             .collect();
-        assert!(apps.is_empty(), "app extraction is stubbed — LLM handles this");
+        assert!(
+            apps.is_empty(),
+            "app extraction is stubbed — LLM handles this"
+        );
     }
 
     #[test]

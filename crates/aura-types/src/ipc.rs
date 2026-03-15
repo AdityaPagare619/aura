@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::dsl::DslStep;
-use crate::etg::ActionPlan;
+use crate::{dsl::DslStep, etg::ActionPlan};
 
 // ─── IPC Protocol Version ───────────────────────────────────────────────────
 
@@ -240,48 +239,33 @@ impl Default for TimeOfDay {
 }
 
 /// Device thermal load.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThermalLevel {
+    #[default]
     Normal,
     Warm,
     Hot,
     Critical,
 }
 
-impl Default for ThermalLevel {
-    fn default() -> Self {
-        ThermalLevel::Normal
-    }
-}
-
 /// Estimated physical location type (no GPS coordinates — privacy safe).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LocationType {
     Home,
     Work,
     Transit,
     Outdoor,
+    #[default]
     Unknown,
-}
-
-impl Default for LocationType {
-    fn default() -> Self {
-        LocationType::Unknown
-    }
 }
 
 /// Device orientation.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Orientation {
     Portrait,
     Landscape,
+    #[default]
     Unknown,
-}
-
-impl Default for Orientation {
-    fn default() -> Self {
-        Orientation::Unknown
-    }
 }
 
 /// Rich user and device state signals sent with every context package.
@@ -689,9 +673,7 @@ pub enum ProactiveTrigger {
         threshold: f32,
     },
     /// Memory consolidation identified a recurring pattern worth surfacing.
-    MemoryInsight {
-        summary: String,
-    },
+    MemoryInsight { summary: String },
     /// A configured trigger rule fired (routine deviation, contextual rule, etc.).
     TriggerRuleFired {
         rule_name: String,
@@ -947,7 +929,9 @@ mod tests {
 
     #[test]
     fn test_daemon_to_neocortex_embed() {
-        let msg = DaemonToNeocortex::Embed { text: "hello".to_string() };
+        let msg = DaemonToNeocortex::Embed {
+            text: "hello".to_string(),
+        };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("Embed"));
         assert!(json.contains("hello"));
@@ -976,9 +960,8 @@ mod tests {
         let json = serde_json::to_string(&envelope)
             .expect("AuthenticatedEnvelope serialization must not fail");
 
-        let deserialized: AuthenticatedEnvelope<DaemonToNeocortex> =
-            serde_json::from_str(&json)
-                .expect("AuthenticatedEnvelope deserialization must not fail");
+        let deserialized: AuthenticatedEnvelope<DaemonToNeocortex> = serde_json::from_str(&json)
+            .expect("AuthenticatedEnvelope deserialization must not fail");
 
         assert_eq!(deserialized.protocol_version, PROTOCOL_VERSION);
         assert_eq!(deserialized.session_token, envelope.session_token);
@@ -999,17 +982,20 @@ mod tests {
         };
 
         let json2 = serde_json::to_string(&envelope_complex).unwrap();
-        let de2: AuthenticatedEnvelope<NeocortexToDaemon> =
-            serde_json::from_str(&json2).unwrap();
+        let de2: AuthenticatedEnvelope<NeocortexToDaemon> = serde_json::from_str(&json2).unwrap();
 
         assert_eq!(de2.session_token, "deadbeef");
         assert_eq!(de2.seq, u64::MAX);
         match de2.payload {
-            NeocortexToDaemon::ConversationReply { ref text, mood_hint, tokens_used } => {
+            NeocortexToDaemon::ConversationReply {
+                ref text,
+                mood_hint,
+                tokens_used,
+            } => {
                 assert_eq!(text, "Hello user!");
                 assert!((mood_hint.unwrap() - 0.8).abs() < f32::EPSILON);
                 assert_eq!(tokens_used, 150);
-            }
+            },
             _ => panic!("expected ConversationReply after roundtrip"),
         }
     }

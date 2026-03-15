@@ -13,19 +13,17 @@ pub mod memory;
 pub mod security;
 pub mod system;
 
-use aura_types::config::AuraConfig;
-use aura_types::errors::AuraError;
+use aura_types::{config::AuraConfig, errors::AuraError};
 use tracing::instrument;
 
-use crate::daemon_core::channels::{InputSource, UserCommand, UserCommandTx};
-
-use super::audit::AuditLog;
-use super::commands::TelegramCommand;
-use super::queue::MessageQueue;
-use super::security::SecurityGate;
-use super::voice_handler::{
-    CommunicationContext, CommunicationMode, VoiceHandler,
+use super::{
+    audit::AuditLog,
+    commands::TelegramCommand,
+    queue::MessageQueue,
+    security::SecurityGate,
+    voice_handler::{CommunicationContext, CommunicationMode, VoiceHandler},
 };
+use crate::daemon_core::channels::{InputSource, UserCommand, UserCommandTx};
 
 // ─── Handler context ────────────────────────────────────────────────────────
 
@@ -169,7 +167,7 @@ fn command_to_text(cmd: &TelegramCommand) -> String {
         TelegramCommand::Summarize { text } => format!("[summarize] {text}"),
         TelegramCommand::Translate { text, target_lang } => {
             format!("[translate:{target_lang}] {text}")
-        }
+        },
         TelegramCommand::Remember { text } => format!("[remember] {text}"),
         TelegramCommand::Recall { query } => format!("[recall] {query}"),
         TelegramCommand::Forget { query } => format!("[forget] {query}"),
@@ -217,18 +215,18 @@ fn try_forward_to_daemon(
             Ok(Some(HandlerResponse::Html(
                 "<i>Processing… response will arrive shortly.</i>".to_string(),
             )))
-        }
+        },
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             tracing::warn!(chat_id = ctx.chat_id, "daemon pipeline channel full");
             Ok(Some(HandlerResponse::text(
                 "The daemon pipeline is busy. Please try again in a moment.",
             )))
-        }
+        },
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             tracing::error!(chat_id = ctx.chat_id, "daemon pipeline channel closed");
             // Fall through to local handler as graceful degradation.
             Ok(None)
-        }
+        },
     }
 }
 
@@ -267,7 +265,7 @@ pub fn dispatch(
         TelegramCommand::Restart => system::handle_restart(ctx),
         TelegramCommand::Logs { service, lines } => {
             system::handle_logs(ctx, service.as_deref(), *lines)
-        }
+        },
         TelegramCommand::Uptime => system::handle_uptime(ctx),
         TelegramCommand::Version => system::handle_version(ctx),
         TelegramCommand::Power => system::handle_power(ctx),
@@ -280,7 +278,7 @@ pub fn dispatch(
         TelegramCommand::Summarize { text } => ai::handle_summarize(ctx, text),
         TelegramCommand::Translate { text, target_lang } => {
             ai::handle_translate(ctx, text, target_lang)
-        }
+        },
 
         // ── Memory ─────────────────────────────────────────────────
         TelegramCommand::Remember { text } => memory::handle_remember(ctx, text),
@@ -310,7 +308,7 @@ pub fn dispatch(
         TelegramCommand::Personality => config::handle_personality(ctx),
         TelegramCommand::PersonalitySet { trait_name, value } => {
             config::handle_personality_set(ctx, trait_name, *value)
-        }
+        },
         TelegramCommand::Trust => config::handle_trust(ctx),
         TelegramCommand::TrustSet { level } => config::handle_trust_set(ctx, *level),
         TelegramCommand::Voice => config::handle_voice_mode(ctx),
@@ -339,7 +337,7 @@ pub fn dispatch(
                 None => super::commands::full_help_text(),
             };
             Ok(HandlerResponse::Html(text))
-        }
+        },
         TelegramCommand::Unknown { raw } => Ok(HandlerResponse::text(format!(
             "Unknown command: {raw}\nUse /help for available commands."
         ))),
@@ -350,11 +348,10 @@ pub fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::telegram::audit::AuditLog;
-    use crate::telegram::queue::MessageQueue;
-    use crate::telegram::security::SecurityGate;
     use rusqlite::Connection;
+
+    use super::*;
+    use crate::telegram::{audit::AuditLog, queue::MessageQueue, security::SecurityGate};
 
     fn test_ctx<'a>(
         security: &'a mut SecurityGate,
@@ -384,7 +381,7 @@ mod tests {
         match resp {
             HandlerResponse::Html(text) => {
                 assert!(text.contains("AURA Telegram Commands"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -402,7 +399,7 @@ mod tests {
             HandlerResponse::Text(text) => {
                 assert!(text.contains("Unknown command"));
                 assert!(text.contains("/foo"));
-            }
+            },
             other => panic!("expected Text, got {other:?}"),
         }
     }
@@ -419,7 +416,7 @@ mod tests {
         match resp {
             HandlerResponse::Html(text) => {
                 assert!(text.contains("AURA Status"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -467,9 +464,7 @@ mod tests {
         assert!(is_daemon_routed(&TelegramCommand::Do {
             instruction: "x".into()
         }));
-        assert!(is_daemon_routed(&TelegramCommand::Open {
-            app: "x".into()
-        }));
+        assert!(is_daemon_routed(&TelegramCommand::Open { app: "x".into() }));
         assert!(is_daemon_routed(&TelegramCommand::Screenshot));
         assert!(is_daemon_routed(&TelegramCommand::Navigate {
             destination: "x".into()
@@ -479,9 +474,7 @@ mod tests {
     #[test]
     fn test_is_not_daemon_routed() {
         assert!(!is_daemon_routed(&TelegramCommand::Status));
-        assert!(!is_daemon_routed(&TelegramCommand::Help {
-            command: None
-        }));
+        assert!(!is_daemon_routed(&TelegramCommand::Help { command: None }));
         assert!(!is_daemon_routed(&TelegramCommand::Lock));
         assert!(!is_daemon_routed(&TelegramCommand::Personality));
         assert!(!is_daemon_routed(&TelegramCommand::Perf));
@@ -584,7 +577,7 @@ mod tests {
                     InputSource::Telegram { chat_id } => assert_eq!(chat_id, 42),
                     other => panic!("expected Telegram source, got {other:?}"),
                 }
-            }
+            },
             other => panic!("expected Chat command, got {other:?}"),
         }
     }
@@ -617,7 +610,7 @@ mod tests {
                     text.contains("Processing"),
                     "expected forwarding ack, got: {text}"
                 );
-            }
+            },
             other => panic!("expected Html forwarding ack, got {other:?}"),
         }
     }
@@ -646,7 +639,7 @@ mod tests {
                         "should NOT get forwarding ack when no channel: {text}"
                     );
                 }
-            }
+            },
             other => panic!("expected text response from stub, got {other:?}"),
         }
     }

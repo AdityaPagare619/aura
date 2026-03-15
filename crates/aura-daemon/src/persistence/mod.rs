@@ -14,8 +14,8 @@
 //! 1. On startup: open/create journal → `recover()` → replay committed entries
 //! 2. Run `IntegrityVerifier::full_verification()` on recovered state
 //! 3. If critical issues → activate `SafeModeState`
-//! 4. During operation: `journal.append()` before state mutation, `journal.commit()`
-//!    after mutation succeeds
+//! 4. During operation: `journal.append()` before state mutation, `journal.commit()` after mutation
+//!    succeeds
 
 pub mod integrity;
 pub mod journal;

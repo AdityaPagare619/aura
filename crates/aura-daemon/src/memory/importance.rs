@@ -168,7 +168,7 @@ pub fn update_importance(current: f32, event: ImportanceEvent) -> f32 {
         ImportanceEvent::TimePassed { hours } => {
             // Apply recency decay multiplicatively
             current * recency_decay(hours)
-        }
+        },
         ImportanceEvent::RelatedStrengthened => current + 0.05,
     };
     adjusted.clamp(0.0, 2.0)
@@ -200,12 +200,7 @@ pub fn access_bonus(access_count: u32) -> f32 {
 /// - recency: exp(-0.1 * hours_ago) — ~7 hour half-life
 /// - importance: pre-computed importance score [0, 2], normalized to [0, 1]
 /// - activation: access_bonus / 2.0 (normalized to [0, 1])
-pub fn recall_score(
-    similarity: f32,
-    hours_ago: f64,
-    importance: f32,
-    access_count: u32,
-) -> f32 {
+pub fn recall_score(similarity: f32, hours_ago: f64, importance: f32, access_count: u32) -> f32 {
     let recency = (-0.1 * hours_ago).exp() as f32; // ~7 hour half-life
     let norm_importance = (importance / 2.0).clamp(0.0, 1.0);
     let activation = (access_bonus(access_count) / 2.0).clamp(0.0, 1.0);
@@ -218,11 +213,7 @@ pub fn recall_score(
 /// score = recency*0.3 + frequency*0.3 + base_importance*0.4
 ///
 /// Threshold for promotion is typically 0.7.
-pub fn consolidation_score(
-    hours_ago: f64,
-    access_count: u32,
-    base_importance: f32,
-) -> f32 {
+pub fn consolidation_score(hours_ago: f64, access_count: u32, base_importance: f32) -> f32 {
     let recency = (-0.1 * hours_ago).exp() as f32;
     let frequency = (access_count as f32 / 10.0).min(1.0); // normalize: 10 accesses = 1.0
     let norm_importance = (base_importance / 2.0).clamp(0.0, 1.0);
@@ -282,7 +273,12 @@ mod tests {
         // 720 hours old (30 days), 5 accesses, neutral domain_priority=1.0
         let imp = calculate_importance(EventSource::Conversation, 720.0, 5, 1.0);
         let expected = 0.8 * (-0.001 * 720.0_f64).exp() as f32 * (1.0 + 0.5) * 1.0;
-        assert!((imp - expected).abs() < 1e-4, "expected {}, got {}", expected, imp);
+        assert!(
+            (imp - expected).abs() < 1e-4,
+            "expected {}, got {}",
+            expected,
+            imp
+        );
     }
 
     #[test]
@@ -290,7 +286,11 @@ mod tests {
         assert!((recency_decay(0.0) - 1.0).abs() < f32::EPSILON);
         // At 693 hours (half-life), should be ~0.5
         let half = recency_decay(693.0);
-        assert!((half - 0.5).abs() < 0.01, "half-life decay should be ~0.5, got {}", half);
+        assert!(
+            (half - 0.5).abs() < 0.01,
+            "half-life decay should be ~0.5, got {}",
+            half
+        );
         // Very old should approach 0
         let old = recency_decay(10000.0);
         assert!(old < 0.001);
@@ -309,13 +309,18 @@ mod tests {
         // Perfect match, just created, high importance, many accesses
         let score = recall_score(1.0, 0.0, 2.0, 10);
         // 1.0*0.4 + 1.0*0.2 + 1.0*0.2 + 1.0*0.2 = 1.0
-        assert!((score - 1.0).abs() < 1e-5, "max recall score should be 1.0, got {}", score);
+        assert!(
+            (score - 1.0).abs() < 1e-5,
+            "max recall score should be 1.0, got {}",
+            score
+        );
     }
 
     #[test]
     fn test_recall_score_old_low_importance() {
         let score = recall_score(0.5, 24.0, 0.3, 1);
-        // similarity=0.5*0.4=0.2, recency=exp(-2.4)*0.2≈0.018, importance=0.15*0.2=0.03, access=0.55*0.2=0.11
+        // similarity=0.5*0.4=0.2, recency=exp(-2.4)*0.2≈0.018, importance=0.15*0.2=0.03,
+        // access=0.55*0.2=0.11
         assert!(score > 0.0 && score < 1.0);
     }
 
@@ -331,7 +336,11 @@ mod tests {
     fn test_consolidation_score_below_threshold() {
         // Old, rarely accessed, low importance
         let score = consolidation_score(100.0, 0, 0.2);
-        assert!(score < 0.7, "should be below promotion threshold, got {}", score);
+        assert!(
+            score < 0.7,
+            "should be below promotion threshold, got {}",
+            score
+        );
     }
 
     #[test]

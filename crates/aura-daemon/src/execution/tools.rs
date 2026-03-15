@@ -10,10 +10,13 @@
 //! 2. Order Food
 //! 3. Check Calendar
 
-use aura_types::actions::{ActionType, TargetSelector};
-use aura_types::dsl::{DslStep, FailureStrategy};
-use aura_types::etg::ActionPlan;
 use std::collections::HashMap;
+
+use aura_types::{
+    actions::{ActionType, TargetSelector},
+    dsl::{DslStep, FailureStrategy},
+    etg::ActionPlan,
+};
 
 /// Maximum number of templates stored in the ETG cache.
 /// Enforced in `overwrite_learned_path` to prevent unbounded growth.
@@ -86,7 +89,9 @@ pub fn template_send_message(recipient: &str, message: &str, preferred_app: &str
         goal_description: format!("Send message to {} via {}", recipient, preferred_app),
         steps: vec![
             DslStep {
-                action: ActionType::OpenApp { package: preferred_app.to_string() },
+                action: ActionType::OpenApp {
+                    package: preferred_app.to_string(),
+                },
                 target: None,
                 timeout_ms: 2000,
                 on_failure: FailureStrategy::default(),
@@ -108,7 +113,9 @@ pub fn template_send_message(recipient: &str, message: &str, preferred_app: &str
                 label: Some("wait_search_button".to_string()),
             },
             DslStep {
-                action: ActionType::Type { text: recipient.to_string() },
+                action: ActionType::Type {
+                    text: recipient.to_string(),
+                },
                 target: None,
                 timeout_ms: 1000,
                 on_failure: FailureStrategy::default(),
@@ -130,7 +137,9 @@ pub fn template_send_message(recipient: &str, message: &str, preferred_app: &str
                 label: Some("wait_recipient_row".to_string()),
             },
             DslStep {
-                action: ActionType::Type { text: message.to_string() },
+                action: ActionType::Type {
+                    text: message.to_string(),
+                },
                 target: None,
                 timeout_ms: 1000,
                 on_failure: FailureStrategy::default(),
@@ -164,7 +173,9 @@ pub fn template_order_food(restaurant: &str, food_app: &str) -> ActionPlan {
         goal_description: format!("Order food from {} via {}", restaurant, food_app),
         steps: vec![
             DslStep {
-                action: ActionType::OpenApp { package: food_app.to_string() },
+                action: ActionType::OpenApp {
+                    package: food_app.to_string(),
+                },
                 target: None,
                 timeout_ms: 3000,
                 on_failure: FailureStrategy::default(),
@@ -186,7 +197,9 @@ pub fn template_order_food(restaurant: &str, food_app: &str) -> ActionPlan {
                 label: Some("wait_search_button".to_string()),
             },
             DslStep {
-                action: ActionType::Type { text: restaurant.to_string() },
+                action: ActionType::Type {
+                    text: restaurant.to_string(),
+                },
                 target: None,
                 timeout_ms: 1000,
                 on_failure: FailureStrategy::default(),
@@ -220,7 +233,9 @@ pub fn template_check_calendar(calendar_app: &str) -> ActionPlan {
         goal_description: format!("Check agenda in {}", calendar_app),
         steps: vec![
             DslStep {
-                action: ActionType::OpenApp { package: calendar_app.to_string() },
+                action: ActionType::OpenApp {
+                    package: calendar_app.to_string(),
+                },
                 target: None,
                 timeout_ms: 2000,
                 on_failure: FailureStrategy::default(),

@@ -26,15 +26,15 @@
 //!
 //! # Day-1 vs Year-1
 //!
-//! - **Day 1**: Nearly everything is `Unknown` or `CanDiscover`.  AURA is
-//!   honest about being new and learning.
-//! - **Month 1**: Many user-preference domains shift to `Believes` as
-//!   patterns accumulate.
-//! - **Year 1**: Core routines and preferences are `Knows`.  AURA only
-//!   hedges on genuinely ambiguous or novel situations.
+//! - **Day 1**: Nearly everything is `Unknown` or `CanDiscover`.  AURA is honest about being new
+//!   and learning.
+//! - **Month 1**: Many user-preference domains shift to `Believes` as patterns accumulate.
+//! - **Year 1**: Core routines and preferences are `Knows`.  AURA only hedges on genuinely
+//!   ambiguous or novel situations.
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
@@ -198,8 +198,7 @@ impl KnowledgeDomain {
     /// lose confidence.  This prevents AURA from being confidently wrong
     /// about things that may have changed (e.g., user changed jobs).
     pub fn apply_decay(&mut self, now_ms: u64) {
-        let days_inactive =
-            now_ms.saturating_sub(self.last_updated_ms) as f64 / MS_PER_DAY as f64;
+        let days_inactive = now_ms.saturating_sub(self.last_updated_ms) as f64 / MS_PER_DAY as f64;
         self.confidence *= KNOWLEDGE_DECAY_PER_DAY.powf(days_inactive as f32);
         self.confidence = self.confidence.clamp(0.0, 1.0);
         self.update_level();
@@ -207,19 +206,18 @@ impl KnowledgeDomain {
 
     /// Recalculate epistemic level from current confidence and observation count.
     fn update_level(&mut self) {
-        self.level = if self.confidence >= KNOWS_CONFIDENCE
-            && self.observation_count >= KNOWS_THRESHOLD
-        {
-            EpistemicLevel::Knows
-        } else if self.confidence >= BELIEVES_CONFIDENCE
-            && self.observation_count >= BELIEVES_THRESHOLD
-        {
-            EpistemicLevel::Believes
-        } else if self.discoverable {
-            EpistemicLevel::CanDiscover
-        } else {
-            EpistemicLevel::Unknown
-        };
+        self.level =
+            if self.confidence >= KNOWS_CONFIDENCE && self.observation_count >= KNOWS_THRESHOLD {
+                EpistemicLevel::Knows
+            } else if self.confidence >= BELIEVES_CONFIDENCE
+                && self.observation_count >= BELIEVES_THRESHOLD
+            {
+                EpistemicLevel::Believes
+            } else if self.discoverable {
+                EpistemicLevel::CanDiscover
+            } else {
+                EpistemicLevel::Unknown
+            };
     }
 
     /// The reliability ratio: observations / (observations + contradictions).
@@ -507,7 +505,10 @@ mod tests {
             EpistemicLevel::Unknown.hedge_phrase(),
             "I don't have information about this"
         );
-        assert_eq!(EpistemicLevel::Knows.hedge_phrase(), "I'm fairly confident that");
+        assert_eq!(
+            EpistemicLevel::Knows.hedge_phrase(),
+            "I'm fairly confident that"
+        );
     }
 
     #[test]

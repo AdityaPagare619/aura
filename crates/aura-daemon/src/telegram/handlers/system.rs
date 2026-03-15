@@ -228,11 +228,10 @@ pub fn handle_power(_ctx: &HandlerContext<'_>) -> Result<HandlerResponse, AuraEr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::telegram::audit::AuditLog;
-    use crate::telegram::queue::MessageQueue;
-    use crate::telegram::security::SecurityGate;
     use rusqlite::Connection;
+
+    use super::*;
+    use crate::telegram::{audit::AuditLog, queue::MessageQueue, security::SecurityGate};
 
     fn make_ctx<'a>(
         sec: &'a mut SecurityGate,
@@ -267,7 +266,7 @@ mod tests {
                 assert!(html.contains("AURA Status Dashboard"));
                 assert!(html.contains("Uptime"));
                 assert!(html.contains("unlocked"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -283,7 +282,7 @@ mod tests {
         match handle_health(&ctx).unwrap() {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("healthy"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -310,7 +309,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("AURA Daemon"));
                 assert!(html.contains("Version"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }

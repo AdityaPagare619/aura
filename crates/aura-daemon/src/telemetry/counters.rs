@@ -3,8 +3,10 @@
 //! `CounterSet` holds up to 64 named counters. Each counter uses `AtomicU64`
 //! so it can be safely incremented from any thread without a mutex.
 
-use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fmt,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 // ---------------------------------------------------------------------------
 // Constants — pre-defined counter names
@@ -186,7 +188,7 @@ impl CounterSet {
             Some(c) => {
                 c.increment();
                 Ok(())
-            }
+            },
             None => Err(CounterError::NotFound(name.to_string())),
         }
     }
@@ -200,7 +202,7 @@ impl CounterSet {
             Some(c) => {
                 c.increment_by(delta);
                 Ok(())
-            }
+            },
             None => Err(CounterError::NotFound(name.to_string())),
         }
     }
@@ -262,7 +264,7 @@ impl fmt::Display for CounterError {
             CounterError::NotFound(n) => write!(f, "counter not found: {n}"),
             CounterError::CapacityExceeded { max } => {
                 write!(f, "counter capacity exceeded: max {max}")
-            }
+            },
             CounterError::AlreadyExists(n) => write!(f, "counter already exists: {n}"),
         }
     }
@@ -295,7 +297,10 @@ mod tests {
         assert_eq!(set.count(), PREDEFINED_COUNTERS.len());
 
         for name in PREDEFINED_COUNTERS {
-            assert!(set.get(name).is_some(), "missing predefined counter: {name}");
+            assert!(
+                set.get(name).is_some(),
+                "missing predefined counter: {name}"
+            );
         }
     }
 

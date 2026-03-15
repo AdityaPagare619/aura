@@ -4,8 +4,7 @@
 //! using exposure-attenuated rates: learning rate decays as 1/√(1+n)
 //! so established patterns resist change while new patterns adapt quickly.
 
-use std::collections::VecDeque;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use aura_types::errors::{AuraError, MemError};
 use serde::{Deserialize, Serialize};
@@ -122,10 +121,12 @@ impl PatternEngine {
             let attenuation = 1.0 / (1.0 + pattern.occurrences as f32).sqrt();
             if success {
                 pattern.success_count = pattern.success_count.saturating_add(1);
-                pattern.strength = (pattern.strength + HEBBIAN_SUCCESS_BASE * attenuation).clamp(-1.0, 1.0);
+                pattern.strength =
+                    (pattern.strength + HEBBIAN_SUCCESS_BASE * attenuation).clamp(-1.0, 1.0);
             } else {
                 pattern.failure_count = pattern.failure_count.saturating_add(1);
-                pattern.strength = (pattern.strength - HEBBIAN_FAILURE_BASE * attenuation).clamp(-1.0, 1.0);
+                pattern.strength =
+                    (pattern.strength - HEBBIAN_FAILURE_BASE * attenuation).clamp(-1.0, 1.0);
             }
         } else {
             // Check capacity.
@@ -188,10 +189,12 @@ impl PatternEngine {
             // Exposure-attenuated: same formula as record_outcome.
             let attenuation = 1.0 / (1.0 + pattern.occurrences as f32).sqrt();
             if success {
-                pattern.strength = (pattern.strength + HEBBIAN_SUCCESS_BASE * attenuation).clamp(-1.0, 1.0);
+                pattern.strength =
+                    (pattern.strength + HEBBIAN_SUCCESS_BASE * attenuation).clamp(-1.0, 1.0);
                 pattern.success_count = pattern.success_count.saturating_add(1);
             } else {
-                pattern.strength = (pattern.strength - HEBBIAN_FAILURE_BASE * attenuation).clamp(-1.0, 1.0);
+                pattern.strength =
+                    (pattern.strength - HEBBIAN_FAILURE_BASE * attenuation).clamp(-1.0, 1.0);
                 pattern.failure_count = pattern.failure_count.saturating_add(1);
             }
             pattern.occurrences = pattern.occurrences.saturating_add(1);
@@ -428,8 +431,7 @@ impl PatternEngine {
         // Prune if map grows too large (cap at 8192 pairs).
         if self.co_occurrences.len() > 8192 {
             // Remove the weakest 25%.
-            let mut pairs: Vec<((u64, u64), f32)> =
-                self.co_occurrences.drain().collect();
+            let mut pairs: Vec<((u64, u64), f32)> = self.co_occurrences.drain().collect();
             pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             pairs.truncate(6144);
             self.co_occurrences = pairs.into_iter().collect();

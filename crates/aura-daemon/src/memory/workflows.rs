@@ -3,12 +3,13 @@
 //! Stores patterns extracted by `WorkflowObserver` for long-term retention
 //! and automation synthesis. This forms the foundation for M9.
 
-use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use rusqlite::{params, Connection};
-use tracing::{info, debug};
+use std::{path::Path, sync::Arc};
+
 use aura_types::errors::MemError;
+use rusqlite::{params, Connection};
+use tokio::sync::Mutex;
+use tracing::{debug, info};
+
 use crate::execution::learning::workflows::WorkflowPattern;
 
 /// Stores recurring workflow patterns extracted from execution traces.
@@ -26,18 +27,23 @@ impl WorkflowMemory {
         Self::migrate(&conn)?;
 
         info!("workflow memory initialized at {:?}", path);
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// Open an in-memory database (for testing).
     pub fn open_in_memory() -> Result<Self, MemError> {
-        let conn = Connection::open_in_memory()
-            .map_err(|e| MemError::DatabaseError(format!("in-memory workflow open failed: {}", e)))?;
+        let conn = Connection::open_in_memory().map_err(|e| {
+            MemError::DatabaseError(format!("in-memory workflow open failed: {}", e))
+        })?;
 
         Self::migrate(&conn)?;
 
         debug!("workflow memory initialized in-memory (test mode)");
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     fn migrate(conn: &Connection) -> Result<(), MemError> {
@@ -49,7 +55,7 @@ impl WorkflowMemory {
                  frequency INTEGER NOT NULL,
                  avg_time_ms INTEGER NOT NULL,
                  last_observed_ms INTEGER NOT NULL
-             );"
+             );",
         )
         .map_err(|e| MemError::MigrationFailed(format!("workflow db migration failed: {}", e)))
     }
@@ -58,7 +64,7 @@ impl WorkflowMemory {
     pub async fn store(&self, pattern: &WorkflowPattern, now_ms: u64) -> Result<u64, MemError> {
         let conn = self.conn.clone();
         let p = pattern.clone();
-        
+
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let seq_json = serde_json::to_string(&p.sequence)
@@ -88,9 +94,9 @@ impl WorkflowMemory {
 
     /// Retrieve all stored workflow patterns.
     pub async fn get_all(&self) -> Result<Vec<(u64, WorkflowPattern)>, MemError> {
-         let conn = self.conn.clone();
-         
-         tokio::task::spawn_blocking(move || {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
              let conn = conn.blocking_lock();
              let mut stmt = conn.prepare(
                  "SELECT id, sequence_json, frequency, avg_time_ms FROM workflow_patterns ORDER BY frequency DESC"

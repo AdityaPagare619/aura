@@ -46,10 +46,7 @@ pub fn handle_ask(ctx: &HandlerContext<'_>, question: &str) -> Result<HandlerRes
 
 /// `/think <problem>` — Fallback when the Neocortex pipeline is unavailable.
 #[instrument(skip(ctx))]
-pub fn handle_think(
-    ctx: &HandlerContext<'_>,
-    problem: &str,
-) -> Result<HandlerResponse, AuraError> {
+pub fn handle_think(ctx: &HandlerContext<'_>, problem: &str) -> Result<HandlerResponse, AuraError> {
     if problem.is_empty() {
         return Ok(HandlerResponse::text("Usage: /think <problem>"));
     }
@@ -95,10 +92,7 @@ pub fn handle_plan(ctx: &HandlerContext<'_>, goal: &str) -> Result<HandlerRespon
 
 /// `/explain <topic>` — Fallback when the Neocortex pipeline is unavailable.
 #[instrument(skip(ctx))]
-pub fn handle_explain(
-    ctx: &HandlerContext<'_>,
-    topic: &str,
-) -> Result<HandlerResponse, AuraError> {
+pub fn handle_explain(ctx: &HandlerContext<'_>, topic: &str) -> Result<HandlerResponse, AuraError> {
     if topic.is_empty() {
         return Ok(HandlerResponse::text("Usage: /explain <topic>"));
     }
@@ -199,12 +193,12 @@ fn escape_html(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::telegram::audit::AuditLog;
-    use crate::telegram::handlers::HandlerContext;
-    use crate::telegram::queue::MessageQueue;
-    use crate::telegram::security::SecurityGate;
     use rusqlite::Connection;
+
+    use super::*;
+    use crate::telegram::{
+        audit::AuditLog, handlers::HandlerContext, queue::MessageQueue, security::SecurityGate,
+    };
 
     fn make_ctx<'a>(
         sec: &'a mut SecurityGate,
@@ -252,7 +246,7 @@ mod tests {
                 // Must NOT contain misleading "Processing" or "Thinking"
                 assert!(!html.contains("Processing via Neocortex"));
                 assert!(!html.contains("Thinking about"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -270,7 +264,7 @@ mod tests {
                 assert!(html.contains("Cognitive Engine Unavailable"));
                 assert!(html.contains("halting problem"));
                 assert!(html.contains("not"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -288,7 +282,7 @@ mod tests {
                 assert!(html.contains("Cognitive Engine Unavailable"));
                 assert!(html.contains("es"));
                 assert!(html.contains("hello world"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }

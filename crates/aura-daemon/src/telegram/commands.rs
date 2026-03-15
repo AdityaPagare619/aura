@@ -200,7 +200,7 @@ impl TelegramCommand {
                 };
                 let lines = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);
                 Self::Logs { service, lines }
-            }
+            },
             "/uptime" | "/up" => Self::Uptime,
             "/version" | "/v" => Self::Version,
             "/power" | "/battery" | "/bat" => Self::Power,
@@ -235,7 +235,7 @@ impl TelegramCommand {
                         target_lang: "en".to_string(),
                     }
                 }
-            }
+            },
 
             // Memory
             "/remember" | "/rem" => Self::Remember {
@@ -278,7 +278,7 @@ impl TelegramCommand {
                         raw: text.to_string(),
                     }
                 }
-            }
+            },
             "/call" => Self::Call {
                 contact: args_str.to_string(),
             },
@@ -302,7 +302,7 @@ impl TelegramCommand {
                         }
                     }
                 }
-            }
+            },
             "/screenshot" | "/ss" => Self::Screenshot,
             "/navigate" | "/nav" => Self::Navigate {
                 destination: args_str.to_string(),
@@ -324,7 +324,7 @@ impl TelegramCommand {
                         raw: text.to_string(),
                     }
                 }
-            }
+            },
             "/get" => Self::Get {
                 key: args_str.to_string(),
             },
@@ -348,7 +348,7 @@ impl TelegramCommand {
                         Self::Personality
                     }
                 }
-            }
+            },
             "/trust" => {
                 if args_str.is_empty() {
                     Self::Trust
@@ -361,7 +361,7 @@ impl TelegramCommand {
                         }
                     }
                 }
-            }
+            },
             "/voice" => Self::Voice,
             "/chat" => Self::Chat,
             "/quiet" => Self::Quiet,
@@ -384,7 +384,7 @@ impl TelegramCommand {
                         action: PinAction::Status,
                     },
                 }
-            }
+            },
             "/lock" => Self::Lock,
             "/unlock" => Self::Unlock {
                 pin: args_str.to_string(),
@@ -717,7 +717,7 @@ mod tests {
             TelegramCommand::Logs { service, lines } => {
                 assert_eq!(service, Some("daemon".to_string()));
                 assert_eq!(lines, 50);
-            }
+            },
             other => panic!("expected Logs, got {other:?}"),
         }
     }
@@ -733,7 +733,7 @@ mod tests {
                 assert_eq!(app, "whatsapp");
                 assert_eq!(contact, "John");
                 assert_eq!(message, "Hello there!");
-            }
+            },
             other => panic!("expected Send, got {other:?}"),
         }
     }
@@ -762,7 +762,7 @@ mod tests {
             TelegramCommand::Schedule { event, time } => {
                 assert_eq!(event, "team meeting");
                 assert_eq!(time, "3pm");
-            }
+            },
             other => panic!("expected Schedule, got {other:?}"),
         }
     }
@@ -773,7 +773,7 @@ mod tests {
             TelegramCommand::Translate { text, target_lang } => {
                 assert_eq!(text, "hello world");
                 assert_eq!(target_lang, "es");
-            }
+            },
             other => panic!("expected Translate, got {other:?}"),
         }
     }
@@ -784,7 +784,7 @@ mod tests {
             TelegramCommand::PersonalitySet { trait_name, value } => {
                 assert_eq!(trait_name, "warmth");
                 assert!((value - 0.8).abs() < f32::EPSILON);
-            }
+            },
             other => panic!("expected PersonalitySet, got {other:?}"),
         }
     }

@@ -98,7 +98,7 @@ impl MoodState {
     pub fn from_llm_hint(hint: f32) -> Self {
         let clamped = hint.clamp(-1.0, 1.0);
         Self {
-            valence: (clamped + 1.0) / 2.0,     // map [-1,1] → [0,1]
+            valence: (clamped + 1.0) / 2.0, // map [-1,1] → [0,1]
             arousal: clamped.abs().clamp(0.0, 1.0),
             dominance: 0.5,
         }
@@ -160,36 +160,36 @@ pub fn mood_to_tts_params(mood_hint: Option<f32>, context: &SpeechContext) -> Tt
                 // calm / neutral
                 (0.95_f32, 1.0_f32, 0.8_f32)
             }
-        }
+        },
         // No hint from LLM → neutral defaults
         None => (1.0_f32, 1.0_f32, 0.8_f32),
     };
 
     // -- Context adjustments --------------------------------------------
     match context {
-        SpeechContext::Casual => {} // no adjustments
+        SpeechContext::Casual => {}, // no adjustments
         SpeechContext::Notification => {
             speed *= 1.05;
             volume = volume.max(0.7);
-        }
+        },
         SpeechContext::Alert => {
             speed *= 0.95;
             pitch *= 1.05;
             volume = 0.95;
-        }
+        },
         SpeechContext::LongForm => {
             speed *= 0.95;
             volume *= 0.9;
-        }
+        },
         SpeechContext::Whisper => {
             speed *= 0.85;
             volume = 0.3;
             pitch *= 0.95;
-        }
+        },
         SpeechContext::PhoneCall => {
             speed *= 0.95;
             volume = 0.85;
-        }
+        },
     }
 
     TtsParams {
@@ -246,25 +246,57 @@ mod tests {
     #[test]
     fn neutral_hint_produces_moderate_params() {
         let params = mood_to_tts_params(None, &SpeechContext::Casual);
-        assert!(params.speed > 0.8 && params.speed < 1.3, "speed = {}", params.speed);
-        assert!(params.pitch > 0.9 && params.pitch < 1.15, "pitch = {}", params.pitch);
-        assert!(params.volume > 0.5 && params.volume < 1.0, "volume = {}", params.volume);
+        assert!(
+            params.speed > 0.8 && params.speed < 1.3,
+            "speed = {}",
+            params.speed
+        );
+        assert!(
+            params.pitch > 0.9 && params.pitch < 1.15,
+            "pitch = {}",
+            params.pitch
+        );
+        assert!(
+            params.volume > 0.5 && params.volume < 1.0,
+            "volume = {}",
+            params.volume
+        );
     }
 
     #[test]
     fn positive_hint_is_faster_and_brighter() {
         let excited = mood_to_tts_params(Some(0.8), &SpeechContext::Casual);
         let neutral = mood_to_tts_params(None, &SpeechContext::Casual);
-        assert!(excited.speed > neutral.speed, "excited speed {} should exceed neutral {}", excited.speed, neutral.speed);
-        assert!(excited.pitch >= neutral.pitch, "excited pitch {} should be >= neutral {}", excited.pitch, neutral.pitch);
+        assert!(
+            excited.speed > neutral.speed,
+            "excited speed {} should exceed neutral {}",
+            excited.speed,
+            neutral.speed
+        );
+        assert!(
+            excited.pitch >= neutral.pitch,
+            "excited pitch {} should be >= neutral {}",
+            excited.pitch,
+            neutral.pitch
+        );
     }
 
     #[test]
     fn negative_hint_is_slower_and_softer() {
         let concerned = mood_to_tts_params(Some(-0.8), &SpeechContext::Casual);
         let neutral = mood_to_tts_params(None, &SpeechContext::Casual);
-        assert!(concerned.speed < neutral.speed, "concerned speed {} should be < neutral {}", concerned.speed, neutral.speed);
-        assert!(concerned.pitch < neutral.pitch, "concerned pitch {} should be < neutral {}", concerned.pitch, neutral.pitch);
+        assert!(
+            concerned.speed < neutral.speed,
+            "concerned speed {} should be < neutral {}",
+            concerned.speed,
+            neutral.speed
+        );
+        assert!(
+            concerned.pitch < neutral.pitch,
+            "concerned pitch {} should be < neutral {}",
+            concerned.pitch,
+            neutral.pitch
+        );
     }
 
     #[test]

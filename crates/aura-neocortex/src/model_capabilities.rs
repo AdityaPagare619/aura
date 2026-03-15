@@ -102,9 +102,9 @@ impl ModelCapabilities {
     ///
     /// # Arguments
     /// - `meta` — parsed GGUF header metadata (source of truth).
-    /// - `user_override_embedding_dim` — optional power-user override from
-    ///   `aura.config.toml`. Applied only when GGUF metadata is absent or
-    ///   explicitly wrong. When present AND GGUF is present, GGUF wins.
+    /// - `user_override_embedding_dim` — optional power-user override from `aura.config.toml`.
+    ///   Applied only when GGUF metadata is absent or explicitly wrong. When present AND GGUF is
+    ///   present, GGUF wins.
     pub fn from_gguf(meta: &GgufMeta, user_override_embedding_dim: Option<u32>) -> Self {
         let fallback = Self::fallback_defaults();
 
@@ -122,7 +122,7 @@ impl ModelCapabilities {
                     }
                 }
                 (v, ModelCapabilitySource::GgufMetadata)
-            }
+            },
             None => match user_override_embedding_dim {
                 Some(v) => {
                     warn!(
@@ -131,15 +131,18 @@ impl ModelCapabilities {
                          verify model file integrity"
                     );
                     (v, ModelCapabilitySource::UserConfigOverride)
-                }
+                },
                 None => {
                     warn!(
                         fallback_value = fallback.embedding_dim,
                         "GGUF embedding_length absent and no user override — \
                          using compiled fallback; embeddings may be wrong for this model"
                     );
-                    (fallback.embedding_dim, ModelCapabilitySource::CompiledFallback)
-                }
+                    (
+                        fallback.embedding_dim,
+                        ModelCapabilitySource::CompiledFallback,
+                    )
+                },
             },
         };
 
@@ -163,7 +166,7 @@ impl ModelCapabilities {
                     "GGUF block_count absent — using compiled fallback"
                 );
                 fallback.block_count
-            }
+            },
         };
 
         // ── feed_forward_length ───────────────────────────────────────────
@@ -175,7 +178,7 @@ impl ModelCapabilities {
                     "GGUF feed_forward_length absent — using compiled fallback"
                 );
                 fallback.feed_forward_length
-            }
+            },
         };
 
         // ── architecture ──────────────────────────────────────────────────
@@ -272,7 +275,10 @@ mod tests {
         assert_eq!(caps.block_count, 28);
         assert_eq!(caps.feed_forward_length, 8960);
         assert_eq!(caps.architecture, "qwen2");
-        assert_eq!(caps.embedding_dim_source, ModelCapabilitySource::GgufMetadata);
+        assert_eq!(
+            caps.embedding_dim_source,
+            ModelCapabilitySource::GgufMetadata
+        );
     }
 
     #[test]
@@ -283,7 +289,10 @@ mod tests {
         let caps = ModelCapabilities::from_gguf(&meta, Some(768));
 
         assert_eq!(caps.embedding_dim, 1536);
-        assert_eq!(caps.embedding_dim_source, ModelCapabilitySource::GgufMetadata);
+        assert_eq!(
+            caps.embedding_dim_source,
+            ModelCapabilitySource::GgufMetadata
+        );
     }
 
     #[test]
@@ -292,7 +301,10 @@ mod tests {
         let caps = ModelCapabilities::from_gguf(&meta, Some(2048));
 
         assert_eq!(caps.embedding_dim, 2048);
-        assert_eq!(caps.embedding_dim_source, ModelCapabilitySource::UserConfigOverride);
+        assert_eq!(
+            caps.embedding_dim_source,
+            ModelCapabilitySource::UserConfigOverride
+        );
     }
 
     #[test]
@@ -302,7 +314,10 @@ mod tests {
 
         // Must use compiled fallback, not 768 (BERT-era)
         assert_eq!(caps.embedding_dim, 4096);
-        assert_eq!(caps.embedding_dim_source, ModelCapabilitySource::CompiledFallback);
+        assert_eq!(
+            caps.embedding_dim_source,
+            ModelCapabilitySource::CompiledFallback
+        );
     }
 
     #[test]
@@ -311,7 +326,10 @@ mod tests {
         // 768 is BERT-era; all modern on-device models use 1536-4096+.
         let caps = ModelCapabilities::fallback_defaults();
         assert_ne!(caps.embedding_dim, 768, "fallback must not be BERT-era 768");
-        assert!(caps.embedding_dim >= 1024, "fallback must be modern model size");
+        assert!(
+            caps.embedding_dim >= 1024,
+            "fallback must be modern model size"
+        );
     }
 
     #[test]
@@ -342,7 +360,10 @@ mod tests {
             ..GgufMeta::default()
         };
         let caps = ModelCapabilities::from_gguf(&meta, None);
-        assert!(caps.context_length <= 131_072, "context must be mobile-clamped");
+        assert!(
+            caps.context_length <= 131_072,
+            "context must be mobile-clamped"
+        );
     }
 
     #[test]

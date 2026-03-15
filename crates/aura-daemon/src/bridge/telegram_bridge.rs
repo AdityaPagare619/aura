@@ -18,20 +18,24 @@
 //!  DaemonResponse ──► destination == Telegram{chat_id} ──► queue.enqueue()
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use async_trait::async_trait;
 use tracing::{debug, info, warn};
 
-use crate::bridge::{BridgeError, BridgeResult, InputChannel};
-use crate::daemon_core::channels::{
-    DaemonResponseRx, InputSource, UserCommand, UserCommandTx,
+use crate::{
+    bridge::{BridgeError, BridgeResult, InputChannel},
+    daemon_core::channels::{DaemonResponseRx, InputSource, UserCommand, UserCommandTx},
+    telegram::{
+        commands::TelegramCommand,
+        queue::{MessageContent, MessageQueue},
+        voice_handler::{CommunicationContext, VoiceHandler, VoiceModePreference},
+        TelegramConfig,
+    },
 };
-use crate::telegram::commands::TelegramCommand;
-use crate::telegram::queue::{MessageContent, MessageQueue};
-use crate::telegram::voice_handler::{CommunicationContext, VoiceHandler, VoiceModePreference};
-use crate::telegram::TelegramConfig;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -94,7 +98,10 @@ fn command_to_text(cmd: &TelegramCommand) -> String {
         TelegramCommand::Plan { goal } => goal.clone(),
         TelegramCommand::Explain { topic } => topic.clone(),
         TelegramCommand::Summarize { text } => text.clone(),
-        TelegramCommand::Translate { text, target_lang: _ } => text.clone(),
+        TelegramCommand::Translate {
+            text,
+            target_lang: _,
+        } => text.clone(),
         TelegramCommand::Remember { text } => text.clone(),
         TelegramCommand::Recall { query } => query.clone(),
         TelegramCommand::Forget { query } => query.clone(),
@@ -195,11 +202,11 @@ impl TelegramBridge {
                     )
                     .map_err(|e| BridgeError::Upstream(format!("queue enqueue failed: {e}")))?;
                 Ok(())
-            }
+            },
             None => {
                 debug!(chat_id, len = text.len(), "no queue — response logged only");
                 Ok(())
-            }
+            },
         }
     }
 
@@ -233,7 +240,9 @@ impl TelegramBridge {
                         3,
                         Some("voice"),
                     )
-                    .map_err(|e| BridgeError::Upstream(format!("voice queue enqueue failed: {e}")))?;
+                    .map_err(|e| {
+                        BridgeError::Upstream(format!("voice queue enqueue failed: {e}"))
+                    })?;
                 debug!(chat_id, len = text.len(), "response delivered as voice");
             }
             return Ok(true);
@@ -287,20 +296,24 @@ impl InputChannel for TelegramBridge {
                 Ok(response) => {
                     // Route based on destination.
                     if let InputSource::Telegram { chat_id } = response.destination {
-                        debug!(chat_id, len = response.text.len(), "delivering daemon response");
+                        debug!(
+                            chat_id,
+                            len = response.text.len(),
+                            "delivering daemon response"
+                        );
                         if let Err(e) = self.deliver_response(chat_id, &response.text) {
                             warn!(error = %e, chat_id, "failed to deliver response");
                         }
                     }
-                }
+                },
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
                     // No response pending — yield and check again.
                     tokio::task::yield_now().await;
-                }
+                },
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     info!("response channel closed — telegram bridge exiting");
                     break;
-                }
+                },
             }
         }
 
@@ -315,9 +328,10 @@ impl InputChannel for TelegramBridge {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
+
     use super::*;
     use crate::daemon_core::channels::DaemonResponse;
-    use tokio::sync::mpsc;
 
     fn test_config() -> TelegramConfig {
         TelegramConfig {
@@ -420,11 +434,15 @@ mod tests {
         };
         let uc = TelegramBridge::to_user_command(&cmd, 42);
         match uc {
-            UserCommand::Chat { text, source, voice_meta } => {
+            UserCommand::Chat {
+                text,
+                source,
+                voice_meta,
+            } => {
                 assert_eq!(text, "hello world");
                 assert_eq!(source, InputSource::Telegram { chat_id: 42 });
                 assert!(voice_meta.is_none());
-            }
+            },
             _ => panic!("expected Chat, got {uc:?}"),
         }
     }
@@ -444,7 +462,7 @@ mod tests {
                 assert_eq!(description, "open calculator");
                 assert_eq!(priority, 1);
                 assert_eq!(source, InputSource::Telegram { chat_id: 99 });
-            }
+            },
             _ => panic!("expected TaskRequest, got {uc:?}"),
         }
     }
@@ -490,7 +508,11 @@ mod tests {
         let (_resp_tx, resp_rx) = mpsc::channel::<DaemonResponse>(16);
 
         let result = bridge.run(cmd_tx, resp_rx).await;
-        assert!(result.is_ok(), "bridge.run with pre-cancelled token failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "bridge.run with pre-cancelled token failed: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -506,7 +528,11 @@ mod tests {
         drop(_resp_tx);
 
         let result = bridge.run(cmd_tx, resp_rx).await;
-        assert!(result.is_ok(), "bridge.run with closed response channel failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "bridge.run with closed response channel failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -517,7 +543,11 @@ mod tests {
 
         // Should succeed (just logs).
         let result = bridge.deliver_response(42, "hello");
-        assert!(result.is_ok(), "deliver_response with no queue failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "deliver_response with no queue failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -529,10 +559,19 @@ mod tests {
         let bridge = TelegramBridge::new(config, cancel, Some(queue));
 
         let result = bridge.deliver_response(42, "response text");
-        assert!(result.is_ok(), "deliver_response with queue failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "deliver_response with queue failed: {:?}",
+            result.err()
+        );
 
         // Verify the message was enqueued.
-        let pending = bridge.queue.as_ref().unwrap().pending_count().expect("count");
+        let pending = bridge
+            .queue
+            .as_ref()
+            .unwrap()
+            .pending_count()
+            .expect("count");
         assert_eq!(pending, 1);
     }
 
@@ -547,14 +586,20 @@ mod tests {
                 contact: "b".into(),
                 message: "c".into(),
             },
-            TelegramCommand::Call { contact: "d".into() },
+            TelegramCommand::Call {
+                contact: "d".into(),
+            },
             TelegramCommand::Schedule {
                 event: "e".into(),
                 time: "f".into(),
             },
             TelegramCommand::Screenshot,
-            TelegramCommand::Navigate { destination: "g".into() },
-            TelegramCommand::Automate { routine: "h".into() },
+            TelegramCommand::Navigate {
+                destination: "g".into(),
+            },
+            TelegramCommand::Automate {
+                routine: "h".into(),
+            },
         ];
         for cmd in &cmds {
             assert!(is_daemon_routed(cmd), "expected daemon-routed: {cmd:?}");
@@ -578,7 +623,10 @@ mod tests {
             TelegramCommand::Unknown { raw: "x".into() },
         ];
         for cmd in &cmds {
-            assert!(!is_daemon_routed(cmd), "expected NOT daemon-routed: {cmd:?}");
+            assert!(
+                !is_daemon_routed(cmd),
+                "expected NOT daemon-routed: {cmd:?}"
+            );
         }
     }
 }

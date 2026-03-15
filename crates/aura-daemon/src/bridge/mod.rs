@@ -22,11 +22,9 @@ pub mod telegram_bridge;
 pub mod voice_bridge;
 
 use async_trait::async_trait;
-
-use crate::daemon_core::channels::{
-    DaemonResponseRx, InputSource, UserCommandTx,
-};
 use aura_types::errors::AuraError;
+
+use crate::daemon_core::channels::{DaemonResponseRx, InputSource, UserCommandTx};
 
 // ---------------------------------------------------------------------------
 // Bridge error
@@ -150,9 +148,10 @@ pub use system_api::{SystemBridge, SystemBridgeError, SystemCommand, SystemResul
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
+
     use super::*;
     use crate::daemon_core::channels::{DaemonResponse, InputSource, UserCommand};
-    use tokio::sync::mpsc;
 
     /// A trivial test bridge that sends one Chat command and exits.
     struct StubBridge;
@@ -188,7 +187,10 @@ mod tests {
         let (_resp_tx, resp_rx) = mpsc::channel::<DaemonResponse>(16);
 
         let mut bridge = StubBridge;
-        bridge.run(cmd_tx, resp_rx).await.expect("bridge should succeed");
+        bridge
+            .run(cmd_tx, resp_rx)
+            .await
+            .expect("bridge should succeed");
 
         let cmd = cmd_rx.recv().await.expect("should receive command");
         assert!(matches!(cmd, UserCommand::Chat { text, .. } if text == "hello from stub"));

@@ -700,14 +700,14 @@ impl GoalRegistry {
                 } else {
                     Some(format!("expected boolean, got '{}'", value))
                 }
-            }
+            },
             ParamType::Enum(variants) => {
                 if variants.iter().any(|v| v.eq_ignore_ascii_case(value)) {
                     None
                 } else {
                     Some(format!("expected one of {:?}, got '{}'", variants, value))
                 }
-            }
+            },
             ParamType::PhoneNumber => {
                 let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
                 if digits.len() >= 7 {
@@ -715,7 +715,7 @@ impl GoalRegistry {
                 } else {
                     Some(format!("invalid phone number: '{}'", value))
                 }
-            }
+            },
             ParamType::Url => {
                 if value.starts_with("http://") || value.starts_with("https://") {
                     None
@@ -725,7 +725,7 @@ impl GoalRegistry {
                         value
                     ))
                 }
-            }
+            },
             ParamType::TimeOfDay => {
                 // Accept HH:MM or H:MM patterns.
                 let parts: Vec<&str> = value.split(':').collect();
@@ -737,7 +737,7 @@ impl GoalRegistry {
                 } else {
                     Some(format!("expected time HH:MM, got '{}'", value))
                 }
-            }
+            },
         }
     }
 
@@ -797,13 +797,13 @@ impl GoalRegistry {
             match provided {
                 None if def.required && def.default_value.is_none() => {
                     missing.push(def.name.clone());
-                }
+                },
                 Some((_, value)) => {
                     if let Some(err) = Self::validate_param_type(&def.param_type, value) {
                         invalid.push((def.name.clone(), err));
                     }
-                }
-                _ => {} // Optional or has default — ok.
+                },
+                _ => {}, // Optional or has default — ok.
             }
         }
 
@@ -951,7 +951,8 @@ mod tests {
     fn test_register_and_retrieve_capability() {
         let mut reg = GoalRegistry::new();
         let cap = make_capability("send_msg", "Send Message", 0.8);
-        reg.register_capability(cap).expect("register_capability should accept valid capability");
+        reg.register_capability(cap)
+            .expect("register_capability should accept valid capability");
         assert_eq!(reg.capability_count(), 1);
 
         let found = reg.get_capability("send_msg");
@@ -1124,7 +1125,8 @@ mod tests {
             success_rate: 0.0,
             learned: false,
         };
-        reg.register_template(t).expect("register_template should accept valid template");
+        reg.register_template(t)
+            .expect("register_template should accept valid template");
         assert_eq!(reg.template_count(), 1);
     }
 

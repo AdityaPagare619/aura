@@ -1,17 +1,18 @@
 //! Goal decomposition engine — breaking high-level goals into executable sub-goals.
 //!
 //! Implements a Hierarchical Task Network (HTN) style decomposition:
-//! 1. **Template matching**: known patterns (e.g. "send message" → open app, find contact, type, send)
+//! 1. **Template matching**: known patterns (e.g. "send message" → open app, find contact, type,
+//!    send)
 //! 2. **ETG-guided**: if an ETG path exists, convert it directly into steps
 //! 3. **LLM-assisted**: if no template matches, flag for neocortex decomposition
 //!
 //! Sub-goals form a DAG (not just linear), allowing parallel execution of
 //! independent sub-tasks.
 
-use aura_types::actions::ActionType;
-use aura_types::errors::GoalError;
-#[allow(unused_imports)] // GoalStep/StepStatus re-imported in inner scopes; this is the canonical top-level import
+#[allow(unused_imports)]
+// GoalStep/StepStatus re-imported in inner scopes; this is the canonical top-level import
 use aura_types::goals::{Goal, GoalSource, GoalStatus, GoalStep, StepStatus};
+use aura_types::{actions::ActionType, errors::GoalError};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -965,7 +966,8 @@ impl HtnDecomposer {
 
             total_duration = total_duration.saturating_add(task.estimated_duration_ms);
             if task.kind == HtnTaskKind::Compound {
-                min_confidence = min_confidence.min(0.7); // Reduce confidence for unresolved compounds.
+                min_confidence = min_confidence.min(0.7); // Reduce confidence for unresolved
+                                                          // compounds.
             }
 
             nodes.push(PlanNode {
@@ -1270,8 +1272,9 @@ impl Default for HtnDecomposer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::goals::{GoalPriority, GoalSource, GoalStatus};
+
+    use super::*;
 
     fn make_goal(id: u64, description: &str) -> Goal {
         Goal {
@@ -1362,7 +1365,7 @@ mod tests {
         match result {
             Err(GoalError::DecompositionFailed(msg)) => {
                 assert!(msg.contains("max depth"));
-            }
+            },
             other => panic!("expected DecompositionFailed, got {:?}", other),
         }
     }

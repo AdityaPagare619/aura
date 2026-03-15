@@ -8,20 +8,20 @@
 //! - `executor` — Main `execute_plan()` engine
 
 pub mod cycle;
-pub mod retry;
-pub mod monitor;
 pub mod etg;
 pub mod executor;
+pub mod learning;
+pub mod monitor;
 pub mod planner;
 pub mod react;
-pub mod learning;
+pub mod retry;
 pub mod tools;
 
 pub use cycle::{CycleDetector, CycleTier, TransitionEntry};
-pub use retry::{RetryPolicy, retry_with_backoff};
-pub use monitor::{ExecutionMonitor, InvariantViolation};
 pub use etg::EtgStore;
-pub use executor::{Executor, ExecutionOutcome};
+pub use executor::{ExecutionOutcome, Executor};
+pub use learning::{ExecutionTrace, WorkflowObserver, WorkflowPattern};
+pub use monitor::{ExecutionMonitor, InvariantViolation};
 pub use planner::{ActionPlanner, EnhancedPlanner, PlanError};
-pub use react::{SemanticReact, CognitiveState, EscalationContext};
-pub use learning::{WorkflowObserver, WorkflowPattern, ExecutionTrace};
+pub use react::{CognitiveState, EscalationContext, SemanticReact};
+pub use retry::{retry_with_backoff, RetryPolicy};

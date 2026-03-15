@@ -7,13 +7,12 @@
 //! [`ReactionDetector`] classifies it as a [`UserReaction`] variant by
 //! combining signals from AURA's cognitive subsystems:
 //!
-//! - **Sentiment** — emotional valence from the Amygdala's 4-channel
-//!   importance scoring (urgency, emotional valence, novelty, relevance).
-//!   We use the emotional valence channel, NOT keyword matching.
+//! - **Sentiment** — emotional valence from the Amygdala's 4-channel importance scoring (urgency,
+//!   emotional valence, novelty, relevance). We use the emotional valence channel, NOT keyword
+//!   matching.
 //!
-//! - **Semantic similarity** — cosine similarity computed externally by the
-//!   Contextor / embedding engine, comparing the new input against both the
-//!   original user input and AURA's response.
+//! - **Semantic similarity** — cosine similarity computed externally by the Contextor / embedding
+//!   engine, comparing the new input against both the original user input and AURA's response.
 //!
 //! These two orthogonal signals, combined with configurable thresholds,
 //! produce six reaction types that close the feedback loop for the
@@ -40,9 +39,8 @@
 //! }
 //! ```
 
-use tracing::debug;
-
 use aura_types::outcome::UserReaction;
+use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -171,10 +169,10 @@ impl ReactionDetector {
     /// # Parameters
     ///
     /// - `original_input` — the user's input that triggered AURA's response.
-    /// - `response_text` — AURA's response (stored for potential future use;
-    ///   similarity is computed externally).
-    /// - `correlation_intent` — the intent label from classification, used
-    ///   to correlate with the ExecutionOutcome in the OutcomeBus.
+    /// - `response_text` — AURA's response (stored for potential future use; similarity is computed
+    ///   externally).
+    /// - `correlation_intent` — the intent label from classification, used to correlate with the
+    ///   ExecutionOutcome in the OutcomeBus.
     /// - `correlation_timestamp` — the outcome's started_at_ms timestamp.
     /// - `now_ms` — current epoch timestamp in milliseconds.
     pub fn open_window(
@@ -216,15 +214,12 @@ impl ReactionDetector {
     /// # Cognitive signals (all computed externally)
     ///
     /// - `next_input` — the user's new input text (used only for tracing).
-    /// - `sentiment_score` — emotional valence from the Amygdala's 4-channel
-    ///   scoring system.  Range: -1.0 (very negative) to 1.0 (very positive).
-    ///   This is NOT a keyword lookup.
-    /// - `similarity_to_original` — cosine similarity between the new input
-    ///   and the original input that AURA responded to.  High values indicate
-    ///   the user is repeating themselves.
-    /// - `similarity_to_response` — cosine similarity between the new input
-    ///   and AURA's response text.  High values indicate the user is
-    ///   referencing or following up on AURA's answer.
+    /// - `sentiment_score` — emotional valence from the Amygdala's 4-channel scoring system.
+    ///   Range: -1.0 (very negative) to 1.0 (very positive). This is NOT a keyword lookup.
+    /// - `similarity_to_original` — cosine similarity between the new input and the original input
+    ///   that AURA responded to.  High values indicate the user is repeating themselves.
+    /// - `similarity_to_response` — cosine similarity between the new input and AURA's response
+    ///   text.  High values indicate the user is referencing or following up on AURA's answer.
     /// - `now_ms` — current epoch timestamp.
     ///
     /// # Decision tree
@@ -406,7 +401,9 @@ impl ReactionDetector {
     /// compute similarity signals before calling [`classify_reaction`].
     #[must_use]
     pub fn window_original_input(&self) -> Option<&str> {
-        self.active_window.as_ref().map(|w| w.original_input.as_str())
+        self.active_window
+            .as_ref()
+            .map(|w| w.original_input.as_str())
     }
 
     /// Get AURA's response text stored in the active observation window.
@@ -415,7 +412,9 @@ impl ReactionDetector {
     /// compute similarity signals before calling [`classify_reaction`].
     #[must_use]
     pub fn window_response_text(&self) -> Option<&str> {
-        self.active_window.as_ref().map(|w| w.response_text.as_str())
+        self.active_window
+            .as_ref()
+            .map(|w| w.response_text.as_str())
     }
 }
 

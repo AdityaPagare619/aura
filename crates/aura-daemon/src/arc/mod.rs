@@ -24,21 +24,18 @@ pub mod routines;
 pub mod social;
 
 // Re-export key types at module root.
+use std::{collections::HashMap, sync::Arc, time::Instant};
+
+use aura_types::errors::{AuraError, MemError};
 pub use cron::{CronJob, CronScheduler};
 pub use health::HealthDomain;
 pub use learning::LearningEngine;
 pub use life_arc::LifeArcManager;
 pub use proactive::ProactiveEngine;
 pub use routines::{DeviationResult, RoutineWindow};
-pub use social::SocialDomain;
-
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+pub use social::SocialDomain;
 use tracing::{debug, info, instrument};
-
-use aura_types::errors::{AuraError, MemError};
 
 // ---------------------------------------------------------------------------
 // Core enums — canonical definitions (§8.2)
@@ -166,23 +163,23 @@ impl std::fmt::Display for ArcError {
         match self {
             ArcError::InsufficientData { domain, detail } => {
                 write!(f, "arc: insufficient data in {domain}: {detail}")
-            }
+            },
             ArcError::PowerTierBlocked { required, current } => {
                 write!(
                     f,
                     "arc: power tier blocked (need {required}, have {current})"
                 )
-            }
+            },
             ArcError::CapacityExceeded { collection, max } => {
                 write!(f, "arc: capacity exceeded for {collection} (max {max})")
-            }
+            },
             ArcError::NotFound { entity, id } => {
                 write!(f, "arc: {entity} not found: {id}")
-            }
+            },
             ArcError::SerdeError(msg) => write!(f, "arc: serde error: {msg}"),
             ArcError::DomainError { domain, detail } => {
                 write!(f, "arc: domain error in {domain}: {detail}")
-            }
+            },
         }
     }
 }

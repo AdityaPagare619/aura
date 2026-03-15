@@ -17,14 +17,11 @@
 //! Retrieval scoring blends similarity, recency, and activation:
 //! `similarity * 0.7 + recency * 0.1 + activation * 0.2`
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::{cmp::Ordering, collections::BinaryHeap};
 
-use aura_types::events::EventSource;
-use aura_types::memory::WorkingSlot;
+use aura_types::{events::EventSource, memory::WorkingSlot};
 
-use crate::memory::compaction::ContextCompactor;
-use crate::memory::embeddings;
+use crate::memory::{compaction::ContextCompactor, embeddings};
 
 /// Maximum number of slots in working memory.
 pub const MAX_SLOTS: usize = 1024;
@@ -178,7 +175,7 @@ impl WorkingMemory {
 
         // Keep at least the 100 most recent slots intact.
         let candidates = self.compactor.identify_compaction_candidates(&live, 100);
-        
+
         if candidates.len() < 3 {
             return;
         }
@@ -189,7 +186,7 @@ impl WorkingMemory {
                 slots_to_compact.push(s.clone());
             }
         }
-        
+
         let refs: Vec<&WorkingSlot> = slots_to_compact.iter().collect();
         let compacted_slot = self.compactor.compact(&refs, now_ms);
 
@@ -203,7 +200,7 @@ impl WorkingMemory {
         self.slots[pos] = Some(compacted_slot);
         self.activation_scores[pos] = 0.0;
         self.count += 1;
-        
+
         tracing::debug!(
             compacted_count = candidates.len(),
             new_count = self.count,
@@ -405,17 +402,13 @@ impl WorkingMemory {
         };
 
         // 1. Importance rank (descending).
-        let mut by_importance: Vec<(usize, f32)> = live
-            .iter()
-            .map(|(i, s)| (*i, s.importance))
-            .collect();
+        let mut by_importance: Vec<(usize, f32)> =
+            live.iter().map(|(i, s)| (*i, s.importance)).collect();
         by_importance.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
         // 2. Recency rank (most recent first).
-        let mut by_recency: Vec<(usize, u64)> = live
-            .iter()
-            .map(|(i, s)| (*i, s.timestamp_ms))
-            .collect();
+        let mut by_recency: Vec<(usize, u64)> =
+            live.iter().map(|(i, s)| (*i, s.timestamp_ms)).collect();
         by_recency.sort_by(|a, b| b.1.cmp(&a.1));
 
         // 3. Relevance rank (highest cosine similarity first).
@@ -431,7 +424,7 @@ impl WorkingMemory {
                     .collect();
                 ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
                 ranked
-            }
+            },
             None => by_importance.clone(), // fallback: use importance as relevance
         };
 
@@ -439,9 +432,18 @@ impl WorkingMemory {
         let k = 60.0_f32;
         let mut rrf_scores: Vec<(usize, f32)> = Vec::with_capacity(live.len());
         for (idx, _) in &live {
-            let rank_imp = by_importance.iter().position(|(i, _)| i == idx).unwrap_or(live.len()) as f32;
-            let rank_rec = by_recency.iter().position(|(i, _)| i == idx).unwrap_or(live.len()) as f32;
-            let rank_rel = by_relevance.iter().position(|(i, _)| i == idx).unwrap_or(live.len()) as f32;
+            let rank_imp = by_importance
+                .iter()
+                .position(|(i, _)| i == idx)
+                .unwrap_or(live.len()) as f32;
+            let rank_rec = by_recency
+                .iter()
+                .position(|(i, _)| i == idx)
+                .unwrap_or(live.len()) as f32;
+            let rank_rel = by_relevance
+                .iter()
+                .position(|(i, _)| i == idx)
+                .unwrap_or(live.len()) as f32;
             let score = 1.0 / (k + rank_imp) + 1.0 / (k + rank_rec) + 1.0 / (k + rank_rel);
             rrf_scores.push((*idx, score));
         }
@@ -545,8 +547,8 @@ impl WorkingMemory {
                         None => best = Some((idx, slot.importance)),
                         Some((_, imp)) if slot.importance < imp => {
                             best = Some((idx, slot.importance));
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
                 }
             }
@@ -582,8 +584,8 @@ impl WorkingMemory {
                         None => best_expired = Some((idx, slot.importance)),
                         Some((_, imp)) if slot.importance < imp => {
                             best_expired = Some((idx, slot.importance));
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
                 }
 
@@ -592,8 +594,8 @@ impl WorkingMemory {
                     None => best_overall = Some((idx, slot.importance)),
                     Some((_, imp)) if slot.importance < imp => {
                         best_overall = Some((idx, slot.importance));
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
             }
         }
@@ -618,8 +620,9 @@ impl Default for WorkingMemory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::events::EventSource;
+
+    use super::*;
 
     fn now() -> u64 {
         1_700_000_000_000

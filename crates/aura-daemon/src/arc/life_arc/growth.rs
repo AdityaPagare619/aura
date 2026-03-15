@@ -74,15 +74,9 @@ pub enum GrowthEvent {
         note: Option<String>,
     },
     /// Book reading session.
-    BookReading {
-        title: String,
-        pages: u32,
-    },
+    BookReading { title: String, pages: u32 },
     /// Progress through an online course or structured curriculum.
-    CourseProgress {
-        course: String,
-        lesson_count: u32,
-    },
+    CourseProgress { course: String, lesson_count: u32 },
     /// User creates a new growth goal.
     GoalCreated {
         goal_id: String,
@@ -208,7 +202,7 @@ impl GrowthArc {
                     duration_minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            }
+            },
             GrowthEvent::SkillPractice {
                 skill,
                 duration_minutes,
@@ -220,7 +214,7 @@ impl GrowthArc {
                     duration_minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            }
+            },
             GrowthEvent::GoalProgress {
                 goal_id,
                 progress_pct,
@@ -233,7 +227,7 @@ impl GrowthArc {
                         goal.completed = true;
                     }
                 }
-            }
+            },
             GrowthEvent::BookReading { title, pages } => {
                 // Convert pages to approximate minutes (avg 1.5 min/page).
                 let minutes = (pages as f32 * 1.5) as u32;
@@ -243,8 +237,11 @@ impl GrowthArc {
                     duration_minutes: minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            }
-            GrowthEvent::CourseProgress { course, lesson_count } => {
+            },
+            GrowthEvent::CourseProgress {
+                course,
+                lesson_count,
+            } => {
                 // Each lesson ≈ 15 minutes.
                 let minutes = lesson_count * 15;
                 self.push_learning_record(LearningRecord {
@@ -253,7 +250,7 @@ impl GrowthArc {
                     duration_minutes: minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            }
+            },
             GrowthEvent::GoalCreated {
                 goal_id,
                 description,
@@ -270,7 +267,7 @@ impl GrowthArc {
                     });
                 }
                 // Silently drop if at capacity — log would be better in production.
-            }
+            },
         }
     }
 
@@ -336,8 +333,7 @@ impl GrowthArc {
             .filter(|r| r.ts_ms >= window_30d)
             .map(|r| r.topic.as_str())
             .collect();
-        let breadth_score =
-            (distinct_topics.len() as f32 / BREADTH_TARGET_TOPICS as f32).min(1.0);
+        let breadth_score = (distinct_topics.len() as f32 / BREADTH_TARGET_TOPICS as f32).min(1.0);
 
         let raw = W_LEARNING_CONSISTENCY * consistency_score
             + W_GOAL_MOMENTUM * goal_momentum
@@ -348,11 +344,7 @@ impl GrowthArc {
 
     /// Compute goal momentum score in `[0.0, 1.0]`.
     fn compute_goal_momentum(&self, now_ms: u64) -> f32 {
-        let active: Vec<&GrowthGoal> = self
-            .active_goals
-            .iter()
-            .filter(|g| !g.completed)
-            .collect();
+        let active: Vec<&GrowthGoal> = self.active_goals.iter().filter(|g| !g.completed).collect();
 
         if active.is_empty() {
             return 0.5; // No goals set — neutral, not penalised
@@ -401,9 +393,7 @@ impl GrowthArc {
         }
 
         // 24-hour cooldown.
-        if self.last_trigger_ms > 0
-            && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS
-        {
+        if self.last_trigger_ms > 0 && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS {
             return None;
         }
 
@@ -522,7 +512,10 @@ mod tests {
             );
         }
         let s = arc.score(T0 + 7 * ONE_DAY_MS);
-        assert!(s > 0.5, "consistent learning should score above neutral, got {s}");
+        assert!(
+            s > 0.5,
+            "consistent learning should score above neutral, got {s}"
+        );
     }
 
     #[test]

@@ -40,8 +40,7 @@
 
 use aura_types::ipc::{
     ContextPackage, DaemonToNeocortex, IdentityTendencies, InferenceMode,
-    SelfKnowledge, UserStateSignals,
-    ProactiveTrigger as IpcProactiveTrigger,
+    ProactiveTrigger as IpcProactiveTrigger, SelfKnowledge, UserStateSignals,
 };
 
 use crate::arc::life_arc::ProactiveTrigger as ArcProactiveTrigger;
@@ -253,17 +252,19 @@ fn to_ipc_trigger(trigger: &ProactiveTrigger) -> IpcProactiveTrigger {
             deviation_minutes,
         } => {
             let abs_mins = deviation_minutes.unsigned_abs();
-            let direction = if *deviation_minutes > 0 { "late" } else { "early" };
+            let direction = if *deviation_minutes > 0 {
+                "late"
+            } else {
+                "early"
+            };
             IpcProactiveTrigger::TriggerRuleFired {
                 rule_name: routine_name.clone(),
                 // Factual description assembled from typed fields — this is data
                 // assembly, not intelligence generation.  The LLM decides how to
                 // phrase this for the user.
-                description: format!(
-                    "expected at {expected_at}, {abs_mins} minutes {direction}"
-                ),
+                description: format!("expected at {expected_at}, {abs_mins} minutes {direction}"),
             }
-        }
+        },
     }
 }
 
@@ -313,7 +314,12 @@ pub fn arc_trigger_to_ipc(arc_trigger: &ArcProactiveTrigger) -> DaemonToNeocorte
 pub fn should_dispatch(trigger: &ProactiveTrigger) -> bool {
     match trigger {
         ProactiveTrigger::GoalStalled { stalled_days, .. } => *stalled_days >= 3,
-        ProactiveTrigger::HealthAlert { value, threshold, direction, .. } => match direction {
+        ProactiveTrigger::HealthAlert {
+            value,
+            threshold,
+            direction,
+            ..
+        } => match direction {
             AlertDirection::Rising => *value >= *threshold * 1.1,
             AlertDirection::Falling => *value <= *threshold * 0.9,
         },
@@ -323,9 +329,9 @@ pub fn should_dispatch(trigger: &ProactiveTrigger) -> bool {
             ..
         } => *relevance_score >= 0.6 && *occurrence_count >= 2,
         ProactiveTrigger::RelationshipNudge { urgency, .. } => *urgency >= 1.2,
-        ProactiveTrigger::RoutineDeviation { deviation_minutes, .. } => {
-            deviation_minutes.unsigned_abs() >= 30
-        }
+        ProactiveTrigger::RoutineDeviation {
+            deviation_minutes, ..
+        } => deviation_minutes.unsigned_abs() >= 30,
         ProactiveTrigger::GoalOverdue { .. } => true, // always notify on overdue
     }
 }
@@ -348,18 +354,25 @@ mod tests {
         };
         let msg = trigger_to_ipc(&trigger);
         match msg {
-            DaemonToNeocortex::ProactiveContext { trigger: ipc_trigger, context } => {
+            DaemonToNeocortex::ProactiveContext {
+                trigger: ipc_trigger,
+                context,
+            } => {
                 assert_eq!(context.inference_mode, InferenceMode::Conversational);
                 assert_eq!(context.token_budget, 512);
                 match ipc_trigger {
-                    IpcProactiveTrigger::GoalStalled { goal_id, title, stalled_days } => {
+                    IpcProactiveTrigger::GoalStalled {
+                        goal_id,
+                        title,
+                        stalled_days,
+                    } => {
                         assert_eq!(goal_id, 42);
                         assert_eq!(title, "Learn Rust");
                         assert_eq!(stalled_days, 5);
-                    }
+                    },
                     other => panic!("expected GoalStalled, got {other:?}"),
                 }
-            }
+            },
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -373,14 +386,15 @@ mod tests {
         };
         let msg = trigger_to_ipc(&trigger);
         match msg {
-            DaemonToNeocortex::ProactiveContext { trigger: ipc_trigger, .. } => {
-                match ipc_trigger {
-                    IpcProactiveTrigger::GoalOverdue { overdue_days, .. } => {
-                        assert_eq!(overdue_days, 3);
-                    }
-                    other => panic!("expected GoalOverdue, got {other:?}"),
-                }
-            }
+            DaemonToNeocortex::ProactiveContext {
+                trigger: ipc_trigger,
+                ..
+            } => match ipc_trigger {
+                IpcProactiveTrigger::GoalOverdue { overdue_days, .. } => {
+                    assert_eq!(overdue_days, 3);
+                },
+                other => panic!("expected GoalOverdue, got {other:?}"),
+            },
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -394,16 +408,22 @@ mod tests {
         };
         let msg = trigger_to_ipc(&trigger);
         match msg {
-            DaemonToNeocortex::ProactiveContext { trigger: ipc_trigger, .. } => {
+            DaemonToNeocortex::ProactiveContext {
+                trigger: ipc_trigger,
+                ..
+            } => {
                 match ipc_trigger {
-                    IpcProactiveTrigger::SocialGap { contact_name, days_since_contact } => {
+                    IpcProactiveTrigger::SocialGap {
+                        contact_name,
+                        days_since_contact,
+                    } => {
                         // contact_name is the placeholder until name resolution is wired
                         assert!(contact_name.contains("99"));
                         assert_eq!(days_since_contact, 14);
-                    }
+                    },
                     other => panic!("expected SocialGap, got {other:?}"),
                 }
-            }
+            },
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -418,16 +438,21 @@ mod tests {
         };
         let msg = trigger_to_ipc(&trigger);
         match msg {
-            DaemonToNeocortex::ProactiveContext { trigger: ipc_trigger, .. } => {
-                match ipc_trigger {
-                    IpcProactiveTrigger::HealthAlert { metric, value, threshold } => {
-                        assert_eq!(metric, "error_rate");
-                        assert!((value - 0.85).abs() < f32::EPSILON);
-                        assert!((threshold - 0.70).abs() < f32::EPSILON);
-                    }
-                    other => panic!("expected HealthAlert, got {other:?}"),
-                }
-            }
+            DaemonToNeocortex::ProactiveContext {
+                trigger: ipc_trigger,
+                ..
+            } => match ipc_trigger {
+                IpcProactiveTrigger::HealthAlert {
+                    metric,
+                    value,
+                    threshold,
+                } => {
+                    assert_eq!(metric, "error_rate");
+                    assert!((value - 0.85).abs() < f32::EPSILON);
+                    assert!((threshold - 0.70).abs() < f32::EPSILON);
+                },
+                other => panic!("expected HealthAlert, got {other:?}"),
+            },
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -441,14 +466,15 @@ mod tests {
         };
         let msg = trigger_to_ipc(&trigger);
         match msg {
-            DaemonToNeocortex::ProactiveContext { trigger: ipc_trigger, .. } => {
-                match ipc_trigger {
-                    IpcProactiveTrigger::MemoryInsight { summary } => {
-                        assert!(summary.contains("9pm"));
-                    }
-                    other => panic!("expected MemoryInsight, got {other:?}"),
-                }
-            }
+            DaemonToNeocortex::ProactiveContext {
+                trigger: ipc_trigger,
+                ..
+            } => match ipc_trigger {
+                IpcProactiveTrigger::MemoryInsight { summary } => {
+                    assert!(summary.contains("9pm"));
+                },
+                other => panic!("expected MemoryInsight, got {other:?}"),
+            },
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -462,16 +488,20 @@ mod tests {
         };
         let msg = trigger_to_ipc(&trigger);
         match msg {
-            DaemonToNeocortex::ProactiveContext { trigger: ipc_trigger, .. } => {
-                match ipc_trigger {
-                    IpcProactiveTrigger::TriggerRuleFired { rule_name, description } => {
-                        assert_eq!(rule_name, "morning_run");
-                        assert!(description.contains("45"));
-                        assert!(description.contains("late"));
-                    }
-                    other => panic!("expected TriggerRuleFired, got {other:?}"),
-                }
-            }
+            DaemonToNeocortex::ProactiveContext {
+                trigger: ipc_trigger,
+                ..
+            } => match ipc_trigger {
+                IpcProactiveTrigger::TriggerRuleFired {
+                    rule_name,
+                    description,
+                } => {
+                    assert_eq!(rule_name, "morning_run");
+                    assert!(description.contains("45"));
+                    assert!(description.contains("late"));
+                },
+                other => panic!("expected TriggerRuleFired, got {other:?}"),
+            },
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -503,7 +533,10 @@ mod tests {
             threshold: 0.70,
             direction: AlertDirection::Rising,
         };
-        assert!(!should_dispatch(&ok), "at-threshold rising should not dispatch");
+        assert!(
+            !should_dispatch(&ok),
+            "at-threshold rising should not dispatch"
+        );
 
         let over = ProactiveTrigger::HealthAlert {
             metric: "x".into(),
@@ -547,23 +580,36 @@ mod tests {
     fn test_trigger_to_ipc_never_returns_converse() {
         let triggers = vec![
             ProactiveTrigger::GoalStalled {
-                goal_id: 1, goal_title: "T".into(), stalled_days: 3, progress_at_stall: 0.5,
+                goal_id: 1,
+                goal_title: "T".into(),
+                stalled_days: 3,
+                progress_at_stall: 0.5,
             },
             ProactiveTrigger::GoalOverdue {
-                goal_id: 2, goal_title: "T".into(), overdue_ms: 86_400_000,
+                goal_id: 2,
+                goal_title: "T".into(),
+                overdue_ms: 86_400_000,
             },
             ProactiveTrigger::RelationshipNudge {
-                contact_id: 3, days_since_contact: 10, urgency: 1.5,
+                contact_id: 3,
+                days_since_contact: 10,
+                urgency: 1.5,
             },
             ProactiveTrigger::HealthAlert {
-                metric: "m".into(), value: 0.9, threshold: 0.7,
+                metric: "m".into(),
+                value: 0.9,
+                threshold: 0.7,
                 direction: AlertDirection::Rising,
             },
             ProactiveTrigger::MemoryInsight {
-                pattern_summary: "p".into(), relevance_score: 0.8, occurrence_count: 3,
+                pattern_summary: "p".into(),
+                relevance_score: 0.8,
+                occurrence_count: 3,
             },
             ProactiveTrigger::RoutineDeviation {
-                routine_name: "r".into(), expected_at: "08:00".into(), deviation_minutes: 30,
+                routine_name: "r".into(),
+                expected_at: "08:00".into(),
+                deviation_minutes: 30,
             },
         ];
         for t in &triggers {

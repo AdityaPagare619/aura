@@ -11,9 +11,11 @@
 //! identical actions occur within `window_duration`, the action is
 //! automatically denied as suspicious (e.g., 10 taps in 1 second).
 
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    time::{Duration, Instant},
+};
 
 use aura_types::config::PolicyConfig;
 
@@ -438,8 +440,9 @@ impl PolicyGate {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::config::{PolicyConfig, PolicyRuleConfig};
+
+    use super::*;
 
     fn test_config() -> PolicyConfig {
         PolicyConfig {

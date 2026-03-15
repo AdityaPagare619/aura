@@ -4,14 +4,15 @@
 //! health, and handles restarts with backoff.  On Android the binary is a
 //! shared library loaded by the system; on host it's a regular executable.
 
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info, instrument, warn};
 
-use super::protocol;
-use super::IpcError;
+use super::{protocol, IpcError};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -132,13 +133,13 @@ impl NeocortexProcess {
                 self.child = None;
                 self.started_at = None;
                 false
-            }
+            },
             Ok(None) => true,
             Err(e) => {
                 warn!(error = %e, "failed to check neocortex process status");
                 // Assume still running on error to avoid premature restart.
                 true
-            }
+            },
         }
     }
 
@@ -181,16 +182,15 @@ impl NeocortexProcess {
         // On Unix, start_kill sends SIGKILL. We first try wait with timeout.
         // tokio::process::Child::kill() sends SIGKILL immediately, so we use
         // a timeout on wait() first.
-        let wait_result =
-            tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, child.wait()).await;
+        let wait_result = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, child.wait()).await;
 
         match wait_result {
             Ok(Ok(status)) => {
                 info!(pid, status = %status, "neocortex exited gracefully");
-            }
+            },
             Ok(Err(e)) => {
                 warn!(pid, error = %e, "error waiting for neocortex");
-            }
+            },
             Err(_elapsed) => {
                 warn!(pid, "graceful shutdown timed out — killing");
                 if let Err(e) = child.kill().await {
@@ -201,7 +201,7 @@ impl NeocortexProcess {
                     )));
                 }
                 info!(pid, "neocortex killed");
-            }
+            },
         }
 
         self.child = None;
@@ -216,8 +216,7 @@ impl NeocortexProcess {
     ///
     /// # Errors
     ///
-    /// - [`IpcError::MaxRestartsExceeded`] if the restart count has hit the
-    ///   limit.
+    /// - [`IpcError::MaxRestartsExceeded`] if the restart count has hit the limit.
     /// - Any error from [`shutdown`](Self::shutdown) or [`spawn`](Self::spawn).
     #[instrument(name = "neocortex_restart", skip_all, fields(
         attempt = self.restart_count + 1,
@@ -285,22 +284,19 @@ impl NeocortexProcess {
                     // We drop this probe connection immediately; the
                     // NeocortexClient will establish its own.
                     info!(
-                        elapsed_ms = (Instant::now() + READY_TIMEOUT - deadline)
-                            .as_millis() as u64,
+                        elapsed_ms = (Instant::now() + READY_TIMEOUT - deadline).as_millis() as u64,
                         "neocortex is ready"
                     );
                     return Ok(());
-                }
+                },
                 Err(_) => {
                     if Instant::now() >= deadline {
                         return Err(IpcError::Timeout {
-                            context: format!(
-                                "neocortex not ready after {READY_TIMEOUT:?}"
-                            ),
+                            context: format!("neocortex not ready after {READY_TIMEOUT:?}"),
                         });
                     }
                     tokio::time::sleep(poll_interval).await;
-                }
+                },
             }
         }
     }
@@ -337,7 +333,7 @@ mod tests {
         match result {
             Err(IpcError::ProcessDied { reason }) => {
                 assert!(reason.contains("spawn failed"), "got: {reason}");
-            }
+            },
             other => panic!("expected ProcessDied, got: {other:?}"),
         }
     }
@@ -403,7 +399,10 @@ mod tests {
             max_restarts: 5,
         };
         let result = proc.restart().await;
-        assert!(matches!(result, Err(IpcError::MaxRestartsExceeded { max: 5 })));
+        assert!(matches!(
+            result,
+            Err(IpcError::MaxRestartsExceeded { max: 5 })
+        ));
     }
 
     #[test]

@@ -8,10 +8,9 @@
 //! The tutorial supports interruption/resumption and tracks progress
 //! persistently so the user can continue where they left off.
 
+use aura_types::errors::OnboardingError;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-
-use aura_types::errors::OnboardingError;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -210,14 +209,14 @@ impl TutorialEngine {
                     self.progress.current_step_index = 0;
                     self.progress.updated_at_ms = now_ms;
                     info!(module = %module.id, "tutorial started");
-                }
+                },
                 None => {
                     // All required modules done.
                     self.progress.all_complete = true;
                     self.progress.updated_at_ms = now_ms;
                     info!("all required tutorial modules complete");
                     return Ok(None);
-                }
+                },
             }
         }
 
@@ -278,7 +277,9 @@ impl TutorialEngine {
             // Module complete — move to next required module.
             // Cap completed_modules at MAX_MODULES to prevent unbounded growth.
             if self.progress.completed_modules.len() < MAX_MODULES {
-                self.progress.completed_modules.push(current_module_id.clone());
+                self.progress
+                    .completed_modules
+                    .push(current_module_id.clone());
             } else {
                 warn!(
                     cap = MAX_MODULES,
@@ -298,12 +299,12 @@ impl TutorialEngine {
                     self.progress.current_module = nm.id.clone();
                     self.progress.current_step_index = 0;
                     info!(module = %nm.id, "starting next tutorial module");
-                }
+                },
                 None => {
                     self.progress.current_module.clear();
                     self.progress.all_complete = true;
                     info!("all tutorial modules complete");
-                }
+                },
             }
         }
 
@@ -423,7 +424,7 @@ impl TutorialEngine {
                 let progress: TutorialProgress = serde_json::from_slice(&data)
                     .map_err(|e| OnboardingError::PersistenceFailed(format!("deserialize: {e}")))?;
                 Ok(Some(progress))
-            }
+            },
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::PersistenceFailed(format!("load: {e}"))),
         }

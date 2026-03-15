@@ -1,5 +1,4 @@
 use aura_types::identity::{DispositionState, EmotionLabel, MoodVAD, OceanTraits};
-
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -64,17 +63,17 @@ impl MoodEvent {
                 } else {
                     None // Silence not long enough to affect mood.
                 }
-            }
+            },
             // Stress lowers valence and raises arousal proportionally.
             MoodEvent::VoiceStressDetected { level } => {
                 let l = level.clamp(0.0, 1.0);
                 Some((-0.10 * l, 0.15 * l))
-            }
+            },
             // Fatigue lowers both valence and arousal proportionally.
             MoodEvent::VoiceFatigueDetected { level } => {
                 let l = level.clamp(0.0, 1.0);
                 Some((-0.05 * l, -0.10 * l))
-            }
+            },
         }
     }
 }
@@ -132,7 +131,7 @@ impl AffectiveEngine {
                 // No mood effect; just update timestamp.
                 self.state.last_update_ms = now_ms;
                 return;
-            }
+            },
         };
 
         // Apply stability gate.
@@ -142,11 +141,9 @@ impl AffectiveEngine {
             (dv, da)
         };
 
-        // 4. EMA smoothing.
-        //    On the very first event (`last_update_ms == 0`) the elapsed
-        //    time to `now_ms` is meaningless — there is no prior mood to
-        //    smooth against.  Apply the full delta immediately (alpha = 1.0)
-        //    so the first mood event takes full effect.
+        // 4. EMA smoothing. On the very first event (`last_update_ms == 0`) the elapsed time to
+        //    `now_ms` is meaningless — there is no prior mood to smooth against.  Apply the full
+        //    delta immediately (alpha = 1.0) so the first mood event takes full effect.
         let alpha = if self.state.last_update_ms == 0 {
             1.0
         } else if elapsed_ms > 0 {
@@ -333,7 +330,7 @@ impl AffectiveEngine {
             None => {
                 self.state.last_update_ms = now_ms;
                 return;
-            }
+            },
         };
 
         // 4. Apply personality modifiers.
@@ -532,8 +529,7 @@ impl AffectiveEngine {
         let d = self.state.mood.dominance;
 
         // Shorten when aroused or when mood is negative.
-        let shorten_factor =
-            (1.0 - (a.max(0.0) + (-v).max(0.0)) * 0.2).clamp(0.5, 1.0);
+        let shorten_factor = (1.0 - (a.max(0.0) + (-v).max(0.0)) * 0.2).clamp(0.5, 1.0);
 
         // Emojis only when both valence AND arousal are positive.
         let emoji_boost = (v.max(0.0) * a.max(0.0) * 2.0).clamp(0.0, 1.0);

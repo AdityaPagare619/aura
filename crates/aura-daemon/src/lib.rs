@@ -34,11 +34,12 @@ pub mod telemetry;
 pub mod voice;
 
 // Re-export key types at crate root for convenience.
-pub use crate::daemon_core::channels::DaemonChannels;
-pub use crate::daemon_core::checkpoint::DaemonCheckpoint;
-pub use crate::daemon_core::shutdown::graceful_shutdown;
-pub use crate::daemon_core::startup::{startup, DaemonState, StartupReport};
-
+pub use crate::daemon_core::{
+    channels::DaemonChannels,
+    checkpoint::DaemonCheckpoint,
+    shutdown::graceful_shutdown,
+    startup::{startup, DaemonState, StartupReport},
+};
 // Re-export JNI env helper at crate root so that `crate::jni_env()` works
 // from any module (e.g. screen/actions.rs).
 pub use crate::platform::jni_bridge::jni_env;
@@ -56,7 +57,8 @@ pub use crate::platform::jni_bridge::jni_env;
 /// Returns an error if startup fails.
 pub fn init_for_testing(
     config: aura_types::config::AuraConfig,
-) -> Result<crate::daemon_core::shutdown::ShutdownReport, crate::daemon_core::startup::StartupError> {
+) -> Result<crate::daemon_core::shutdown::ShutdownReport, crate::daemon_core::startup::StartupError>
+{
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -89,13 +91,13 @@ pub fn init_for_testing(
 
 #[cfg(target_os = "android")]
 mod jni_bridge {
-    use jni::objects::JClass;
-    use jni::sys::jlong;
-    use jni::JNIEnv;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, OnceLock};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    };
 
     use aura_types::config::AuraConfig;
+    use jni::{objects::JClass, sys::jlong, JNIEnv};
 
     /// Global cancel flag shared between JNI init and shutdown.
     /// Set during `init()`, read during `shutdown()`.
@@ -121,12 +123,12 @@ mod jni_bridge {
                 let _ = CANCEL_FLAG.set(state.cancel_flag.clone());
                 let boxed = Box::new(state);
                 Box::into_raw(boxed) as jlong
-            }
+            },
             Err(e) => {
                 let msg = format!("AURA startup failed: {e}");
                 let _ = env.throw_new("java/lang/RuntimeException", &msg);
                 0
-            }
+            },
         }
     }
 
@@ -156,7 +158,7 @@ mod jni_bridge {
                 // Panic across FFI is undefined behavior — log and bail instead.
                 tracing::error!("FATAL: tokio runtime failed to initialize in JNI run(): {e}");
                 return;
-            }
+            },
         };
 
         rt.block_on(async {
@@ -180,7 +182,9 @@ mod jni_bridge {
             flag.store(true, Ordering::Release);
             tracing::info!("cancel_flag set — daemon will shut down gracefully");
         } else {
-            tracing::warn!("shutdown called but cancel_flag was never initialized (init not called?)");
+            tracing::warn!(
+                "shutdown called but cancel_flag was never initialized (init not called?)"
+            );
         }
     }
 }

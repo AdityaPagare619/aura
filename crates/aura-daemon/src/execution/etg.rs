@@ -7,15 +7,17 @@
 //! ## Design:
 //! - In-memory graph for fast lookup, backed by SQLite for persistence
 //! - Max 10,000 nodes, 50,000 edges (LRU eviction when full)
-//! - Edge reliability: `raw_reliability * freshness_factor` where
-//!   `freshness_factor = 2^(-days_since_use / 14)` (14-day half-life)
+//! - Edge reliability: `raw_reliability * freshness_factor` where `freshness_factor =
+//!   2^(-days_since_use / 14)` (14-day half-life)
 //! - Edges below 0.3 effective reliability are pruned
 //! - BFS pathfinding with reliability-weighted scoring
 
 use std::collections::{HashMap, VecDeque};
 
-use aura_types::actions::ActionType;
-use aura_types::etg::{EtgEdge, EtgNode, EtgPath};
+use aura_types::{
+    actions::ActionType,
+    etg::{EtgEdge, EtgNode, EtgPath},
+};
 use tracing::{debug, warn};
 
 /// Maximum number of nodes in the ETG.
@@ -218,10 +220,7 @@ impl EtgStore {
             self.edges.insert(key, edge);
 
             // Update adjacency list
-            self.adjacency
-                .entry(from_hash)
-                .or_default()
-                .push(to_hash);
+            self.adjacency.entry(from_hash).or_default().push(to_hash);
         }
     }
 
@@ -239,11 +238,7 @@ impl EtgStore {
 
         neighbors
             .iter()
-            .filter_map(|to| {
-                self.edges
-                    .get(&(from_hash, *to))
-                    .map(|edge| (*to, edge))
-            })
+            .filter_map(|to| self.edges.get(&(from_hash, *to)).map(|edge| (*to, edge)))
             .collect()
     }
 
@@ -336,11 +331,7 @@ impl EtgStore {
             // Build edge ID list
             let edges = nodes
                 .windows(2)
-                .filter_map(|pair| {
-                    self.edges
-                        .get(&(pair[0], pair[1]))
-                        .map(|e| e.from_node)
-                })
+                .filter_map(|pair| self.edges.get(&(pair[0], pair[1])).map(|e| e.from_node))
                 .collect();
 
             EtgPath {
@@ -411,8 +402,8 @@ impl EtgStore {
 
         // Upsert edges
         for ((from, to), edge) in &self.edges {
-            let action_json = serde_json::to_string(&edge.action)
-                .unwrap_or_else(|_| "null".to_string());
+            let action_json =
+                serde_json::to_string(&edge.action).unwrap_or_else(|_| "null".to_string());
             tx.execute(
                 "INSERT OR REPLACE INTO etg_edges (from_node, to_node, action_json, success_count, fail_count, avg_duration_ms, last_used_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -428,8 +419,7 @@ impl EtgStore {
             ).map_err(|e| format!("edge upsert failed: {e}"))?;
         }
 
-        tx.commit()
-            .map_err(|e| format!("commit failed: {e}"))?;
+        tx.commit().map_err(|e| format!("commit failed: {e}"))?;
 
         debug!(
             nodes = self.nodes.len(),
@@ -505,16 +495,19 @@ impl EtgStore {
                 let action: ActionType =
                     serde_json::from_str(&action_json).unwrap_or(ActionType::Back);
 
-                Ok(((from as u64, to as u64), EtgEdge {
-                    from_node: from as u64,
-                    to_node: to as u64,
-                    action,
-                    success_count,
-                    fail_count,
-                    avg_duration_ms,
-                    m2_duration_ms: 0.0,
-                    last_used_ms: last_used_ms as u64,
-                }))
+                Ok((
+                    (from as u64, to as u64),
+                    EtgEdge {
+                        from_node: from as u64,
+                        to_node: to as u64,
+                        action,
+                        success_count,
+                        fail_count,
+                        avg_duration_ms,
+                        m2_duration_ms: 0.0,
+                        last_used_ms: last_used_ms as u64,
+                    },
+                ))
             })
             .map_err(|e| format!("edge query failed: {e}"))?;
 
@@ -572,11 +565,7 @@ impl EtgStore {
             .collect();
         edges_by_age.sort_by_key(|(_, ms)| *ms);
 
-        let to_remove: Vec<(u64, u64)> = edges_by_age
-            .iter()
-            .take(n)
-            .map(|(k, _)| *k)
-            .collect();
+        let to_remove: Vec<(u64, u64)> = edges_by_age.iter().take(n).map(|(k, _)| *k).collect();
 
         for key in &to_remove {
             self.edges.remove(key);

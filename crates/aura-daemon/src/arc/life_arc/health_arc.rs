@@ -194,7 +194,7 @@ impl HealthArc {
                 });
                 self.last_exercise_ms = now_ms;
                 self.refresh_exercise_count(now_ms);
-            }
+            },
             HealthEvent::SleepRecord {
                 duration_hours,
                 quality_self_reported,
@@ -208,11 +208,11 @@ impl HealthArc {
                     quality: quality_self_reported,
                 });
                 self.refresh_sleep_avg(now_ms);
-            }
+            },
             HealthEvent::MealRecord { .. } => {
                 // Nutrition signals recorded but not yet factored into scoring.
                 // Placeholder for future scoring integration.
-            }
+            },
             HealthEvent::UserMoodRecord { mood_score, .. } => {
                 if self.mood_records.len() >= MAX_MOOD_RECORDS {
                     self.mood_records.remove(0);
@@ -222,10 +222,10 @@ impl HealthArc {
                     mood_score: mood_score.clamp(1, 10),
                 });
                 self.refresh_mood_trend(now_ms);
-            }
+            },
             HealthEvent::ExerciseGoalSet { sessions_per_week } => {
                 self.exercise_goal_sessions_per_week = sessions_per_week.clamp(1, 14);
-            }
+            },
         }
     }
 
@@ -358,9 +358,7 @@ impl HealthArc {
         }
 
         // 24-hour cooldown.
-        if self.last_trigger_ms > 0
-            && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS
-        {
+        if self.last_trigger_ms > 0 && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS {
             return None;
         }
 
@@ -499,7 +497,11 @@ mod tests {
             );
         }
         // Sleep component should be 1.0 (8h = optimal).
-        assert!((arc.avg_sleep_hours_7d - 8.0).abs() < 0.01, "avg should be 8h, got {}", arc.avg_sleep_hours_7d);
+        assert!(
+            (arc.avg_sleep_hours_7d - 8.0).abs() < 0.01,
+            "avg should be 8h, got {}",
+            arc.avg_sleep_hours_7d
+        );
     }
 
     #[test]
@@ -514,7 +516,11 @@ mod tests {
                 T0 + i * ONE_HOUR,
             );
         }
-        assert!((arc.mood_trend_7d - 8.0).abs() < 0.1, "mood avg should ~8, got {}", arc.mood_trend_7d);
+        assert!(
+            (arc.mood_trend_7d - 8.0).abs() < 0.1,
+            "mood avg should ~8, got {}",
+            arc.mood_trend_7d
+        );
     }
 
     #[test]

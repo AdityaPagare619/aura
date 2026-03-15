@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use aura_types::etg::{ActionPlan, EtgEdge, EtgNode};
-use aura_types::events::{Intent, ParsedEvent};
+use aura_types::{
+    etg::{ActionPlan, EtgEdge, EtgNode},
+    events::{Intent, ParsedEvent},
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -95,7 +97,7 @@ impl System1 {
                     response_text: None,
                     execution_time_ms: 0,
                 };
-            }
+            },
             Intent::ActionRequest => {
                 // Try ETG lookup.
                 if let Some(plan) = self.try_etg_lookup(&event.content, now_ms) {
@@ -106,8 +108,8 @@ impl System1 {
                         execution_time_ms: 0,
                     };
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         // Fast path couldn't handle it.
@@ -232,8 +234,7 @@ impl System1 {
     fn extract_cache_key(content: &str) -> String {
         /// Filler/stop words that never affect action semantics.
         const STOP_WORDS: &[&str] = &[
-            "a", "an", "the", "and", "or", "but", "for", "nor", "yet",
-            "of", "at", "by", "as",
+            "a", "an", "the", "and", "or", "but", "for", "nor", "yet", "of", "at", "by", "as",
         ];
 
         let lowered = content.to_ascii_lowercase();
@@ -284,8 +285,9 @@ impl Default for System1 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::events::EventSource;
+
+    use super::*;
 
     fn make_event(intent: Intent, content: &str) -> ParsedEvent {
         ParsedEvent {

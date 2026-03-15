@@ -394,14 +394,14 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        }
+        },
         Some(ExpectedChange::NoChange) => {
             if !screen_changed {
                 0.9
             } else {
                 0.5
             }
-        }
+        },
         Some(ExpectedChange::ActivityChange) => {
             if activity_changed {
                 0.95
@@ -410,7 +410,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        }
+        },
         Some(ExpectedChange::AppChange) => {
             if app_changed {
                 0.95
@@ -419,7 +419,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        }
+        },
         Some(ExpectedChange::TextAppears(expected_text)) => {
             let quality = text_match_quality(after, expected_text);
             if quality >= 0.9 {
@@ -435,7 +435,7 @@ fn compute_confidence(
             } else {
                 0.1 // Nothing changed
             }
-        }
+        },
         Some(ExpectedChange::TextDisappears(expected_text)) => {
             let was_present = text_match_quality(before, expected_text) > 0.3;
             let still_present = text_match_quality(after, expected_text) > 0.3;
@@ -446,7 +446,7 @@ fn compute_confidence(
             } else {
                 0.1 // Text is still present
             }
-        }
+        },
         Some(ExpectedChange::ElementAppears(_)) => {
             if nodes_added > 0 {
                 0.7
@@ -455,7 +455,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        }
+        },
         Some(ExpectedChange::TextInElementChanges(_)) => {
             if text_changes > 0 {
                 0.8
@@ -464,7 +464,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        }
+        },
         None => {
             // No expectation — just report whether something changed
             if app_changed || activity_changed {
@@ -474,7 +474,7 @@ fn compute_confidence(
             } else {
                 0.3
             }
-        }
+        },
     }
 }
 
@@ -482,8 +482,9 @@ fn compute_confidence(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::screen::Bounds;
+
+    use super::*;
 
     fn make_node(id: &str, text: Option<&str>, children: Vec<ScreenNode>) -> ScreenNode {
         ScreenNode {
@@ -915,7 +916,8 @@ mod tests {
 
     // ── TextAppears confidence fix tests ───────────────────────────────────
     // Verify the corrected confidence hierarchy:
-    //   exact(0.95) > partial(0.80) > word(0.60) > wrong-text(0.25) > screen-only(0.2) > nothing(0.1)
+    //   exact(0.95) > partial(0.80) > word(0.60) > wrong-text(0.25) > screen-only(0.2) >
+    // nothing(0.1)
 
     #[test]
     fn test_text_appears_wrong_text_changed_low_confidence() {

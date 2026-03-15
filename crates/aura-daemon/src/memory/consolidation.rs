@@ -16,12 +16,16 @@
 
 use tracing::{debug, info};
 
-use crate::memory::archive::{ArchiveMemory, ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD, CompressionAlgo};
-use crate::memory::embeddings::{cosine_similarity, embed};
-use crate::memory::episodic::EpisodicMemory;
-use crate::memory::patterns::PatternEngine;
-use crate::memory::semantic::SemanticMemory;
-use crate::memory::working::WorkingMemory;
+use crate::memory::{
+    archive::{
+        ArchiveMemory, CompressionAlgo, ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD,
+    },
+    embeddings::{cosine_similarity, embed},
+    episodic::EpisodicMemory,
+    patterns::PatternEngine,
+    semantic::SemanticMemory,
+    working::WorkingMemory,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -259,19 +263,28 @@ pub async fn consolidate(
     match level {
         ConsolidationLevel::Micro => {
             run_micro(working, now_ms, &mut report);
-        }
+        },
         ConsolidationLevel::Light => {
             run_micro(working, now_ms, &mut report);
             run_light(working, episodic, semantic, patterns, now_ms, &mut report).await;
-        }
+        },
         ConsolidationLevel::Deep => {
             run_micro(working, now_ms, &mut report);
             run_light(working, episodic, semantic, patterns, now_ms, &mut report).await;
-            run_deep(episodic, semantic, archive, patterns, now_ms, neocortex, &mut report).await;
-        }
+            run_deep(
+                episodic,
+                semantic,
+                archive,
+                patterns,
+                now_ms,
+                neocortex,
+                &mut report,
+            )
+            .await;
+        },
         ConsolidationLevel::Emergency => {
             run_emergency(working, episodic, archive, now_ms, &mut report).await;
-        }
+        },
     }
 
     report.duration_ms = start.elapsed().as_millis() as u64;
@@ -298,11 +311,7 @@ pub async fn consolidate(
 
 /// Micro consolidation: sweep expired working memory slots.
 /// Target: <1ms.
-fn run_micro(
-    working: &mut WorkingMemory,
-    now_ms: u64,
-    report: &mut ConsolidationReport,
-) {
+fn run_micro(working: &mut WorkingMemory, now_ms: u64, report: &mut ConsolidationReport) {
     let swept = working.sweep_expired(now_ms);
     report.working_slots_swept += swept;
     if swept > 0 {
@@ -361,10 +370,10 @@ async fn run_light(
                     } else {
                         report.patterns_recorded += 1;
                     }
-                }
+                },
                 Err(e) => {
                     report.push_error(format!("promote slot {} failed: {}", idx, e));
-                }
+                },
             }
         }
     }
@@ -382,10 +391,7 @@ async fn run_light(
             Ok(entries) if !entries.is_empty() => {
                 let entry = &entries[0];
                 if let Err(e) = semantic.reinforce(entry.id, None, now_ms).await {
-                    report.push_error(format!(
-                        "reinforce semantic {} failed: {}",
-                        entry.id, e
-                    ));
+                    report.push_error(format!("reinforce semantic {} failed: {}", entry.id, e));
                 } else {
                     report.semantic_reinforced += 1;
                     debug!(
@@ -406,11 +412,11 @@ async fn run_light(
                         report.patterns_recorded += 1;
                     }
                 }
-            }
+            },
             Err(e) => {
                 report.push_error(format!("semantic concept search failed: {}", e));
-            }
-            _ => {} // No match — nothing to reinforce
+            },
+            _ => {}, // No match — nothing to reinforce
         }
     }
 }
@@ -468,7 +474,12 @@ async fn run_emergency(
     let emergency_importance_threshold = 0.5;
 
     match episodic
-        .get_archival_candidates(emergency_age_threshold, emergency_importance_threshold, now_ms, 200)
+        .get_archival_candidates(
+            emergency_age_threshold,
+            emergency_importance_threshold,
+            now_ms,
+            200,
+        )
         .await
     {
         Ok(candidates) => {
@@ -494,10 +505,13 @@ async fn run_emergency(
                 {
                     Ok(_) => {
                         archived_ids.push(episode.id);
-                    }
+                    },
                     Err(e) => {
-                        report.push_error(format!("emergency archive ep {} failed: {}", episode.id, e));
-                    }
+                        report.push_error(format!(
+                            "emergency archive ep {} failed: {}",
+                            episode.id, e
+                        ));
+                    },
                 }
             }
 
@@ -506,16 +520,16 @@ async fn run_emergency(
                     Ok(deleted) => {
                         report.episodes_archived += deleted;
                         report.bytes_freed += total_content_bytes;
-                    }
+                    },
                     Err(e) => {
                         report.push_error(format!("emergency delete episodes failed: {}", e));
-                    }
+                    },
                 }
             }
-        }
+        },
         Err(e) => {
             report.push_error(format!("emergency archival candidates failed: {}", e));
-        }
+        },
     }
 
     info!(
@@ -532,10 +546,7 @@ async fn run_emergency(
 
 /// Compute embeddings for a list of episode contents and run k-means
 /// to find natural topic clusters.
-fn cluster_episodes(
-    contents: &[String],
-    k: usize,
-) -> Vec<Vec<usize>> {
+fn cluster_episodes(contents: &[String], k: usize) -> Vec<Vec<usize>> {
     if contents.is_empty() || k == 0 {
         return Vec::new();
     }
@@ -745,31 +756,38 @@ async fn run_generalization(
     report: &mut ConsolidationReport,
 ) {
     // Fetch recent full episodes — getting full objects to utilize context/behavioral tags
-    let episodes = match episodic
-        .get_recent_episodes(CLUSTER_EPISODE_LIMIT)
-        .await
-    {
+    let episodes = match episodic.get_recent_episodes(CLUSTER_EPISODE_LIMIT).await {
         Ok(results) => results,
         Err(e) => {
             report.push_error(format!("episode fetch for clustering failed: {}", e));
             return;
-        }
+        },
     };
 
     if episodes.len() < MIN_CLUSTER_SIZE {
-        debug!("deep: not enough episodes for clustering ({})", episodes.len());
+        debug!(
+            "deep: not enough episodes for clustering ({})",
+            episodes.len()
+        );
         return;
     }
 
     // Extract contents for clustering, appending behavioral tags to influence embeddings
-    let contents: Vec<String> = episodes.iter().map(|e| {
-        if e.context_tags.is_empty() {
-            e.content.clone()
-        } else {
-            // Include behavioral context to make non-text events semantically meaningful
-            format!("{} [Behavior/Context: {}]", e.content, e.context_tags.join(", "))
-        }
-    }).collect();
+    let contents: Vec<String> = episodes
+        .iter()
+        .map(|e| {
+            if e.context_tags.is_empty() {
+                e.content.clone()
+            } else {
+                // Include behavioral context to make non-text events semantically meaningful
+                format!(
+                    "{} [Behavior/Context: {}]",
+                    e.content,
+                    e.context_tags.join(", ")
+                )
+            }
+        })
+        .collect();
 
     // Run k-means clustering
     let clusters = cluster_episodes(&contents, KMEANS_K);
@@ -801,12 +819,12 @@ async fn run_generalization(
                 semantic
                     .try_generalize_with_llm(&episode_data, &concept_hint, now_ms, nc)
                     .await
-            }
+            },
             None => {
                 semantic
                     .try_generalize(&episode_data, &concept_hint, now_ms)
                     .await
-            }
+            },
         };
 
         match generalize_result {
@@ -831,14 +849,20 @@ async fn run_generalization(
                 } else {
                     report.patterns_recorded += 1;
                 }
-            }
+            },
             Ok(None) => {
                 // Rejected — episodes not similar enough to each other
-                debug!("deep: generalization rejected for cluster (concept: {})", concept_hint);
-            }
+                debug!(
+                    "deep: generalization rejected for cluster (concept: {})",
+                    concept_hint
+                );
+            },
             Err(e) => {
-                report.push_error(format!("generalization failed for '{}': {}", concept_hint, e));
-            }
+                report.push_error(format!(
+                    "generalization failed for '{}': {}",
+                    concept_hint, e
+                ));
+            },
         }
     }
 }
@@ -851,7 +875,12 @@ async fn run_archival(
     report: &mut ConsolidationReport,
 ) {
     match episodic
-        .get_archival_candidates(ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD, now_ms, 50)
+        .get_archival_candidates(
+            ARCHIVE_AGE_THRESHOLD_MS,
+            ARCHIVE_IMPORTANCE_THRESHOLD,
+            now_ms,
+            50,
+        )
         .await
     {
         Ok(candidates) => {
@@ -859,10 +888,7 @@ async fn run_archival(
                 return;
             }
 
-            debug!(
-                "deep: found {} archival candidates",
-                candidates.len()
-            );
+            debug!("deep: found {} archival candidates", candidates.len());
 
             let mut archived_ids: Vec<u64> = Vec::new();
 
@@ -888,13 +914,10 @@ async fn run_archival(
                             "deep: archived episode {} -> archive blob {}",
                             episode.id, archive_id
                         );
-                    }
+                    },
                     Err(e) => {
-                        report.push_error(format!(
-                            "archive episode {} failed: {}",
-                            episode.id, e
-                        ));
-                    }
+                        report.push_error(format!("archive episode {} failed: {}", episode.id, e));
+                    },
                 }
             }
 
@@ -903,16 +926,16 @@ async fn run_archival(
                 match episodic.delete_episodes(&archived_ids).await {
                     Ok(deleted) => {
                         report.episodes_archived += deleted;
-                    }
+                    },
                     Err(e) => {
                         report.push_error(format!("delete archived episodes failed: {}", e));
-                    }
+                    },
                 }
             }
-        }
+        },
         Err(e) => {
             report.push_error(format!("get archival candidates failed: {}", e));
-        }
+        },
     }
 }
 
@@ -1012,8 +1035,10 @@ mod tests {
         let clusters = cluster_episodes(&contents, 4);
         // Should find at least 1 cluster (the similarity-based ones)
         // Due to TF-IDF embeddings, clustering may vary, but we should get non-empty results
-        assert!(!clusters.is_empty() || contents.len() < MIN_CLUSTER_SIZE,
-            "should find at least one cluster from clearly related content");
+        assert!(
+            !clusters.is_empty() || contents.len() < MIN_CLUSTER_SIZE,
+            "should find at least one cluster from clearly related content"
+        );
     }
 
     #[test]
@@ -1130,14 +1155,20 @@ mod tests {
             None,
         ));
 
-        assert!(report.working_to_episodic >= 1, "should promote at least 1 slot");
+        assert!(
+            report.working_to_episodic >= 1,
+            "should promote at least 1 slot"
+        );
 
         // Verify the episode was stored
         let count = rt.block_on(episodic.count()).unwrap();
         assert!(count >= 1);
 
         // Verify pattern was recorded
-        assert!(report.patterns_recorded > 0, "should record promotion pattern");
+        assert!(
+            report.patterns_recorded > 0,
+            "should record promotion pattern"
+        );
     }
 
     #[test]

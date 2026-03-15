@@ -1,5 +1,7 @@
-use aura_types::events::{EventSource, GateDecision, Intent, ScoredEvent};
-use aura_types::ipc::InferenceMode;
+use aura_types::{
+    events::{EventSource, GateDecision, Intent, ScoredEvent},
+    ipc::InferenceMode,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -12,8 +14,6 @@ const HYSTERESIS_GAP: f32 = 0.15;
 
 /// Default complexity threshold for System1 vs System2.
 const DEFAULT_COMPLEXITY_THRESHOLD: f32 = 0.50;
-
-
 
 // ---------------------------------------------------------------------------
 // Types
@@ -269,8 +269,9 @@ impl Default for RouteClassifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::events::{EventSource, GateDecision, Intent, ParsedEvent};
+
+    use super::*;
 
     fn make_scored(
         source: EventSource,
@@ -437,5 +438,4 @@ mod tests {
             "hysteresis should hold System1"
         );
     }
-
 }

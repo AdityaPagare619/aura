@@ -18,8 +18,10 @@
 //! - Retry logic with exponential backoff
 //! - Completion history for learning which goals succeed/fail and why
 
-use aura_types::errors::GoalError;
-use aura_types::goals::{Goal, GoalStatus};
+use aura_types::{
+    errors::GoalError,
+    goals::{Goal, GoalStatus},
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -632,8 +634,8 @@ impl GoalTracker {
                     } else {
                         blocked += 1;
                     }
-                }
-                _ => {} // Terminal states are in history, not tracked.
+                },
+                _ => {}, // Terminal states are in history, not tracked.
             }
         }
 
@@ -1264,8 +1266,9 @@ impl Default for GoalTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::goals::{GoalPriority, GoalSource};
+
+    use super::*;
 
     fn make_goal(id: u64) -> Goal {
         Goal {
@@ -1310,7 +1313,7 @@ mod tests {
             Err(GoalError::InvalidTransition { from, to }) => {
                 assert!(from.contains("Pending"));
                 assert!(to.contains("Completed"));
-            }
+            },
             other => panic!("expected InvalidTransition, got {:?}", other),
         }
     }

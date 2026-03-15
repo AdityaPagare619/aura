@@ -20,8 +20,8 @@
 //! # Evaluation Order
 //!
 //! 1. **Level 1 (Absolute)**: If action matches → `DenyAbsolute`, STOP.
-//! 2. **Level 3 (Learned)**: If high-confidence prediction → use it.
-//!    (Checked before L2 because consistent user confirmation = auto-approve.)
+//! 2. **Level 3 (Learned)**: If high-confidence prediction → use it. (Checked before L2 because
+//!    consistent user confirmation = auto-approve.)
 //! 3. **Level 2 (Conditional)**: If action matches → `AllowWithConfirmation`.
 //! 4. **Default** → `Allow` (things not covered by any rule).
 //!
@@ -32,8 +32,9 @@
 //! Every boundary decision must survive: "Does this help the user connect
 //! more IRL, or isolate them?" AURA can refuse harmful actions.
 
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -127,8 +128,7 @@ impl<T> BoundedVec<T> {
     #[must_use]
     pub fn to_vec(&self) -> Vec<T>
     where
-        T: Clone,
-    {
+        T: Clone, {
         self.inner.iter().cloned().collect()
     }
 }
@@ -216,11 +216,11 @@ impl BoundaryDecision {
             Self::Allow => "allowed".to_string(),
             Self::AllowWithConfirmation { reason, .. } => {
                 format!("allowed with confirmation: {reason}")
-            }
+            },
             Self::Deny { reason, level } => format!("denied ({level}): {reason}"),
             Self::DenyAbsolute { reason, rule_id } => {
                 format!("ABSOLUTE DENY [{rule_id}]: {reason}")
-            }
+            },
         }
     }
 }
@@ -399,11 +399,15 @@ impl std::fmt::Display for UserPreference {
             Self::AlwaysAllow => write!(f, "AlwaysAllow"),
             Self::AlwaysDeny => write!(f, "AlwaysDeny"),
             Self::TimeRestricted { allowed_hours } => {
-                write!(f, "TimeRestricted({:02}:00-{:02}:00)", allowed_hours.0, allowed_hours.1)
-            }
+                write!(
+                    f,
+                    "TimeRestricted({:02}:00-{:02}:00)",
+                    allowed_hours.0, allowed_hours.1
+                )
+            },
             Self::FrequencyLimited { max_per_day } => {
                 write!(f, "FrequencyLimited({max_per_day}/day)")
-            }
+            },
             Self::RequiresContext(ctx) => write!(f, "RequiresContext({ctx})"),
         }
     }
@@ -653,12 +657,7 @@ impl BoundaryReasoner {
 
     /// Record the user's response to a boundary decision, feeding Level 3
     /// learning. Call this after the user confirms or denies an action.
-    pub fn record_user_response(
-        &mut self,
-        action: &str,
-        allowed: bool,
-        response_time_ms: u64,
-    ) {
+    pub fn record_user_response(&mut self, action: &str, allowed: bool, response_time_ms: u64) {
         let now_ms = current_timestamp_ms();
 
         // Update the most recent decision log entry for this action.
@@ -835,12 +834,19 @@ impl BoundaryReasoner {
 
         out.push_str("--- Level 1: ABSOLUTE (never overridden) ---\n");
         for rule in &self.absolute_rules {
-            out.push_str(&format!("  [{}] {} (pattern: {})\n", rule.id, rule.description, rule.pattern));
+            out.push_str(&format!(
+                "  [{}] {} (pattern: {})\n",
+                rule.id, rule.description, rule.pattern
+            ));
         }
 
         out.push_str("\n--- Level 2: CONDITIONAL (requires confirmation) ---\n");
         for rule in self.conditional_rules.iter() {
-            let bio = if rule.requires_biometric { " [biometric]" } else { "" };
+            let bio = if rule.requires_biometric {
+                " [biometric]"
+            } else {
+                ""
+            };
             out.push_str(&format!(
                 "  [{}] {}{} (pattern: {}, cooldown: {}ms)\n",
                 rule.id, rule.description, bio, rule.action_pattern, rule.cooldown_ms
@@ -883,12 +889,12 @@ impl BoundaryReasoner {
         match decision {
             BoundaryDecision::DenyAbsolute { .. } => {
                 self.total_absolute_denials = self.total_absolute_denials.saturating_add(1);
-            }
+            },
             BoundaryDecision::AllowWithConfirmation { .. } => {
                 self.total_confirmations_requested =
                     self.total_confirmations_requested.saturating_add(1);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -920,7 +926,7 @@ impl BoundaryReasoner {
                         "Level 3: auto-approve (learned)"
                     );
                     return Some(BoundaryDecision::Allow);
-                }
+                },
                 UserPreference::AlwaysDeny => {
                     tracing::debug!(
                         target: "BOUNDARY",
@@ -936,7 +942,7 @@ impl BoundaryReasoner {
                         ),
                         level: BoundaryLevel::Learned,
                     });
-                }
+                },
                 UserPreference::TimeRestricted { allowed_hours } => {
                     let (start, end) = *allowed_hours;
                     let hour = context.current_hour;
@@ -955,7 +961,7 @@ impl BoundaryReasoner {
                             level: BoundaryLevel::Learned,
                         });
                     }
-                }
+                },
                 UserPreference::FrequencyLimited { max_per_day } => {
                     // Count today's occurrences of this action in the decision log.
                     let now_ms = current_timestamp_ms();
@@ -987,7 +993,7 @@ impl BoundaryReasoner {
                             level: BoundaryLevel::Learned,
                         });
                     }
-                }
+                },
                 UserPreference::RequiresContext(required_ctx) => {
                     if !context.action_category.contains(required_ctx.as_str()) {
                         return Some(BoundaryDecision::Deny {
@@ -997,7 +1003,7 @@ impl BoundaryReasoner {
                             level: BoundaryLevel::Learned,
                         });
                     }
-                }
+                },
             }
         }
         None
@@ -1172,9 +1178,8 @@ struct ActionLearningStats {
 ///
 /// Rules:
 /// - Exact match always succeeds.
-/// - Pattern must appear in action where the character before the match
-///   (if any) is `_` or `/`, AND the character after the match (if any)
-///   is `_` or `/`.
+/// - Pattern must appear in action where the character before the match (if any) is `_` or `/`, AND
+///   the character after the match (if any) is `_` or `/`.
 #[must_use]
 fn matches_action_pattern(action: &str, pattern: &str) -> bool {
     if action == pattern {
@@ -1191,8 +1196,7 @@ fn matches_action_pattern(action: &str, pattern: &str) -> bool {
     while start + pat_len <= action_bytes.len() {
         if let Some(pos) = action[start..].find(pattern) {
             let abs_pos = start + pos;
-            let before_ok =
-                abs_pos == 0 || matches!(action_bytes[abs_pos - 1], b'_' | b'/');
+            let before_ok = abs_pos == 0 || matches!(action_bytes[abs_pos - 1], b'_' | b'/');
             let after_pos = abs_pos + pat_len;
             let after_ok = after_pos == action_bytes.len()
                 || matches!(action_bytes[after_pos], b'_' | b'/' | b' ' | b'-' | b'.');
@@ -1435,7 +1439,13 @@ mod tests {
 
         let decision = reasoner.evaluate("spam_action something", &ctx);
         assert!(!decision.is_allowed());
-        assert!(matches!(decision, BoundaryDecision::Deny { level: BoundaryLevel::Learned, .. }));
+        assert!(matches!(
+            decision,
+            BoundaryDecision::Deny {
+                level: BoundaryLevel::Learned,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1496,7 +1506,10 @@ mod tests {
             last_updated_ms: current_timestamp_ms(),
         });
 
-        assert_eq!(reasoner.user_would_allow("frequent_action", &ctx), Some(true));
+        assert_eq!(
+            reasoner.user_would_allow("frequent_action", &ctx),
+            Some(true)
+        );
     }
 
     #[test]
@@ -1512,7 +1525,10 @@ mod tests {
             last_updated_ms: current_timestamp_ms(),
         });
 
-        assert_eq!(reasoner.user_would_allow("annoying_action", &ctx), Some(false));
+        assert_eq!(
+            reasoner.user_would_allow("annoying_action", &ctx),
+            Some(false)
+        );
     }
 
     #[test]

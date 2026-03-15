@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::actions::{ActionType, TargetSelector};
-use crate::tools::{ParamValue, RiskLevel};
+use crate::{
+    actions::{ActionType, TargetSelector},
+    tools::{ParamValue, RiskLevel},
+};
 
 /// A single step in the DSL execution plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,7 +90,8 @@ impl SafetyLevel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DslBlock {
     pub name: String,
-    /// Bounded at runtime to `max_total_steps` entries — enforced by `can_add_steps()` at construction site.
+    /// Bounded at runtime to `max_total_steps` entries — enforced by `can_add_steps()` at
+    /// construction site.
     pub steps: Vec<DslStep>,
     pub max_total_steps: u32,
     pub safety_level: SafetyLevel,
@@ -126,7 +129,8 @@ impl DslBlock {
 pub struct ToolCall {
     /// Tool name, matching a key in `TOOL_REGISTRY`.
     pub tool_name: String,
-    /// Resolved parameter values. Bounded at runtime to MAX_TOOL_PARAMETERS entries — enforced by consumer.
+    /// Resolved parameter values. Bounded at runtime to MAX_TOOL_PARAMETERS entries — enforced by
+    /// consumer.
     pub parameters: Vec<(String, ParamValue)>,
     /// Risk level (copied from tool schema for quick checks).
     pub risk_level: RiskLevel,

@@ -3,7 +3,7 @@
 //! # Strategic System Fit
 //! While AURA automates tasks to save time, it aims to *enhance* the user's mind
 //! rather than replace it. Standard AI assistants cause "cognitive atrophy" by
-//! giving instant answers to complex problems. 
+//! giving instant answers to complex problems.
 //! The `ThinkingPartner` operates in Socratic Mode: when the user faces a complex
 //! decision, AURA switches from "Doer" to "Coach", asking questions to help the user
 //! arrive at their own conclusions, fostering deep thought and meta-cognition.

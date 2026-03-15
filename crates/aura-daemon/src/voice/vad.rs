@@ -261,7 +261,7 @@ impl VoiceActivityDetector {
                     self.state = VadState::Silence { duration_ms: d };
                     VadEvent::Silence
                 }
-            }
+            },
 
             VadState::Transition {
                 from_speech,
@@ -323,7 +323,7 @@ impl VoiceActivityDetector {
                         VadEvent::SpeechContinuing
                     }
                 }
-            }
+            },
 
             VadState::Speech { duration_ms } => {
                 let d = *duration_ms;
@@ -341,7 +341,7 @@ impl VoiceActivityDetector {
                     };
                     VadEvent::SpeechContinuing
                 }
-            }
+            },
         }
     }
 }

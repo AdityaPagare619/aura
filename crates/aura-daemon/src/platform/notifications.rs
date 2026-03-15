@@ -3,10 +3,10 @@
 //! AURA uses Android notification channels to categorize and prioritize its
 //! communications with the user:
 //!
-//! - **Foreground Service**: persistent notification required by Android to keep
-//!   the daemon alive.  Low priority, non-dismissable.
-//! - **Proactive Suggestions**: context-aware suggestions surfaced by the bio-
-//!   cognitive loop.  Default priority.
+//! - **Foreground Service**: persistent notification required by Android to keep the daemon alive.
+//!   Low priority, non-dismissable.
+//! - **Proactive Suggestions**: context-aware suggestions surfaced by the bio- cognitive loop.
+//!   Default priority.
 //! - **Goal Completion/Failure**: results of agentic task execution.
 //! - **Health & Social Reminders**: well-being and relationship check-ins.
 //! - **System Status**: power warnings, thermal throttle alerts, error reports.

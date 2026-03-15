@@ -469,7 +469,6 @@ impl ExtensionSandbox {
     ///
     /// Call this periodically during long-running operations to enforce
     /// the `max_execution_time_ms` limit from the manifest.
-    #[must_use]
     pub fn check_execution_time(&self, started_at: Instant) -> Result<(), ExtensionError> {
         if self.context.max_execution_time_ms == 0 {
             return Ok(()); // No limit (AURA Core only).

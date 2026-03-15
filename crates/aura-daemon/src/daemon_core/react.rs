@@ -775,7 +775,6 @@ pub fn build_context(
 ///
 /// The LLM returns an `ActionPlan` with `DslStep`s. This function converts
 /// the first unexecuted step into a `ToolCall` for the reactive loop.
-#[must_use]
 pub fn plan_step_to_tool_call(step: &aura_types::dsl::DslStep) -> ToolCall {
     let mut parameters = BTreeMap::new();
 

@@ -453,7 +453,8 @@ impl OnboardingEngine {
 
         self.state.calibration_answers = answers
             .iter()
-            .take(MAX_CALIBRATION_ANSWERS).cloned()
+            .take(MAX_CALIBRATION_ANSWERS)
+            .cloned()
             .collect();
 
         // Compute OCEAN adjustments — mechanical linear mapping of slider
@@ -583,8 +584,7 @@ impl OnboardingEngine {
     /// Compute OCEAN adjustments from calibration answers.
     ///
     /// Each answer (1–5) maps to a delta from the default:
-    /// - 1 = −2δ, 2 = −1δ, 3 = 0, 4 = +1δ, 5 = +2δ
-    /// where δ = OCEAN_DELTA_PER_QUESTION.
+    ///   - 1 = −2δ, 2 = −1δ, 3 = 0, 4 = +1δ, 5 = +2δ where δ = OCEAN_DELTA_PER_QUESTION.
     fn compute_ocean_adjustments(&self, answers: &[CalibrationAnswer]) -> OceanTraits {
         let mut adj = OceanTraits::DEFAULT;
 

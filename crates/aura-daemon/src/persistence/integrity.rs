@@ -119,7 +119,7 @@ impl IntegrityVerifier {
         Self::verify_journal_state(journal_recovered, journal_corruption, &mut issues);
 
         // Sort: Critical first, then Warning, then Info.
-        issues.sort_by(|a, b| b.severity.cmp(&a.severity));
+        issues.sort_by_key(|issue| std::cmp::Reverse(issue.severity));
 
         let critical_count = issues
             .iter()

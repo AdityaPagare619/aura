@@ -427,19 +427,21 @@ impl ProactiveEngine {
                 power,
                 PowerTier::P0Always | PowerTier::P1IdlePlus | PowerTier::P2Normal
             )
-            && self.morning.should_trigger(hour, day) && self.spend_initiative(0.15) {
-                match self.morning.generate(day) {
-                    Ok(sections) => {
-                        if !sections.is_empty() {
-                            info!(sections = sections.len(), "morning briefing generated");
-                            actions.push(ProactiveAction::Briefing(sections));
-                        }
-                    },
-                    Err(e) => {
-                        warn!(error = %e, "morning briefing generation failed");
-                    },
-                }
+            && self.morning.should_trigger(hour, day)
+            && self.spend_initiative(0.15)
+        {
+            match self.morning.generate(day) {
+                Ok(sections) => {
+                    if !sections.is_empty() {
+                        info!(sections = sections.len(), "morning briefing generated");
+                        actions.push(ProactiveAction::Briefing(sections));
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "morning briefing generation failed");
+                },
             }
+        }
 
         // --- Suggestions ---
         if !skip_suggestions

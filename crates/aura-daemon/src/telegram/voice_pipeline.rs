@@ -21,7 +21,7 @@ use tracing::{debug, warn};
 const OPUS_SAMPLE_RATE: u32 = 48_000;
 
 /// Most STT models expect 16kHz mono.
-const STT_SAMPLE_RATE: u32 = 16_000;
+const _STT_SAMPLE_RATE: u32 = 16_000;
 
 /// Opus frame duration in ms (20ms is standard).
 const OPUS_FRAME_MS: u32 = 20;
@@ -96,9 +96,8 @@ pub fn decode_ogg_opus(ogg_bytes: &[u8]) -> Result<Vec<i16>, VoicePipelineError>
 
                 let opus_packet = audiopus::packet::Packet::try_from(packet.data.as_slice())
                     .map_err(|e| VoicePipelineError::OpusDecode(format!("packet: {e}")))?;
-                let output_signals =
-                    audiopus::MutSignals::try_from(decode_buf.as_mut_slice())
-                        .map_err(|e| VoicePipelineError::OpusDecode(format!("signals: {e}")))?;
+                let output_signals = audiopus::MutSignals::try_from(decode_buf.as_mut_slice())
+                    .map_err(|e| VoicePipelineError::OpusDecode(format!("signals: {e}")))?;
 
                 let decoded_samples = decoder
                     .decode(Some(opus_packet), output_signals, false)

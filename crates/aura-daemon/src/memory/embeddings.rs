@@ -163,21 +163,22 @@ fn cache_insert(key: u64, embedding: Vec<f32>) {
 // Core embedding: TF-IDF with sign-hashing trick
 // ---------------------------------------------------------------------------
 
-/// Generate a 384-dimensional embedding from text using TF-IDF sign-hashing.
-///
-/// Algorithm:
-/// 1. Tokenize: split on whitespace/punctuation, lowercase, remove stop words
-/// 2. For each feature (unigram, bigram, char-trigram): a. Compute bucket = fnv_hash(feature) % 384
-///    b. Compute sign = +1 or -1 from a second independent hash c. Accumulate sign × weight into
-///    the bucket
-/// 3. L2-normalize to unit vector
-///
-/// The **sign-hashing trick** (Weinberger et al. 2009) prevents hash-collision
-/// build-up: unrelated features that collide in the same bucket are equally
-/// likely to add or subtract, so their contributions cancel in expectation.
-///
-/// Deterministic: same input always produces same output.
-/// Thread-safe: uses an internal LRU cache for repeated queries.
+// Generate a 384-dimensional embedding from text using TF-IDF sign-hashing.
+//
+// Algorithm:
+// 1. Tokenize: split on whitespace/punctuation, lowercase, remove stop words
+// 2. For each feature (unigram, bigram, char-trigram): a. Compute bucket = fnv_hash(feature) % 384
+//    b. Compute sign = +1 or -1 from a second independent hash c. Accumulate sign × weight into the
+//    bucket
+// 3. L2-normalize to unit vector
+//
+// The **sign-hashing trick** (Weinberger et al. 2009) prevents hash-collision
+// build-up: unrelated features that collide in the same bucket are equally
+// likely to add or subtract, so their contributions cancel in expectation.
+//
+// Deterministic: same input always produces same output.
+// Thread-safe: uses an internal LRU cache for repeated queries.
+
 // ---------------------------------------------------------------------------
 // Embedding quality signal
 // ---------------------------------------------------------------------------

@@ -182,9 +182,9 @@ impl System2 {
     /// Check whether a pending request has timed out.
     #[instrument(skip(self))]
     pub fn is_timed_out(&self, request_id: u64, now_ms: u64) -> bool {
-        self.pending.get(&request_id).is_some_and(|req| {
-            now_ms.saturating_sub(req.created_ms) > req.timeout_ms
-        })
+        self.pending
+            .get(&request_id)
+            .is_some_and(|req| now_ms.saturating_sub(req.created_ms) > req.timeout_ms)
     }
 
     /// Mark a request as complete and remove it from the pending set.

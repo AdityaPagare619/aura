@@ -37,7 +37,7 @@ missing-docs-in-crate-items = false
 disallowed-types = [
     # reqwest::blocking::Client is banned: blocking I/O in an async runtime causes
     # thread starvation. All HTTP calls must be async via reqwest::Client.
-    { path = "reqwest::blocking::Client", reason = "blocking I/O in async context; use async reqwest::Client instead" },
+    { path = "reqwest::blocking::Client", reason = "blocking I/O in async context; use async reqwest::Client instead", allow-invalid = true },
 ]
 
 # Disallow method calls that have safer alternatives.

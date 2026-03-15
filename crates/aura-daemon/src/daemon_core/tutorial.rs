@@ -102,8 +102,7 @@ pub struct TutorialModule {
 // ---------------------------------------------------------------------------
 
 /// Persistent progress tracking for the tutorial system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TutorialProgress {
     /// Module ID of the current module (empty = not started).
     pub current_module: String,
@@ -120,7 +119,6 @@ pub struct TutorialProgress {
     /// Timestamp of last progress update (ms).
     pub updated_at_ms: u64,
 }
-
 
 // ---------------------------------------------------------------------------
 // TutorialEngine

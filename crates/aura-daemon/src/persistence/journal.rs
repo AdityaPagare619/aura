@@ -238,6 +238,7 @@ impl WriteAheadJournal {
     pub fn new(path: &Path) -> Result<Self, JournalError> {
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(path)?;

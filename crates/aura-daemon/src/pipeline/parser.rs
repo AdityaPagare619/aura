@@ -1864,8 +1864,7 @@ impl CommandParser {
     ) -> Option<ParseResult> {
         // "copy {text}", "copy to clipboard"
         if normalized.starts_with("copy ") {
-            let text =
-                extract_after_keyword(original, &["copy "]).unwrap_or_default();
+            let text = extract_after_keyword(original, &["copy "]).unwrap_or_default();
             if !text.is_empty() {
                 return Some(make_result(NluIntent::ClipboardCopy { text }, &[], 0.85));
             }

@@ -461,10 +461,8 @@ pub struct ExportManifest {
 /// patterns. Uses structural heuristics (digit counts, character patterns)
 /// for encryption-tier assignment — no confidence scoring, no routing.
 /// The LLM reasons about user intent; this only asks "what tier encrypts this?"
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DataClassifier {}
-
 
 impl DataClassifier {
     /// Create a new classifier with default confidence threshold.

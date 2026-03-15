@@ -45,7 +45,6 @@ format_strings = false          # Don't reformat string literals
 
 # ── Doc comments ─────────────────────────────────────────────────────────────
 normalize_doc_attributes = true
-format_doc_comments = false     # Don't reformat markdown in doc comments
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 use_field_init_shorthand = true

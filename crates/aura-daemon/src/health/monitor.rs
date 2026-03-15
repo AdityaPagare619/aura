@@ -216,8 +216,7 @@ impl<T> BoundedVec<T> {
 /// | Hot      | THERMAL_STATUS_SEVERE         | Throttling recommended        |
 /// | Critical | THERMAL_STATUS_CRITICAL       | Immediate throttling needed   |
 /// | Shutdown | THERMAL_STATUS_SHUTDOWN       | Emergency — device may halt   |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ThermalState {
     /// No thermal concern — device is cool.
     #[default]
@@ -261,15 +260,13 @@ impl fmt::Display for ThermalState {
     }
 }
 
-
 // ─── HealthStatus ───────────────────────────────────────────────────────────
 
 /// Overall health assessment of the AURA daemon.
 ///
 /// Derived from the combination of all health signals — error rate, thermal
 /// state, neocortex liveness, resource pressure, etc.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HealthStatus {
     /// All systems nominal.
     #[default]
@@ -311,7 +308,6 @@ impl fmt::Display for HealthStatus {
         }
     }
 }
-
 
 // ─── HealthReport ───────────────────────────────────────────────────────────
 
@@ -874,11 +870,10 @@ impl HealthMonitor {
 
         // Expected checks per hour at current interval.
         let interval = self.check_interval_ms();
-        let expected_checks = if interval > 0 {
-            ONE_HOUR_MS / interval
-        } else {
-            1
-        };
+        let expected_checks = interval
+            .checked_div(1)
+            .and_then(|_| ONE_HOUR_MS.checked_div(interval))
+            .unwrap_or(1);
 
         // Rate = errors / expected checks, clamped to [0.0, 1.0].
         let rate = recent_errors as f32 / expected_checks.max(1) as f32;
@@ -1308,9 +1303,9 @@ pub async fn run_heartbeat_loop(
                 .send(DaemonEvent::BatteryLow { pct: battery_pct })
                 .await
                 .is_err()
-            {
-                break;
-            }
+        {
+            break;
+        }
 
         // ── Memory pressure ─────────────────────────────────────────────────
         if memory_mb >= MEMORY_CRITICAL_MB {
@@ -1335,9 +1330,9 @@ pub async fn run_heartbeat_loop(
                 })
                 .await
                 .is_err()
-            {
-                break;
-            }
+        {
+            break;
+        }
 
         // ── Thermal critical ────────────────────────────────────────────────
         if let Some(temp) = thermal_celsius {
@@ -1357,15 +1352,14 @@ pub async fn run_heartbeat_loop(
             use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
             match crate::ipc::NeocortexClient::connect().await {
                 Ok(mut client) => {
-                    match tokio::time::timeout(
-                        Duration::from_secs(5),
-                        client.request(&DaemonToNeocortex::Ping),
+                    matches!(
+                        tokio::time::timeout(
+                            Duration::from_secs(5),
+                            client.request(&DaemonToNeocortex::Ping),
+                        )
+                        .await,
+                        Ok(Ok(NeocortexToDaemon::Pong { .. }))
                     )
-                    .await
-                    {
-                        Ok(Ok(NeocortexToDaemon::Pong { .. })) => true,
-                        _ => false,
-                    }
                 },
                 Err(_) => false,
             }

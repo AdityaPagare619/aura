@@ -224,11 +224,10 @@ impl TokenBudgetManager {
     /// Capture a point-in-time snapshot of the budget state.
     #[must_use]
     pub fn snapshot(&self) -> TokenBudgetSnapshot {
-        let avg = if self.calls_in_session == 0 {
-            0
-        } else {
-            self.session_tokens_used / self.calls_in_session
-        };
+        let avg = self
+            .session_tokens_used
+            .checked_div(self.calls_in_session)
+            .unwrap_or(0);
         TokenBudgetSnapshot {
             session_used: self.session_tokens_used,
             session_limit: self.session_tokens_limit,

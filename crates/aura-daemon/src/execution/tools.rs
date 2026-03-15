@@ -32,7 +32,6 @@ pub struct EtgCache {
     pub eviction_count: u32,
 }
 
-
 impl EtgCache {
     pub fn new() -> Self {
         Self::default()

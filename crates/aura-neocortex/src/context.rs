@@ -894,6 +894,7 @@ fn build_slots(
 ///
 /// Extends `build_slots()` with optional fields for grammar constraints,
 /// chain-of-thought, tool descriptions, and retry context.
+#[allow(clippy::too_many_arguments)]
 fn build_slots_extended(
     goal: &str,
     screen: &str,
@@ -1198,8 +1199,8 @@ mod tests {
 
         assert!(result.system_prompt.contains("Hey AURA, what's up?"));
         assert!(result.system_prompt.contains("0.85")); // openness
-        // trust_level is mapped to a qualitative label (SEC-MED-3/6), not a raw float.
-        // 0.60 → "developing"
+                                                        // trust_level is mapped to a qualitative label (SEC-MED-3/6), not a raw float.
+                                                        // 0.60 → "developing"
         assert!(result.system_prompt.contains("developing")); // trust_level
     }
 

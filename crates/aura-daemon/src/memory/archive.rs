@@ -29,14 +29,12 @@ pub const ARCHIVE_AGE_THRESHOLD_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 pub const ARCHIVE_IMPORTANCE_THRESHOLD: f32 = 0.3;
 
 /// Compression algorithm selection
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CompressionAlgo {
     #[default]
     Lz4,
     Zstd,
 }
-
 
 // ---------------------------------------------------------------------------
 // Compression interface

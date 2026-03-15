@@ -621,7 +621,6 @@ impl PowerManager {
             0.0
         };
 
-        
         energy_throttle as f32
     }
 

@@ -701,9 +701,7 @@ impl BoundaryReasoner {
 
         for entry in self.decision_log.iter() {
             if let Some(response) = entry.user_response {
-                let stats = action_stats
-                    .entry(entry.action.clone())
-                    .or_default();
+                let stats = action_stats.entry(entry.action.clone()).or_default();
                 stats.total += 1;
                 if response {
                     stats.allowed += 1;

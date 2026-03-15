@@ -263,10 +263,9 @@ fn text_match_quality(tree: &ScreenTree, expected: &str) -> f32 {
         }
 
         // Substring match (either direction)
-        if (norm.contains(&norm_expected) || norm_expected.contains(&norm))
-            && best < 0.7 {
-                best = 0.7;
-            }
+        if (norm.contains(&norm_expected) || norm_expected.contains(&norm)) && best < 0.7 {
+            best = 0.7;
+        }
     }
 
     if best > 0.0 {

@@ -228,9 +228,9 @@ pub enum TimeOfDay {
     EarlyMorning, // 04–08
     #[default]
     Morning, // 08–12
-    Afternoon, // 12–17
-    Evening,   // 17–21
-    Night,     // 21–04
+    Afternoon,    // 12–17
+    Evening,      // 17–21
+    Night,        // 21–04
 }
 
 /// Device thermal load.

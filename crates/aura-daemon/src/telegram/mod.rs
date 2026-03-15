@@ -241,7 +241,8 @@ impl TelegramEngine {
                 // Rust (body) extracts audio → future STT feeds LLM (brain).
                 // For alpha: decode succeeds → log → still route description text.
                 // When STT is wired, transcript replaces description text.
-                let voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data {
+                let voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data
+                {
                     #[cfg(feature = "voice")]
                     {
                         let bytes = voice_bytes.clone();

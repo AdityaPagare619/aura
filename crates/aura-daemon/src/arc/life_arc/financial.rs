@@ -296,7 +296,7 @@ impl FinancialArc {
         // --- Goal progress score ---
         let goal_progress = match self.monthly_savings_target_cents {
             None => 0.5, // No goal set — neutral, not penalised
-            Some(target) if target == 0 => 0.5,
+            Some(0) => 0.5,
             Some(target) => {
                 let actual = self.total_savings_this_month_cents.max(0) as f32;
                 (actual / target as f32).clamp(0.0, 1.0)

@@ -276,7 +276,7 @@ fn build_startup_capabilities(
 /// 1. If `config.model_path` is a directory → use it directly.
 /// 2. If `config.model_path` is a file → use its parent directory.
 /// 3. Otherwise → fall back to the CLI `--model-dir` value.
-fn resolve_model_dir(cli_model_dir: &PathBuf, config: &NeocortexRuntimeConfig) -> PathBuf {
+fn resolve_model_dir(cli_model_dir: &std::path::Path, config: &NeocortexRuntimeConfig) -> PathBuf {
     if let Some(ref cfg_path) = config.model_path {
         if cfg_path.is_dir() {
             return cfg_path.clone();
@@ -296,7 +296,7 @@ fn resolve_model_dir(cli_model_dir: &PathBuf, config: &NeocortexRuntimeConfig) -
         }
     }
 
-    cli_model_dir.clone()
+    cli_model_dir.to_path_buf()
 }
 
 // ─── Server loop ─────────────────────────────────────────────────────────────

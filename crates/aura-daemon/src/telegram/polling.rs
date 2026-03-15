@@ -327,8 +327,9 @@ impl TelegramPoller {
         let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
-        resp.result
-            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+        resp.result.ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))
     }
 
     /// Edit an existing message.
@@ -377,8 +378,9 @@ impl TelegramPoller {
         let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
-        resp.result
-            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+        resp.result.ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))
     }
 
     /// Send an OGG/Opus voice message.
@@ -404,8 +406,9 @@ impl TelegramPoller {
         let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
-        resp.result
-            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+        resp.result.ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))
     }
 
     /// Download a file from Telegram by file_id.

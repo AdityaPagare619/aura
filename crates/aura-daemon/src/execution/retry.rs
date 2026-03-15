@@ -726,10 +726,7 @@ impl IntelligentRetry {
     ///
     /// Returns `true` if the circuit allows the request, `false` if open.
     pub fn should_attempt(&mut self, operation: &str, now_ms: u64) -> bool {
-        let breaker = self
-            .breakers
-            .entry(operation.to_owned())
-            .or_default();
+        let breaker = self.breakers.entry(operation.to_owned()).or_default();
         breaker.allow_request(now_ms)
     }
 
@@ -771,10 +768,7 @@ impl IntelligentRetry {
         let _ = self.ledger.record_failure(operation, record);
 
         // Update circuit breaker
-        let breaker = self
-            .breakers
-            .entry(operation.to_owned())
-            .or_default();
+        let breaker = self.breakers.entry(operation.to_owned()).or_default();
         breaker.record_failure(now_ms);
 
         // Determine strategy

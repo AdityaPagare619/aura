@@ -128,9 +128,9 @@ impl std::fmt::Display for ConsolidationLevel {
 /// [`adjust_from_outcome`] is called after every confirmed retrieval event:
 /// - If the retrieved memory was recent (< 24h) → recency weight nudges up.
 /// - If the retrieved memory was older (≥ 24h) → frequency weight nudges up.
-/// - After each retrieval → importance weight nudges up (the user chose it).
-/// Weights are renormalized to sum to 1.0 and clamped to [0.1, 0.7] so no
-/// single dimension can dominate or disappear.
+/// - After each retrieval → importance weight nudges up (the user chose it). Weights are
+///   renormalized to sum to 1.0 and clamped to [0.1, 0.7] so no single dimension can dominate or
+///   disappear.
 ///
 /// ## Persistence
 /// Stored in [`DaemonCheckpoint`] so learned weights survive across restarts.
@@ -726,7 +726,7 @@ fn extract_concept_hint(contents: &[&str]) -> String {
         .filter(|(_, count)| *count >= threshold)
         .collect();
 
-    common_words.sort_by(|a, b| b.1.cmp(&a.1));
+    common_words.sort_by_key(|item| std::cmp::Reverse(item.1));
 
     let hint: String = common_words
         .iter()

@@ -1253,7 +1253,8 @@ impl InferenceEngine {
 
             // Progress reporting
             let elapsed_since = last_progress.elapsed().as_millis() as u64;
-            if elapsed_since >= PROGRESS_INTERVAL_MS || token_count.is_multiple_of(PROGRESS_INTERVAL_TOKENS)
+            if elapsed_since >= PROGRESS_INTERVAL_MS
+                || token_count.is_multiple_of(PROGRESS_INTERVAL_TOKENS)
             {
                 let percent = ((token_count as f32 / max_tokens as f32) * 100.0) as u8;
                 send_progress(NeocortexToDaemon::Progress {
@@ -2080,7 +2081,9 @@ mod tests {
         let result = engine.stub_infer(InferenceMode::Conversational, &prompt, &mut sender);
 
         match result {
-            NeocortexToDaemon::ConversationReply { text, mood_hint, .. } => {
+            NeocortexToDaemon::ConversationReply {
+                text, mood_hint, ..
+            } => {
                 assert!(!text.is_empty());
                 assert!(mood_hint.is_some());
             },

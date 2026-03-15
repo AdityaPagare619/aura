@@ -3786,11 +3786,7 @@ async fn handle_user_command(
                                 react::TaskOutcome::Cancelled {
                                     iterations_completed,
                                     ..
-                                } => (
-                                    OutcomeResult::UserCancelled,
-                                    0.0,
-                                    (*iterations_completed),
-                                ),
+                                } => (OutcomeResult::UserCancelled, 0.0, (*iterations_completed)),
                                 react::TaskOutcome::CycleAborted {
                                     iterations_completed,
                                     ..
@@ -4762,11 +4758,7 @@ async fn handle_ipc_inbound(
                                 react::TaskOutcome::Cancelled {
                                     iterations_completed,
                                     ..
-                                } => (
-                                    OutcomeResult::UserCancelled,
-                                    0.0,
-                                    (*iterations_completed),
-                                ),
+                                } => (OutcomeResult::UserCancelled, 0.0, (*iterations_completed)),
                                 react::TaskOutcome::CycleAborted {
                                     iterations_completed,
                                     ..

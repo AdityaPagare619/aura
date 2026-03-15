@@ -110,8 +110,7 @@ impl MoodState {
 // ---------------------------------------------------------------------------
 
 /// Situational context that affects voice.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub enum SpeechContext {
     /// Normal conversation.
     #[default]
@@ -127,7 +126,6 @@ pub enum SpeechContext {
     /// Phone call (need clarity).
     PhoneCall,
 }
-
 
 // ---------------------------------------------------------------------------
 // Mapping function

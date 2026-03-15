@@ -73,8 +73,7 @@ const TECHNICAL_PATTERNS: &[&str] = &[
     "Mutex<",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VoiceModePreference {
     Always,
     #[default]
@@ -82,15 +81,12 @@ pub enum VoiceModePreference {
     Never,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CommunicationMode {
     Voice,
     #[default]
     Text,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct CommunicationContext {

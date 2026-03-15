@@ -625,8 +625,7 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
 
     // -- 8.5. Extensions (non-critical) ------------------------------------
     let capability_loader = init_non_critical("capability_loader", CapabilityLoader::new);
-    let extension_discovery =
-        init_non_critical("extension_discovery", ExtensionDiscovery::new);
+    let extension_discovery = init_non_critical("extension_discovery", ExtensionDiscovery::new);
     tracing::info!(
         capability_loader = capability_loader.is_some(),
         extension_discovery = extension_discovery.is_some(),
@@ -634,8 +633,7 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
     );
 
     // -- 9. IPC (non-critical, starts disconnected) ------------------------
-    let neocortex_client =
-        init_non_critical("neocortex_client", NeocortexClient::disconnected);
+    let neocortex_client = init_non_critical("neocortex_client", NeocortexClient::disconnected);
     tracing::info!(
         neocortex_client = neocortex_client.is_some(),
         "IPC subsystem initialised (disconnected)"

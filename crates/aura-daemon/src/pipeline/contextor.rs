@@ -680,20 +680,22 @@ impl Contextor {
     // Internal: personality context generation
     // -----------------------------------------------------------------------
 
-    /// Build personality prompt directives from the identity subsystem.
-    ///
-    /// Combines OCEAN traits, current mood, and relationship stage into
-    /// structured directives that guide LLM response style and tone.
-    /// Build the legacy directive-string personality context.
-    ///
-    /// # DEPRECATED — diagnostic / test use only
-    ///
-    /// This function pre-interprets OCEAN/VAD values into behavioral directive
-    /// strings ("Be creative", "Be formal") before the LLM sees them. That is
-    /// Theater AGI: the daemon (body) doing the LLM's (brain) reasoning job.
-    ///
-    /// The result is stored in `EnrichedEvent::personality_context` for
-    /// diagnostic tooling and test assertions ONLY. It is no longer injected
+    // Build personality prompt directives from the identity subsystem.
+    //
+    // Combines OCEAN traits, current mood, and relationship stage into
+    // structured directives that guide LLM response style and tone.
+    // Build the legacy directive-string personality context.
+    //
+    // # DEPRECATED — diagnostic / test use only
+    //
+    // This function pre-interprets OCEAN/VAD values into behavioral directive
+    // strings ("Be creative", "Be formal") before the LLM sees them. That is
+    // Theater AGI: the daemon (body) doing the LLM's (brain) reasoning job.
+    //
+    // The result is stored in `EnrichedEvent::personality_context` for
+    // diagnostic tooling and test assertions ONLY. It is no longer injected
+    // into the LLM system prompt.
+    //
     // build_personality_context() removed — Theater AGI violation.
     // It called PersonalityPromptInjector::generate_personality_context() which
     // produced hardcoded behavioral directive strings ("Be creative", "Be formal")

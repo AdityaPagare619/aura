@@ -775,37 +775,37 @@ impl EnhancedPlanner {
         // a safer interim pattern.
         tokio::task::block_in_place(|| {
             handle.block_on(async {
-            let mut client = match crate::ipc::NeocortexClient::connect().await {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(error = %e, "score_plan: IPC connect failed — defaulting to 0.5");
-                    return 0.5;
-                },
-            };
+                let mut client = match crate::ipc::NeocortexClient::connect().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "score_plan: IPC connect failed — defaulting to 0.5");
+                        return 0.5;
+                    },
+                };
 
-            match client
-                .request(&DaemonToNeocortex::ScorePlan { plan: plan.clone() })
-                .await
-            {
-                Ok(NeocortexToDaemon::PlanScore { score }) => {
-                    // Clamp to [0.0, 1.0] defensively.
-                    let clamped = score.clamp(0.0, 1.0);
-                    debug!(score = clamped, "score_plan: received LLM score");
-                    clamped
-                },
-                Ok(other) => {
-                    warn!(
-                        resp = ?std::mem::discriminant(&other),
-                        "score_plan: unexpected IPC response — defaulting to 0.5"
-                    );
-                    0.5
-                },
-                Err(e) => {
-                    warn!(error = %e, "score_plan: IPC request failed — defaulting to 0.5");
-                    0.5
-                },
-            }
-        })
+                match client
+                    .request(&DaemonToNeocortex::ScorePlan { plan: plan.clone() })
+                    .await
+                {
+                    Ok(NeocortexToDaemon::PlanScore { score }) => {
+                        // Clamp to [0.0, 1.0] defensively.
+                        let clamped = score.clamp(0.0, 1.0);
+                        debug!(score = clamped, "score_plan: received LLM score");
+                        clamped
+                    },
+                    Ok(other) => {
+                        warn!(
+                            resp = ?std::mem::discriminant(&other),
+                            "score_plan: unexpected IPC response — defaulting to 0.5"
+                        );
+                        0.5
+                    },
+                    Err(e) => {
+                        warn!(error = %e, "score_plan: IPC request failed — defaulting to 0.5");
+                        0.5
+                    },
+                }
+            })
         })
     }
 
@@ -987,10 +987,10 @@ impl EnhancedPlanner {
 
         PlanExplanation {
             summary: format!(
-                "{} ({} steps, {} confidence)",
+                "{} ({} steps, {:.0}% confidence)",
                 plan.goal_description,
                 plan.steps.len(),
-                format!("{:.0}%", plan.confidence * 100.0)
+                plan.confidence * 100.0
             ),
             step_descriptions,
             rationale: format!("Plan source: {}. ", source_str),

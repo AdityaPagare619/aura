@@ -407,7 +407,7 @@ impl WorkingMemory {
         // 2. Recency rank (most recent first).
         let mut by_recency: Vec<(usize, u64)> =
             live.iter().map(|(i, s)| (*i, s.timestamp_ms)).collect();
-        by_recency.sort_by(|a, b| b.1.cmp(&a.1));
+        by_recency.sort_by_key(|item| std::cmp::Reverse(item.1));
 
         // 3. Relevance rank (highest cosine similarity first).
         let by_relevance: Vec<(usize, f32)> = match &query_emb {

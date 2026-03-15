@@ -625,6 +625,7 @@ struct XPathSegment {
     positional_index: Option<usize>,
 }
 
+#[allow(clippy::mut_range_bound)]
 fn parse_xpath_segments(xpath: &str) -> Vec<XPathSegment> {
     let mut segments = Vec::new();
     let mut start = 0;
@@ -814,13 +815,12 @@ fn matches_segment(node: &ScreenNode, seg: &XPathSegment, exact: bool) -> bool {
                 }
             },
             // Volatile attributes — skip in structural mode
-            "bounds" | "index" | "focused" | "checked" | "scrollable"
-                if exact => {
-                    // For exact mode, we'd need to parse bounds etc.
-                    // For now, skip volatile attrs even in exact mode
-                    // as they change between captures
-                    true
-                },
+            "bounds" | "index" | "focused" | "checked" | "scrollable" if exact => {
+                // For exact mode, we'd need to parse bounds etc.
+                // For now, skip volatile attrs even in exact mode
+                // as they change between captures
+                true
+            },
             _ => true, // Unknown attributes: don't reject
         };
 

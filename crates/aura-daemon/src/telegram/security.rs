@@ -158,7 +158,8 @@ impl RateLimiter {
             .count() as u32;
         if recent_count >= self.max_per_minute {
             let oldest_in_minute = timestamps
-                .iter().find(|t| now.duration_since(**t).as_secs() < 60)
+                .iter()
+                .find(|t| now.duration_since(**t).as_secs() < 60)
                 .copied()
                 .unwrap_or(now);
             let retry_after =

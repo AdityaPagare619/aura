@@ -5,8 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProactiveConsent {
     /// User has not been asked - NO proactive behavior allowed
     #[default]
@@ -16,7 +15,6 @@ pub enum ProactiveConsent {
     /// User accepted all proactive suggestions
     AcceptedAll,
 }
-
 
 impl ProactiveConsent {
     /// Check if proactive behavior is allowed for this user

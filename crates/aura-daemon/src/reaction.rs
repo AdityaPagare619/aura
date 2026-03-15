@@ -214,8 +214,8 @@ impl ReactionDetector {
     /// # Cognitive signals (all computed externally)
     ///
     /// - `next_input` — the user's new input text (used only for tracing).
-    /// - `sentiment_score` — emotional valence from the Amygdala's 4-channel scoring system.
-    ///   Range: -1.0 (very negative) to 1.0 (very positive). This is NOT a keyword lookup.
+    /// - `sentiment_score` — emotional valence from the Amygdala's 4-channel scoring system. Range:
+    ///   -1.0 (very negative) to 1.0 (very positive). This is NOT a keyword lookup.
     /// - `similarity_to_original` — cosine similarity between the new input and the original input
     ///   that AURA responded to.  High values indicate the user is repeating themselves.
     /// - `similarity_to_response` — cosine similarity between the new input and AURA's response

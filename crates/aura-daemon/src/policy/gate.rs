@@ -75,19 +75,18 @@ impl RateLimiter {
         let key = action.to_ascii_lowercase();
 
         // Enforce capacity cap before inserting a new key.
-        if !self.history.contains_key(&key)
-            && self.history.len() >= MAX_RATE_LIMITER_KEYS {
-                // At capacity: evict the oldest key (least-recently-used proxy:
-                // first key in iteration order) and warn.
-                if let Some(evict_key) = self.history.keys().next().cloned() {
-                    self.history.remove(&evict_key);
-                    tracing::warn!(
-                        evicted_key = %evict_key,
-                        capacity = MAX_RATE_LIMITER_KEYS,
-                        "rate limiter at capacity — evicted oldest key"
-                    );
-                }
+        if !self.history.contains_key(&key) && self.history.len() >= MAX_RATE_LIMITER_KEYS {
+            // At capacity: evict the oldest key (least-recently-used proxy:
+            // first key in iteration order) and warn.
+            if let Some(evict_key) = self.history.keys().next().cloned() {
+                self.history.remove(&evict_key);
+                tracing::warn!(
+                    evicted_key = %evict_key,
+                    capacity = MAX_RATE_LIMITER_KEYS,
+                    "rate limiter at capacity — evicted oldest key"
+                );
             }
+        }
 
         let timestamps = self.history.entry(key).or_default();
 

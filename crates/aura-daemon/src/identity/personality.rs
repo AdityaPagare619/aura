@@ -400,6 +400,7 @@ impl Personality {
     /// - Agreeableness & Extraversion are more malleable through interaction
     /// - Openness evolves at moderate rate
     /// - Conscientiousness & Neuroticism are most trait-like (slower to change)
+    ///
     /// See: McCrae & Costa (2003), Concept Design §4.1, AGI Audit §6.
     fn nudge_all(&mut self, delta: f32) {
         self.traits.openness += delta * 1.0; // Moderate stability

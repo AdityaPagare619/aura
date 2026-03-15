@@ -139,7 +139,7 @@ jobs:
       # 8. Cross-compile (stub feature skips llama.cpp source compilation in CI)
       # ----------------------------------------------------------
       - name: Build aura-daemon and aura-neocortex for aarch64-linux-android
-        run: cargo build --release -p aura-daemon -p aura-neocortex --target aarch64-linux-android --features "aura-llama-sys/stub"
+        run: cargo build --release -p aura-daemon -p aura-neocortex --target aarch64-linux-android --features stub
 
       # ----------------------------------------------------------
       # 9. Strip binary (reduces size significantly for on-device use)

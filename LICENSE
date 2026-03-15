@@ -1,0 +1,63 @@
+Copyright (c) 2026 Aditya Pagare. All Rights Reserved.
+
+PROPRIETARY SOFTWARE LICENSE
+
+This software and associated documentation files (the "Software") are the
+exclusive property of Aditya Pagare ("Owner"). All rights are reserved.
+
+PERMITTED USE
+-------------
+You are granted a limited, non-exclusive, non-transferable, revocable license
+to use this Software solely for personal, non-commercial purposes on devices
+you personally own and control.
+
+RESTRICTIONS
+------------
+You may NOT, without prior explicit written permission from the Owner:
+
+1. Copy, reproduce, or distribute the Software or any portion thereof
+2. Modify, adapt, translate, or create derivative works based on the Software
+3. Reverse engineer, decompile, disassemble, or attempt to derive the source
+   code of the Software (except as permitted by applicable law)
+4. Sell, sublicense, rent, lease, or otherwise commercially exploit the Software
+5. Remove or alter any proprietary notices, labels, or marks on the Software
+6. Use the Software to provide services to third parties
+7. Deploy the Software in any commercial product or service
+8. Publish benchmarks or performance data without written consent
+
+THIRD-PARTY COMPONENTS
+-----------------------
+This Software incorporates the following open-source components, each governed
+by their respective licenses:
+
+- llama.cpp (MIT License) — https://github.com/ggerganov/llama.cpp
+- Rust standard library and crates.io dependencies — see Cargo.lock
+
+The inclusion of open-source components does not grant any rights to the
+proprietary portions of this Software.
+
+NO WARRANTY
+-----------
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+OWNER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+TERMINATION
+-----------
+This license is effective until terminated. Your rights under this license
+will terminate automatically without notice if you fail to comply with any
+term of this license. Upon termination, you must destroy all copies of the
+Software in your possession.
+
+GOVERNING LAW
+-------------
+This license shall be governed by and construed in accordance with the laws
+of India, without regard to conflict of law provisions.
+
+CONTACT
+-------
+For licensing inquiries, commercial use requests, or to report violations:
+GitHub: https://github.com/AdityaPagare619

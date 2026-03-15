@@ -1,0 +1,61 @@
+# =============================================================================
+# AURA v4 — Clippy Configuration
+# =============================================================================
+# Applied via: cargo clippy --workspace -- -D warnings
+# Also referenced by CI (ci.yml) clippy job.
+#
+# Philosophy:
+#   - Warnings-as-errors in CI, advisory locally
+#   - Cognitive complexity limits enforce readability
+#   - Disallowed types block accidental use of cloud / non-private libraries
+
+# Maximum cyclomatic complexity per function.
+# Functions above this limit must be refactored.
+cognitive-complexity-threshold = 30
+
+# Maximum number of lines in a single function.
+# Encourages small, composable units.
+too-many-lines-threshold = 120
+
+# Maximum number of function arguments.
+# Beyond this, use a config struct instead.
+too-many-arguments-threshold = 8
+
+# Minimum number of variants required before recommending a bitflag.
+# Keep at default.
+# enum-variant-name-threshold = 3
+
+# Enforce that all public items in library crates have documentation.
+# Set to false here; we enforce it selectively via #![warn(missing_docs)]
+# in each crate's lib.rs.
+missing-docs-in-crate-items = false
+
+# Disallow types that are either cloud-coupled or introduce non-private behaviour.
+# Any use of these in production code will fail the clippy lint.
+#
+# Format: { path = "fully::qualified::TypePath", reason = "why it's banned" }
+disallowed-types = [
+    # reqwest is banned: AURA is fully offline. All network I/O is Telegram Bot API
+    # via a single, audited call-site. reqwest opens up accidental cloud calls.
+    { path = "reqwest::Client",        reason = "AURA is anti-cloud; use allowed_http module only" },
+    { path = "reqwest::blocking::Client", reason = "AURA is anti-cloud; use allowed_http module only" },
+]
+
+# Disallow method calls that have safer alternatives.
+disallowed-methods = [
+    # unwrap() is banned in non-test code. Use expect() with a descriptive message
+    # or proper error propagation.
+    # Note: Clippy's `unwrap_used` lint handles this; this config is belt-and-suspenders.
+]
+
+# Allow the following lints that are too noisy for this codebase.
+# These are set here rather than in lib.rs to keep source files clean.
+# Individual allow annotations in source code are still acceptable.
+#
+# (clippy.toml cannot suppress lints directly — that is done via RUSTFLAGS or
+# #[allow(...)] annotations. This section is documentation only.)
+#
+# Permitted patterns:
+#   - #[allow(clippy::module_name_repetitions)] — common in Rust crate naming
+#   - #[allow(clippy::must_use_candidate)]      — not all builders need #[must_use]
+#   - #[allow(clippy::missing_errors_doc)]      — internal error types

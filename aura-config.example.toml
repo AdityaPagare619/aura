@@ -1,0 +1,549 @@
+# =============================================================================
+# AURA v4 — Example Configuration File
+# =============================================================================
+#
+# Copy this file to ~/.config/aura/config.toml and edit to taste.
+# The installer generates a minimal config automatically; this file shows
+# EVERY available option with explanations and safe defaults.
+#
+# Load order (each layer overrides the previous):
+#   1. Compiled-in Rust defaults (Default::default())
+#   2. ~/.config/aura/config.toml  ← this file
+#   3. AURA_<SECTION>_<FIELD> environment variables
+#
+# All values shown are the compiled-in defaults unless marked [REQUIRED].
+# Fields you omit are filled with the Rust Default impl — safe to omit anything
+# you don't need to change.
+#
+# Validation runs at startup. Unknown keys cause a warning; type mismatches
+# cause startup failure with a descriptive error.
+#
+# =============================================================================
+
+# =============================================================================
+#  § 1. Daemon Process
+# =============================================================================
+
+[daemon]
+
+# How often the daemon writes a state checkpoint to disk (seconds).
+# Lower = less data loss on crash; higher = less I/O.
+# Range: 30 – 3600
+checkpoint_interval_s = 300
+
+# RSS memory warning threshold (MB).
+# Above this level the daemon emits a load-shedding advisory log.
+# Must be < rss_ceiling_mb.
+rss_warning_mb = 28
+
+# RSS memory hard ceiling (MB).
+# Above this level the daemon actively sheds in-flight goals.
+# Keep this below your device's available RAM minus model memory (~2 GB).
+rss_ceiling_mb = 30
+
+# =============================================================================
+#  § 2. Amygdala — Event Scoring and InstantWake Gating
+# =============================================================================
+
+[amygdala]
+
+# Score threshold in [0.0, 1.0] above which an incoming event is classified
+# as high-priority and wakes the inference pipeline immediately.
+# Lower = more sensitive (more CPU); higher = fewer wakes (more misses).
+instant_threshold = 0.65
+
+# Scoring weights — MUST sum to 1.0 (±0.01 tolerance enforced at startup).
+weight_lex  = 0.40   # Lexical keyword match contribution
+weight_src  = 0.25   # Source-type contribution (Telegram vs. sensor vs. timer)
+weight_time = 0.20   # Temporal relevance (recency of related events)
+weight_anom = 0.15   # Anomaly score (deviation from learned baseline)
+
+# Notification storm protection.
+# storm_dedup_size: number of recent event hashes to remember for dedup.
+storm_dedup_size    = 50
+
+# storm_rate_limit_ms: minimum gap between two events from the same source (ms).
+# Prevents a single spammy app from consuming the inference budget.
+storm_rate_limit_ms = 30000   # 30 seconds
+
+# Cold-start learning period.
+# During cold start, gating thresholds are relaxed to gather baseline data.
+cold_start_events = 200   # Number of events before cold start ends
+cold_start_hours  = 72    # Maximum duration of cold start (hours)
+
+# =============================================================================
+#  § 3. Neocortex — LLM Inference Process
+# =============================================================================
+
+[neocortex]
+
+# Default context window size in tokens.
+# Larger = more context per inference call = more RAM.
+# Qwen3-8B with Q4_K_M: 4096 is safe on 6 GB devices.
+default_n_ctx = 4096
+
+# CPU threads for inference.
+# Recommended: half your physical core count.
+# On Snapdragon 8-core: set to 4.
+n_threads = 4
+
+# Maximum memory the model loader may use (MB).
+# Must be enough to hold the quantised weights (~5 GB for 8B Q4_K_M).
+max_memory_mb = 2048
+
+# Per-inference timeout (ms). If the LLM does not return within this time,
+# the call is cancelled and the error is propagated upstream.
+# For 8B Q4_K_M on CPU, 60 seconds is conservative.
+inference_timeout_ms = 60000
+
+# Directory that contains the .gguf model file(s).
+# The installer places the model at: ~/.local/share/aura/models/
+# [REQUIRED] — update this path to match your device.
+model_dir = "/data/local/tmp/aura/models"
+
+# =============================================================================
+#  § 4. Execution Engine
+# =============================================================================
+
+[execution]
+
+# Maximum number of execution steps per safety mode.
+# normal: standard interactive use
+# safety: after a policy-gate warning
+# power:  explicitly granted by the user for a long-running task
+max_steps_normal = 200
+max_steps_safety = 50
+max_steps_power  = 500
+
+# Actions-per-minute rate limit.
+# Prevents runaway loops from firing too many Android intents.
+rate_limit_actions_per_min = 60
+
+# Human-like pacing delays between action steps (ms).
+# Prevents apps from detecting automation via inhuman speed.
+delay_min_ms = 150
+delay_max_ms = 500
+
+# =============================================================================
+#  § 5. Power Management
+# =============================================================================
+
+[power]
+
+# Daily token budget for LLM inference.
+# AURA tracks cumulative token usage and refuses inference above this limit.
+# 50,000 tokens ≈ ~100 average conversational exchanges.
+daily_token_budget = 50000
+
+# Battery percentage thresholds for power-tier transitions.
+# Must satisfy: emergency < critical < low_power < conservative < 100.
+conservative_threshold = 50   # Below this → Conserve tier
+low_power_threshold    = 30   # Below this → Critical tier
+critical_threshold     = 15   # Below this → Emergency tier
+emergency_threshold    = 5    # Below this → Inference suspended
+
+# =============================================================================
+#  § 6. Identity and Personality
+# =============================================================================
+
+[identity]
+
+# Minimum time between mood state updates (ms).
+# Prevents rapid mood oscillation from back-to-back events.
+mood_cooldown_ms = 60000   # 1 minute
+
+# Maximum shift in any VAD dimension per update, clamped to [-delta, +delta].
+# Keeps personality changes gradual and believable.
+max_mood_delta = 0.2
+
+# Trust hysteresis gap for relationship stage transitions.
+# A user must exceed the stage threshold BY this margin to advance,
+# and fall below BY this margin to retreat. Prevents oscillation.
+trust_hysteresis = 0.05
+
+# ─── OCEAN Personality Baseline ─────────────────────────────────────────────
+# These are AURA's starting personality traits, clamped to [0.1, 0.9].
+# They evolve gradually via reinforcement learning.
+# Do not set to extremes (0.0 or 1.0) — this creates pathological behaviour.
+
+[identity.ocean]
+openness          = 0.85   # Curiosity, creativity, breadth
+conscientiousness = 0.75   # Reliability, organisation, thoroughness
+extraversion      = 0.50   # Neither introverted nor extroverted by default
+agreeableness     = 0.70   # Cooperativeness, empathy
+neuroticism       = 0.25   # Emotional stability (lower = more stable)
+
+# ─── Mood Neutral Baseline (Valence-Arousal-Dominance) ──────────────────────
+# These are the resting values AURA drifts back to when no stimuli are present.
+# Valence: -1.0 (negative) to +1.0 (positive)
+# Arousal: -1.0 (calm/sleepy) to +1.0 (excited/alert)
+# Dominance: 0.0 (submissive) to 1.0 (dominant/assertive)
+
+[identity.mood_neutral]
+valence   = 0.0
+arousal   = 0.0
+dominance = 0.5
+
+# ─── Relationship Stage Thresholds ──────────────────────────────────────────
+# Trust score ranges [0.0, 1.0] for each relationship stage.
+# Stage determines what capabilities AURA will use proactively.
+
+[identity.relationship_thresholds]
+stranger_max     = 0.15   # Trust 0.00 – 0.15: Stranger
+acquaintance_max = 0.35   # Trust 0.15 – 0.35: Acquaintance
+friend_max       = 0.60   # Trust 0.35 – 0.60: Friend
+close_friend_max = 0.85   # Trust 0.60 – 0.85: Close Friend
+                           # Trust > 0.85:       Soulmate
+
+# =============================================================================
+#  § 7. SQLite Storage
+# =============================================================================
+
+[sqlite]
+
+# Path to the SQLite database file.
+# [REQUIRED] — update to match your Android app's data directory.
+db_path = "/data/data/com.aura/databases/aura.db"
+
+# WAL mode journal size limit (bytes).
+# Controls how large the WAL file can grow before a checkpoint is forced.
+# Default: 4 MB. Increase on high-write workloads.
+wal_size_limit = 4194304   # 4 MB
+
+# Maximum number of episodic memories before consolidation runs.
+# Consolidation promotes the most-important episodes to semantic memory.
+max_episodes = 10000
+
+# Maximum number of semantic entries.
+# Oldest least-relevant entries are pruned when this limit is reached.
+max_semantic_entries = 5000
+
+# =============================================================================
+#  § 8. Thermal Management
+# =============================================================================
+
+[thermal]
+
+# Temperature thresholds for thermal state transitions (°C).
+# AURA reads from Android thermal HAL via a native call.
+warm_c     = 40.0   # Normal → Warm: reduces background scanning frequency
+hot_c      = 45.0   # Warm → Hot: pauses inference until cooled
+critical_c = 50.0   # Hot → Critical: writes emergency checkpoint, suspends all
+
+# Hysteresis band (°C): recovery requires temperature to drop this far
+# below the threshold before the previous state is restored.
+hysteresis_c = 2.0
+
+# Minimum dwell time before allowing another transition (seconds).
+min_transition_interval_s = 10
+
+# =============================================================================
+#  § 9. Retry Policy (Exponential Backoff)
+# =============================================================================
+
+[retry]
+
+# Maximum retry attempts (not counting the initial attempt).
+max_retries = 3
+
+# Delay before the first retry (ms).
+base_delay_ms = 200
+
+# Multiplicative factor per retry.
+# Delay sequence: 200ms → 400ms → 800ms (with jitter).
+backoff_factor = 2
+
+# Maximum delay cap (ms). Prevents runaway waits.
+max_delay_ms = 10000   # 10 seconds
+
+# Jitter range (ms). Actual jitter is uniform random in [-jitter_ms, +jitter_ms].
+# Prevents thundering-herd on concurrent retries.
+jitter_ms = 50
+
+# =============================================================================
+#  § 10. Contextor — Memory Enrichment
+# =============================================================================
+
+[contextor]
+
+# Whether to query episodic memory when building context packages.
+enable_episodic = true
+
+# Whether to query semantic memory when building context packages.
+enable_semantic = true
+
+# Override token budget for all context packages (null = auto-scale).
+# Uncomment to force a fixed budget regardless of event importance:
+# token_budget_override = 500
+
+# Token budgets by event importance tier.
+token_budget_low       = 200
+token_budget_medium    = 500
+token_budget_high      = 1000
+token_budget_emergency = 2000
+
+# Max memory results returned per query, by importance tier.
+max_results_low       = 2
+max_results_medium    = 4
+max_results_high      = 6
+max_results_emergency = 10
+
+# Minimum relevance score for memory retrieval (range 0.0–1.0).
+# Items below this threshold are excluded regardless of tier budget.
+min_relevance = 0.15
+
+# Maximum number of recent conversation turns to include in context.
+max_conversation_turns = 10
+
+# Recall scoring weights — MUST sum to 1.0.
+weight_similarity  = 0.40   # Embedding cosine similarity
+weight_recency     = 0.20   # How recent the memory is
+weight_importance  = 0.20   # Stored importance score
+weight_activation  = 0.20   # Hebbian activation score
+
+# Time window for recency normalisation (ms).
+# Memories older than this are scored at minimum recency.
+recency_window_ms = 3600000   # 1 hour
+
+# Characters-per-token estimate for budget calculations.
+# English text: ~4 chars/token is a reasonable average.
+chars_per_token = 4
+
+# =============================================================================
+#  § 11. Ethics and Policy Gate
+# =============================================================================
+
+[ethics]
+
+# Action patterns that are ALWAYS blocked regardless of user trust level.
+# These supplement the 15 hardcoded ethics rules in the binary.
+# All patterns are case-insensitive substring matches.
+# WARNING: Removing or weakening these patterns reduces your safety guarantees.
+blocked_patterns = [
+    "delete all",
+    "factory reset",
+    "format storage",
+    "uninstall system",
+    "disable security",
+    "root device",
+    "bypass lock",
+]
+
+# Action keywords that trigger audit logging.
+# Any action containing these words is written to the audit log
+# regardless of whether it is allowed or blocked.
+audit_keywords = [
+    "password",
+    "credential",
+    "payment",
+    "bank",
+]
+
+# Package names that AURA is prohibited from interacting with.
+# Add banking apps, security apps, or other sensitive packages here.
+blocked_packages = []
+# Example:
+# blocked_packages = ["com.google.android.apps.authenticator2", "com.chase.sig.android"]
+
+# =============================================================================
+#  § 12. Anti-Sycophancy Guard
+# =============================================================================
+
+[anti_sycophancy]
+
+# Number of recent response patterns to hold in the analysis window.
+ring_size = 20
+
+# Composite sycophancy score above which a response is BLOCKED and regenerated.
+# Range 0.0–1.0. Lower = stricter. Default 0.40 rejects obviously sycophantic responses.
+block_threshold = 0.40
+
+# Score above which a warning is emitted but the response is still allowed.
+warn_threshold = 0.25
+
+# Maximum regeneration attempts before force-allowing the response.
+# Prevents infinite loops when the LLM repeatedly produces sycophantic outputs.
+max_regenerations = 3
+
+# =============================================================================
+#  § 13. Power Tier Policies
+# =============================================================================
+# Each tier defines operational limits when the battery is in that range.
+# model_tier values: "Brainstem1_5B" | "Standard4B" | "Full8B"
+
+[power_tiers.charging]
+max_inference_calls_per_hour = 120
+model_tier                   = "Full8B"
+background_scan_interval_s   = 30
+proactive_enabled            = true
+max_concurrent_goals         = 8
+
+[power_tiers.normal]
+max_inference_calls_per_hour = 60
+model_tier                   = "Standard4B"
+background_scan_interval_s   = 120
+proactive_enabled            = true
+max_concurrent_goals         = 5
+
+[power_tiers.conserve]
+max_inference_calls_per_hour = 20
+model_tier                   = "Brainstem1_5B"
+background_scan_interval_s   = 600
+proactive_enabled            = false
+max_concurrent_goals         = 2
+
+[power_tiers.critical]
+max_inference_calls_per_hour = 5
+model_tier                   = "Brainstem1_5B"
+background_scan_interval_s   = 1800
+proactive_enabled            = false
+max_concurrent_goals         = 1
+
+[power_tiers.emergency]
+max_inference_calls_per_hour = 0
+model_tier                   = "Brainstem1_5B"
+background_scan_interval_s   = 3600
+proactive_enabled            = false
+max_concurrent_goals         = 0
+
+# =============================================================================
+#  § 14. Power Tier Hysteresis Boundaries
+# =============================================================================
+# Asymmetric thresholds prevent oscillation near tier boundaries.
+# degrade_at: battery% at or below which we drop to the worse tier.
+# recover_at: battery% above which we return to the better tier.
+# The gap (recover_at - degrade_at) is the hysteresis band.
+
+[power_hysteresis]
+min_transition_interval_s = 30   # Minimum dwell time between tier changes (s)
+hysteresis_pct            = 3    # Default hysteresis band width
+
+[[power_hysteresis.boundaries]]
+transition = "Charging <-> Normal"
+degrade_at = 80
+recover_at = 83
+
+[[power_hysteresis.boundaries]]
+transition = "Normal <-> Conserve"
+degrade_at = 40
+recover_at = 43
+
+[[power_hysteresis.boundaries]]
+transition = "Conserve <-> Critical"
+degrade_at = 20
+recover_at = 23
+
+[[power_hysteresis.boundaries]]
+transition = "Critical <-> Emergency"
+degrade_at = 10
+recover_at = 13
+
+# =============================================================================
+#  § 15. LLM Parameters (llama.cpp)
+# =============================================================================
+
+[llama.model]
+
+# GPU layers to offload (0 = CPU-only).
+# Android devices do not support GPU offload via llama.cpp yet.
+n_gpu_layers = 0
+
+# Memory-mapped model loading. Strongly recommended — reduces load time
+# and RAM usage by letting the OS page model weights as needed.
+use_mmap = true
+
+# Lock model pages in RAM. Requires elevated privileges.
+# Disable unless you have verified that mlock works on your device.
+use_mlock = false
+
+[llama.context]
+
+# Context window size (tokens). Must be ≤ neocortex.default_n_ctx.
+n_ctx = 2048
+
+# Batch size for prompt processing (tokens processed in parallel).
+# Larger = faster prompt ingestion, higher peak RAM.
+n_batch = 512
+
+# CPU threads for llama.cpp. Should match neocortex.n_threads.
+n_threads = 4
+
+# Random seed. 0xA0BA = AURA's signature seed (decimal: 41146).
+# Change for reproducibility testing; keep default for production.
+seed = 41146
+
+[llama.sampling]
+
+# Default sampling parameters for token generation.
+# These are overridden per inference mode (see § 16).
+temperature    = 0.6   # 0.0 = deterministic, 1.0+ = very random
+top_p          = 0.9   # Nucleus sampling: only consider top-p mass tokens
+top_k          = 40    # Only consider top-k tokens at each step
+repeat_penalty = 1.1   # Penalise recently generated tokens (>1.0 = more penalty)
+max_tokens     = 512   # Hard cap on output length
+
+# =============================================================================
+#  § 16. Inference Mode Overrides
+# =============================================================================
+# Each mode overrides the default llama.sampling parameters above.
+# stop_sequences: generation stops at the first match (exact string).
+
+[inference_modes.planner]
+# Used when generating multi-step plans. Low temperature for precision.
+temperature    = 0.1
+top_p          = 0.9
+top_k          = 40
+repeat_penalty = 1.1
+max_tokens     = 2048
+context_budget = 1200
+stop_sequences = ["</plan>", "[END]"]
+
+[inference_modes.strategist]
+# Used for strategic reasoning about user goals. Moderate creativity.
+temperature    = 0.4
+top_p          = 0.95
+top_k          = 30
+repeat_penalty = 1.05
+max_tokens     = 4096
+context_budget = 800
+stop_sequences = ["</strategy>", "[END]"]
+
+[inference_modes.composer]
+# Used for generating DSL action sequences. Low temperature, exact output.
+temperature    = 0.2
+top_p          = 0.9
+top_k          = 50
+repeat_penalty = 1.15
+max_tokens     = 1024
+context_budget = 400
+stop_sequences = ["</dsl>", "[END]"]
+
+[inference_modes.conversational]
+# Used for natural-language replies. Higher temperature for variety.
+temperature    = 0.7
+top_p          = 0.95
+top_k          = 40
+repeat_penalty = 1.1
+max_tokens     = 512
+context_budget = 1500
+stop_sequences = ["</reply>", "[END]"]
+
+# =============================================================================
+#  § 17. Checkpoint and Context Package Size Limits
+# =============================================================================
+
+[checkpoint]
+
+# Checkpoint format version. Must match CHECKPOINT_VERSION in the binary.
+# Do not change this unless you know what you're doing.
+version = 1
+
+# Maximum checkpoint file size (bytes).
+# If a checkpoint exceeds this, it is truncated with an error log.
+max_bytes = 65536   # 64 KB
+
+[context_package]
+
+# Maximum serialised context package size (bytes).
+# Packages exceeding this limit are truncated before sending to the LLM.
+max_size = 65536   # 64 KB

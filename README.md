@@ -22,13 +22,23 @@ Powered by [Qwen-3](https://huggingface.co/Qwen/Qwen3-8B) via [llama.cpp](https:
 
 ## Install (Android via Termux)
 
+**One command — paste in Termux:**
+
 ```bash
-pkg install git && git clone https://github.com/AdityaPagare619/aura.git && bash aura/install.sh
+curl -fsSL https://raw.githubusercontent.com/AdityaPagare619/aura/main/install.sh | bash
 ```
 
-That's it. The installer handles everything: Rust toolchain, Android NDK, model download (~5.2GB), PIN setup, foreground service.
+Or if you prefer to inspect the script first:
 
-**Requirements:** Android 10+, ARM64, ~8GB free storage, 4GB+ RAM
+```bash
+curl -fsSL https://raw.githubusercontent.com/AdityaPagare619/aura/main/install.sh -o install.sh
+less install.sh          # read it
+bash install.sh          # run it
+```
+
+The installer handles everything: Rust toolchain, Android NDK, model download (~5.2 GB), daemon binary, config generation, PIN setup, and autostart via termux-services. An install log is saved automatically for sharing if anything goes wrong.
+
+**Requirements:** Android 10+, ARM64, ~8 GB free storage, 4 GB+ RAM
 
 ---
 
@@ -68,11 +78,11 @@ That's it. The installer handles everything: Rust toolchain, Android NDK, model 
 ├─────────────────────────────────────────────────────────────┤
 │  Memory (4-Tier)                                            │
 │  Working (RAM) → Episodic (SQLite+HNSW) →                   │
-│  Semantic (FTS5+HNSW+RRF) → Archive (ZSTD)                 │
+│  Semantic (FTS5+HNSW+RRF) → Archive (LZ4/ZSTD)             │
 ├─────────────────────────────────────────────────────────────┤
 │  Identity & Ethics                                          │
 │  OCEAN+VAD personality  │  15 hardcoded ethics rules        │
-│  Anti-sycophancy (0.4)  │  Trust tiers (Stranger→Intimate)  │
+│  Anti-sycophancy (0.4)  │  Trust tiers (Stranger→Soulmate)  │
 ├─────────────────────────────────────────────────────────────┤
 │  ARC (Adaptive Reasoning & Context)                         │
 │  10 life domains  │  8 context modes  │  Initiative budget  │

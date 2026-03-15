@@ -1,0 +1,104 @@
+# cargo-deny configuration for AURA v4
+# Checks: license compatibility, security advisories, duplicate crates, banned crates
+# Run: cargo deny check
+# CI: cargo deny check (in ci.yml — can be added as Job 7)
+
+[graph]
+# Target filter — we only care about the Android target in production,
+# but check all targets for CVEs to be safe.
+targets = [
+    { triple = "aarch64-linux-android" },
+    { triple = "x86_64-unknown-linux-gnu" },
+]
+all-features = false
+no-default-features = false
+
+# ── Advisories (CVE / security advisories) ────────────────────────────────────
+[advisories]
+# Path to the advisory database (fetched automatically by cargo-deny)
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# Fail if a crate has an unmaintained advisory
+unmaintained = "warn"
+
+# Fail if a crate has an active CVE
+vulnerability = "deny"
+
+# Ignore specific advisories (use sparingly, document why)
+ignore = [
+    # Example: { id = "RUSTSEC-2020-0001", reason = "Not exploitable in our usage" }
+]
+
+# ── Licenses ──────────────────────────────────────────────────────────────────
+[licenses]
+# Unlicensed crates are not allowed
+unlicensed = "deny"
+
+# Copyleft licenses require careful review — warn, don't deny (we're proprietary)
+copyleft = "warn"
+
+# These are the licenses we explicitly allow in dependencies
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "0BSD",
+    "Zlib",
+    "OpenSSL",
+]
+
+# Exceptions for specific crates with non-standard licenses
+exceptions = [
+    # ring uses a custom OpenSSL-derived license
+    { allow = ["OpenSSL", "ISC", "MIT"], name = "ring" },
+]
+
+# ── Bans ──────────────────────────────────────────────────────────────────────
+[bans]
+# Warn on duplicate versions of the same crate (can bloat binary)
+multiple-versions = "warn"
+
+# Deny crates we explicitly don't want
+deny = [
+    # No telemetry / analytics crates
+    { name = "sentry" },
+    { name = "sentry-core" },
+    { name = "amplitude" },
+    { name = "segment" },
+    # No cloud SDK crates
+    { name = "aws-sdk-s3" },
+    { name = "google-cloud-storage" },
+    # No deprecated crypto
+    { name = "md-5", reason = "Use sha2 instead" },
+    { name = "sha-1", reason = "Use sha2 instead" },
+]
+
+# Skip duplicate version checks for these well-known crates
+# (multiple versions often exist due to dependency graph constraints)
+skip = [
+    { name = "bitflags" },        # v1 and v2 commonly coexist
+    { name = "base64" },          # multiple versions in wild
+    { name = "rustls" },          # v0.21 and v0.22 transition period
+    { name = "tokio-util" },      # minor version drift common
+]
+
+# Specific version constraints
+skip-tree = []
+
+# ── Sources ───────────────────────────────────────────────────────────────────
+[sources]
+# Only allow crates from crates.io and our own git repos
+unknown-registry = "deny"
+unknown-git = "deny"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Allow our internal git dependencies (none currently, but future-proof)
+allow-git = []

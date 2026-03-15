@@ -1,0 +1,13 @@
+# GitHub Sponsors / Funding configuration for AURA
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# AURA is a solo project. If you find it useful, consider supporting development.
+
+# Add funding platforms below when ready.
+# Supported keys: github, patreon, open_collective, ko_fi, tidelift,
+#                 community_bridge, liberapay, issuehunt, otechie,
+#                 lfx_crowdfunding, polar, buy_me_a_coffee, thanks_dev, custom
+
+# github: [AdityaPagare619]   # Uncomment when GitHub Sponsors is set up
+# ko_fi: aura_dev             # Uncomment when Ko-fi is set up
+# custom: []                  # Add custom donation links here

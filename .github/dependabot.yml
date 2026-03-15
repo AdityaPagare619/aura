@@ -1,0 +1,55 @@
+# Dependabot configuration for AURA v4
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+
+updates:
+  # ─── Rust / Cargo dependencies ────────────────────────────────────────────
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    # Group all Rust dependency updates into a single PR to reduce noise.
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+    # Only open PRs for security updates automatically.
+    # Regular updates are batched weekly.
+    open-pull-requests-limit: 5
+    # Labels applied to Dependabot PRs for triage.
+    labels:
+      - "dependencies"
+      - "rust"
+    # Commit message prefix for conventional commits.
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # Ignore patch updates for pinned crates — we manage those manually.
+    ignore:
+      # bincode is pinned to =2.0.0-rc.3 intentionally. Do not auto-bump.
+      - dependency-name: "bincode"
+        update-types: ["version-update:semver-patch", "version-update:semver-minor", "version-update:semver-major"]
+
+  # ─── GitHub Actions ────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"

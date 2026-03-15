@@ -69,7 +69,11 @@ AURA_DB_DIR="$AURA_DATA_DIR/db"
 AURA_CONFIG_FILE="$AURA_CONFIG_DIR/config.toml"
 AURA_SOCK="$AURA_DATA_DIR/daemon.sock"
 AURA_BIN="$TERMUX_PREFIX/bin/aura-daemon"
+AURA_NEOCORTEX_BIN="$TERMUX_PREFIX/bin/aura-neocortex"
 AURA_SV_DIR="$TERMUX_PREFIX/var/service/aura-daemon"
+
+# Install log — written alongside the installer for easy sharing on failure
+INSTALL_LOG="${TMPDIR:-/tmp}/aura-install-$(date +%Y%m%d-%H%M%S).log"
 
 MIN_FREE_GB=8
 MIN_RAM_GB=4
@@ -130,8 +134,17 @@ warn() {
 die() {
     echo "" >&2
     echo -e "${RED}${BOLD}  ✗ ERROR:${RESET} $1" >&2
-    if [ -n "${2:-}" ]; then
-        echo -e "${DIM}    Fix: $2${RESET}" >&2
+    # Print all remaining args as fix hints (supports multi-line context)
+    local i=2
+    while [ $i -le $# ]; do
+        eval "local _hint=\${$i}"
+        echo -e "${DIM}    Fix: ${_hint}${RESET}" >&2
+        i=$(( i + 1 ))
+    done
+    if [ -n "${INSTALL_LOG:-}" ] && [ -f "${INSTALL_LOG}" ]; then
+        echo "" >&2
+        echo -e "${DIM}  Full install log: ${INSTALL_LOG}${RESET}" >&2
+        echo -e "${DIM}  Share this file when reporting issues.${RESET}" >&2
     fi
     echo "" >&2
     exit 1
@@ -395,11 +408,35 @@ phase_rust() {
     # Check if rustup already installed
     if command -v rustup &>/dev/null; then
         log_step "rustup already installed: $(rustup --version 2>/dev/null || echo 'unknown')"
-        run rustup update stable
+        run rustup update nightly-2026-03-01
     else
         log_info "Installing rustup..."
-        run curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | run sh -s -- -y --default-toolchain stable --profile minimal
+        # HIGH-SEC-6: Mitigated — never pipe curl directly to interpreter.
+        # CI-MED-4 / SEC-HIGH-6: Download rustup-init to a temp file and verify
+        # integrity before execution. Never pipe curl directly to sh.
+        local rustup_tmp
+        rustup_tmp="$(mktemp)"
+        run curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_tmp"
+        # CI-MED-4: Verify the downloaded script is the genuine rustup installer.
+        # rustup.rs serves a dynamic shell script (content changes per release),
+        # so static SHA256 pinning is not feasible. We rely on:
+        #   1. TLS 1.2+ certificate validation (--proto '=https' --tlsv1.2)
+        #   2. Non-empty file check
+        #   3. Content sanity: script must self-identify as rustup installer
+        if [ ! -s "$rustup_tmp" ]; then
+            rm -f "$rustup_tmp"
+            die "rustup download failed (empty file)." \
+                "Check network and retry."
+        fi
+        if ! grep -q 'RUSTUP_UPDATE_ROOT\|rustup-init\|https://static.rust-lang.org' "$rustup_tmp"; then
+            rm -f "$rustup_tmp"
+            die "rustup installer failed integrity check — content does not match expected rustup script." \
+                "Possible MITM or CDN corruption. Retry or install manually from https://rustup.rs"
+        fi
+        log_step "rustup installer integrity check passed (TLS + content sanity)"
+        # Execute from verified file instead of piping (never curl|sh)
+        run sh "$rustup_tmp" -y --default-toolchain nightly-2026-03-01 --profile minimal
+        rm -f "$rustup_tmp"
 
         # Source rustup in current session
         # shellcheck source=/dev/null
@@ -459,6 +496,11 @@ phase_source() {
         run git clone --depth 1 --branch "$target_ref" "$AURA_REPO" "$AURA_HOME"
         log_step "Repository cloned"
     fi
+
+    # Initialize and update submodules (required for llama.cpp)
+    log_info "Initializing git submodules..."
+    run git -C "$AURA_HOME" submodule update --init --recursive
+    log_step "Submodules initialized"
 
     log_step "Source: $target_ref at $AURA_HOME"
 }
@@ -561,14 +603,17 @@ phase_model() {
     # Verify checksum after download
     log_info "Verifying checksum..."
     if ! verify_checksum "$model_path" "$model_sha256"; then
-        warn "Checksum mismatch after download."
+        # SECURITY [HIGH-SEC-2]: Checksum failure is ALWAYS fatal.
+        # Supply-chain attacks rely on users clicking past warnings.
+        # No user override — fail hard, delete the compromised file.
+        local actual_sha
+        actual_sha=$(sha256sum "$model_path" | cut -d' ' -f1)
+        warn "FATAL: Checksum mismatch — possible supply-chain attack!"
         warn "Expected: $model_sha256"
-        warn "Actual:   $(sha256sum "$model_path" | cut -d' ' -f1)"
-        if ! confirm "Checksum mismatch. Continue anyway? (risky)"; then
-            rm -f "$model_path"
-            die "Aborted due to checksum mismatch." \
-                "Delete partial file and re-run: rm '$model_path'"
-        fi
+        warn "Actual:   $actual_sha"
+        rm -f "$model_path"
+        die "Checksum verification failed. Corrupted or tampered download." \
+            "Delete partial file and re-run, or verify the expected hash."
     else
         log_step "Model downloaded and verified: $model_name"
     fi
@@ -578,11 +623,21 @@ verify_checksum() {
     local file="$1"
     local expected_sha256="$2"
 
-    # TODO: Set real checksums before release
-    # Skip verification if checksum is unset or a placeholder
+    # Placeholder checksums are ONLY acceptable on the nightly channel.
+    # Stable releases MUST have real checksums — refuse to install otherwise.
     if [[ "${expected_sha256}" == "" || "${expected_sha256}" == "PLACEHOLDER" || "${expected_sha256}" == PLACEHOLDER* ]]; then
-        warn "SHA256 verification skipped (checksum not set — set before release)"
-        return 0
+        if [[ "$AURA_VERSION" == *alpha* || "$AURA_VERSION" == *beta* ]]; then
+            warn "SHA256 verification skipped — alpha/beta release has placeholder checksums"
+            warn "Production releases will require verified checksums"
+            return 0
+        elif [ "${OPT_CHANNEL}" = "stable" ]; then
+            die "SHA256 checksum not set for this model (placeholder detected)." \
+                "This is a release packaging error. Do NOT use this installer for production. Report to maintainers."
+        else
+            warn "SHA256 verification skipped — nightly channel allows placeholder checksums"
+            warn "DO NOT use nightly for production deployments"
+            return 0
+        fi
     fi
 
     if ! command -v sha256sum &>/dev/null; then
@@ -609,12 +664,90 @@ phase_build() {
     log_header "Phase 5: Build"
 
     if [ "$OPT_SKIP_BUILD" = "1" ]; then
-        log_info "Skipping build (--skip-build)"
-        if [ ! -f "$AURA_BIN" ]; then
-            die "No pre-built binary found at $AURA_BIN" \
-                "Remove --skip-build or provide binary manually"
+        log_info "Skipping build (--skip-build) — will use pre-built binaries"
+
+        # Check if binaries already exist locally
+        if [ -f "$AURA_BIN" ] && [ -f "$AURA_NEOCORTEX_BIN" ]; then
+            log_step "Using existing binaries: $AURA_BIN, $AURA_NEOCORTEX_BIN"
+            return
         fi
-        log_step "Using existing binary: $AURA_BIN"
+
+        # Download from GitHub Releases
+        log_info "Downloading pre-built binaries from GitHub Releases..."
+
+        # Derive GitHub owner/repo slug from AURA_REPO URL
+        local repo_slug
+        repo_slug=$(echo "$AURA_REPO" | sed 's|https://github.com/||;s|\.git$||')
+
+        local release_tag="$AURA_STABLE_TAG"
+        local base_url="https://github.com/${repo_slug}/releases/download/${release_tag}"
+
+        # Binary names match release.yml artifact naming
+        local daemon_artifact="aura-daemon-${release_tag}-aarch64-linux-android"
+        local neocortex_artifact="aura-neocortex-${release_tag}-aarch64-linux-android"
+
+        for artifact in "$daemon_artifact" "$neocortex_artifact"; do
+            local url="${base_url}/${artifact}"
+            local checksum_url="${url}.sha256"
+            local dest
+            if [[ "$artifact" == aura-daemon-* ]]; then
+                dest="$AURA_BIN"
+            else
+                dest="$AURA_NEOCORTEX_BIN"
+            fi
+
+            log_info "Downloading: $url"
+            local dl_attempt=1
+            local dl_max=3
+            while [ "$dl_attempt" -le "$dl_max" ]; do
+                if curl --fail --location --progress-bar --output "$dest" "$url"; then
+                    break
+                else
+                    local dl_exit=$?
+                    if [ "$dl_attempt" -lt "$dl_max" ]; then
+                        warn "Download attempt $dl_attempt failed (exit $dl_exit). Retrying in 5s..."
+                        sleep 5
+                    else
+                        die "Failed to download $artifact from GitHub Releases after $dl_max attempts." \
+                            "Check: ${url}" \
+                            "Ensure release ${release_tag} exists and contains the binary."
+                    fi
+                fi
+                dl_attempt=$(( dl_attempt + 1 ))
+            done
+
+            # Download and verify checksum
+            local checksum_file
+            checksum_file="$(mktemp)"
+            if curl --fail --silent --location --output "$checksum_file" "$checksum_url"; then
+                local expected_sha
+                expected_sha=$(cut -d' ' -f1 < "$checksum_file")
+                rm -f "$checksum_file"
+
+                if command -v sha256sum &>/dev/null; then
+                    local actual_sha
+                    actual_sha=$(sha256sum "$dest" | cut -d' ' -f1)
+                    if [ "$actual_sha" != "$expected_sha" ]; then
+                        rm -f "$dest"
+                        die "Checksum mismatch for $artifact!" \
+                            "Expected: $expected_sha" \
+                            "Actual:   $actual_sha" \
+                            "Possible corruption or tampering. Re-run installer."
+                    fi
+                    log_step "Checksum verified for $artifact"
+                else
+                    warn "sha256sum not available — skipping binary checksum verification"
+                fi
+            else
+                rm -f "$checksum_file"
+                warn "Could not download checksum file for $artifact — skipping verification"
+            fi
+
+            chmod +x "$dest"
+            log_step "Downloaded: $dest"
+        done
+
+        log_step "Pre-built binaries installed successfully"
         return
     fi
 
@@ -661,17 +794,13 @@ phase_build() {
     log_step "Binaries installed: $TERMUX_PREFIX/bin/aura-daemon"
     log_step "Binaries installed: $TERMUX_PREFIX/bin/aura-neocortex"
 
-    # ── Android JNI library copy ────────────────────────────────────────
-    # Android requires native libraries to have a .so extension.
-    # AuraDaemonBridge loads it via System.loadLibrary("aura_daemon"),
-    # which resolves to libaura_daemon.so in the APK's jniLibs directory.
-    # We copy it here so `./gradlew assembleDebug` can package it without
-    # requiring a separate cross-compilation step.
-    local jnilibs_dir="$AURA_HOME/android/app/src/main/jniLibs/arm64-v8a"
-    log_info "Copying daemon binary as libaura_daemon.so for Android JNI packaging..."
-    run mkdir -p "$jnilibs_dir"
-    run cp "$daemon_bin" "$jnilibs_dir/libaura_daemon.so"
-    log_step "JNI library: $jnilibs_dir/libaura_daemon.so"
+    # ── JNI library note ──────────────────────────────────────────────
+    # REMOVED (GAP-HIGH-008): Previous code copied the CLI daemon binary
+    # as libaura_daemon.so for Android JNI packaging. This was incorrect:
+    # a Termux CLI binary is NOT a JNI-compatible shared library and would
+    # crash System.loadLibrary(). JNI .so files must be cross-compiled with
+    # proper JNI exports via build-android.yml / cargo-ndk, not copied from
+    # the host Termux build. See build-android.yml for the correct pipeline.
 }
 
 # =============================================================================
@@ -743,6 +872,8 @@ auto_lock_seconds = 0
 [trust]
 default_tier = 1
 TOML_EOF
+            chmod 600 "$AURA_CONFIG_FILE"
+            log_step "Config permissions set to 600 (owner read/write only)"
         else
             log_info "[dry-run] Would write config.toml"
         fi
@@ -878,20 +1009,45 @@ phase_firsttime() {
         fi
     done
 
-    # Hash the PIN using sha256 (bcrypt not available in basic Termux)
-    # Real bcrypt would be done by the daemon on first run
+    # Hash the PIN using sha256 (Argon2id not available in basic Termux shell)
+    #
+    # SECURITY [SEC-CRIT-004]: PIN Migration Plan
+    # ─────────────────────────────────────────────
+    # This installer stores the PIN as "sha256:<salt>:<hex>" — a SALTED SHA-256 hash.
+    # This is a TEMPORARY format used ONLY during installation. The daemon's
+    # verify_pin_with_migration() function in vault.rs detects this legacy format
+    # on first authentication and AUTOMATICALLY upgrades to Argon2id (salted,
+    # memory-hard, timing-attack-resistant). The legacy hash is replaced in-place
+    # and never used again after the one-time migration.
+    #
+    # Attack surface during the window between install and first daemon start:
+    # - Offline brute-force against salted SHA-256 (mitigated: random salt eliminates
+    #   rainbow-table attacks; PIN is 6+ digits; attacker needs physical device access)
+    # - The config file is chmod 600 (owner-only read) — see PHASE 7 permissions
+    #
+    # This is an ACCEPTED RISK for the install→first-boot window only.
+    # Generate a random salt for the install-time hash.
+    # The daemon will upgrade to Argon2id on first start regardless.
+    local pin_salt
+    pin_salt=$(head -c 16 /dev/urandom | od -A n -t x1 | tr -d ' \n')
     local pin_hash
-    pin_hash=$(echo -n "$pin1" | sha256sum | cut -d' ' -f1)
+    pin_hash=$(echo -n "${pin_salt}${pin1}" | sha256sum | cut -d' ' -f1)
 
-    # Update config with user name and PIN hash
+    # SECURITY [HIGH-SEC-3]: Sanitize user_name before sed injection.
+    # Without sanitization, a username like: foo/e s/pin_hash.*/pin_hash = "pwned"/
+    # would allow arbitrary config file rewriting via sed injection.
+    local safe_user_name
+    safe_user_name=$(printf '%s' "$user_name" | sed 's/[\/&\\"'"'"'$`!;|<>(){}[\]*?#~^]/\\&/g' | tr -d '\n')
+
+    # Update config with sanitized user name and PIN hash
     if command -v sed &>/dev/null; then
-        sed -i "s/user_name = \"\"/user_name = \"${user_name}\"/" "$AURA_CONFIG_FILE"
-        sed -i "s/pin_hash = \"\"/pin_hash = \"sha256:${pin_hash}\"/" "$AURA_CONFIG_FILE"
+        sed -i "s/user_name = \"\"/user_name = \"${safe_user_name}\"/" "$AURA_CONFIG_FILE"
+        sed -i "s/pin_hash = \"\"/pin_hash = \"sha256:${pin_salt}:${pin_hash}\"/" "$AURA_CONFIG_FILE"
     fi
 
     log_step "Vault PIN set (stored as hash)"
     log_step "User name: $user_name"
-    log_info "Note: AURA daemon will upgrade the PIN to bcrypt on first start"
+    log_info "Note: AURA daemon will upgrade PIN hash to Argon2id on first start"
 }
 
 # =============================================================================
@@ -954,18 +1110,30 @@ print_success_banner() {
     echo -e "    ${CYAN}# Start the daemon manually (if not auto-started):${RESET}"
     echo -e "    aura-daemon --config $AURA_CONFIG_FILE &"
     echo ""
-    echo -e "    ${CYAN}# Check daemon status:${RESET}"
-    echo -e "    sv status aura-daemon"
-    echo ""
+    if command -v sv &>/dev/null; then
+        echo -e "    ${CYAN}# Check daemon status (termux-services):${RESET}"
+        echo -e "    sv status aura-daemon"
+        echo ""
+        echo -e "    ${CYAN}# Stop daemon (termux-services):${RESET}"
+        echo -e "    sv down aura-daemon"
+        echo ""
+    else
+        echo -e "    ${CYAN}# Check daemon status:${RESET}"
+        echo -e "    pgrep -x aura-daemon && echo running || echo not running"
+        echo ""
+        echo -e "    ${CYAN}# Stop daemon:${RESET}"
+        echo -e "    pkill -x aura-daemon"
+        echo ""
+    fi
     echo -e "    ${CYAN}# View logs:${RESET}"
     echo -e "    tail -f $AURA_LOGS_DIR/current"
-    echo ""
-    echo -e "    ${CYAN}# Stop daemon:${RESET}"
-    echo -e "    sv down aura-daemon"
     echo ""
     echo -e "${BOLD}  Config:${RESET}  $AURA_CONFIG_FILE"
     echo -e "${BOLD}  Models:${RESET}  $AURA_MODELS_DIR"
     echo -e "${BOLD}  Logs:${RESET}    $AURA_LOGS_DIR"
+    if [ -n "${INSTALL_LOG:-}" ] && [ -f "${INSTALL_LOG}" ]; then
+        echo -e "${BOLD}  Install log:${RESET} $INSTALL_LOG"
+    fi
     echo ""
     echo -e "${DIM}  Docs: docs/architecture/AURA-V4-INSTALLATION-AND-DEPLOYMENT.md${RESET}"
     echo ""
@@ -981,9 +1149,17 @@ main() {
     parse_args "$@"
     setup_colors
 
+    # Redirect all output to log file AND terminal simultaneously.
+    # This captures every phase, warning, and error for easy sharing on failure.
+    # tee is available in Termux via coreutils (installed in phase_packages).
+    # We open the log before phase_packages so even pre-flight failures are captured.
+    mkdir -p "$(dirname "$INSTALL_LOG")"
+    exec > >(tee -a "$INSTALL_LOG") 2>&1
+
     echo ""
     echo -e "${BOLD}${CYAN}  AURA v4 Installer${RESET} ${DIM}(${AURA_VERSION})${RESET}"
     echo -e "${DIM}  Channel: $OPT_CHANNEL | Model: $OPT_MODEL${RESET}"
+    echo -e "${DIM}  Install log: $INSTALL_LOG${RESET}"
     if [ "$OPT_DRY_RUN" = "1" ]; then
         echo -e "${YELLOW}  DRY RUN — no changes will be made${RESET}"
     fi
@@ -993,6 +1169,9 @@ main() {
     phase_packages
     phase_rust
     phase_source
+    # Phase ordering rationale: model download (Phase 4) runs before build (Phase 5)
+    # because download is a passive network wait while build is CPU-intensive.
+    # This order gives better perceived progress during installation.
     phase_model
     phase_build
     phase_config

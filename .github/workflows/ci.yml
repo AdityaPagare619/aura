@@ -61,7 +61,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libopus-dev
 
       # stub feature skips llama.cpp compilation on Linux CI hosts (no NDK available)
-      - run: cargo check --workspace --features "aura-llama-sys/stub,aura-daemon/voice"
+      - run: cargo check --workspace --features "stub,aura-daemon/voice"
 
   # --------------------------------------------------------
   # Job 2: cargo test (full workspace with stub feature)
@@ -94,7 +94,7 @@ jobs:
 
       # Test ALL crates in workspace, not just aura-daemon.
       # stub feature ensures aura-llama-sys compiles without NDK.
-      - run: cargo test --workspace --features "aura-llama-sys/stub,aura-daemon/voice"
+      - run: cargo test --workspace --features "stub,aura-daemon/voice"
         env:
           RUST_LOG: debug
 
@@ -129,7 +129,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libopus-dev
 
       # stub feature skips llama.cpp compilation on Linux CI hosts (no NDK available)
-      - run: cargo clippy --workspace --features "aura-llama-sys/stub,aura-daemon/voice" -- -D warnings
+      - run: cargo clippy --workspace --features "stub,aura-daemon/voice" -- -D warnings
 
   # --------------------------------------------------------
   # Job 4: rustfmt — enforce consistent formatting

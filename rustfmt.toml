@@ -32,7 +32,7 @@ match_arm_blocks = true
 match_arm_leading_pipes = "Never"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
-fn_args_layout = "Tall"         # One arg per line if they don't fit
+fn_params_layout = "Tall"         # One arg per line if they don't fit
 fn_call_width = 60
 newline_style = "Unix"          # LF everywhere (matches .gitattributes)
 

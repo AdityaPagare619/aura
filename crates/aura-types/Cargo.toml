@@ -3,6 +3,9 @@ name = "aura-types"
 version.workspace = true
 edition.workspace = true
 
+[features]
+stub = []
+
 [dependencies]
 serde.workspace = true
 bincode.workspace = true

@@ -24,8 +24,8 @@ env:
   NDK_VERSION: r26b
   # Official SHA256 for android-ndk-r26b-linux.zip (source: Google / conan-center-index)
   NDK_SHA256: "ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632"
-  # API level 21 = Android 5.0 minimum — covers all modern devices
-  API_LEVEL: "21"
+  # API level 26 = Android 8.0 minimum — matches minSdk 26 in build.gradle
+  API_LEVEL: "26"
   TARGET: aarch64-linux-android
 
 jobs:
@@ -121,7 +121,7 @@ jobs:
       # 6. System build deps (cmake needed by llama.cpp build.rs)
       # ----------------------------------------------------------
       - name: Install system build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
 
       # ----------------------------------------------------------
       # 7. Verify submodule (fail fast with a clear message)

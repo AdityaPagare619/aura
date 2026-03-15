@@ -35,6 +35,8 @@ C:*
 
 # ---- Dev-only planning artifacts (not part of shipped code) ----
 checkpoints/
+persona*_report.json
+persona-*-report.json
 
 # ---- AURA runtime data ----
 *.db

@@ -7,6 +7,9 @@ edition.workspace = true
 name = "aura-neocortex"
 path = "src/main.rs"
 
+[features]
+stub = ["aura-llama-sys/stub"]
+
 [dependencies]
 aura-types = { path = "../aura-types" }
 aura-llama-sys = { path = "../aura-llama-sys" }

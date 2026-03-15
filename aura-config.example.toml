@@ -261,7 +261,50 @@ max_delay_ms = 10000   # 10 seconds
 jitter_ms = 50
 
 # =============================================================================
-#  § 10. Contextor — Memory Enrichment
+#  § 10. Telegram Interface
+# =============================================================================
+# AURA's primary user-facing interface is Telegram.
+# The Telegram API is a deliberate architectural choice — it provides a
+# battle-hardened, end-to-end encrypted transport layer with zero cloud
+# dependency for inference (all LLM work stays on-device).
+#
+# To obtain a bot token:
+#   1. Open Telegram → search for @BotFather
+#   2. Send /newbot → follow prompts → copy the token
+#   3. Send /setprivacy → Disable (so the bot can read group messages if needed)
+#
+# To find your numeric user ID:
+#   1. Open Telegram → search for @userinfobot
+#   2. Send any message → it replies with your numeric ID
+
+[telegram]
+
+# Bot token issued by @BotFather.
+# [REQUIRED] — leave empty and AURA's Telegram interface will not start.
+# Format: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ-_abcdefg"
+bot_token = ""
+
+# Your personal Telegram numeric user ID.
+# [REQUIRED] — the owner account always has full access regardless of
+# allowed_user_ids. AURA will refuse to start if this is 0.
+# Example: 987654321
+owner_user_id = 0
+
+# Additional Telegram user IDs that may interact with AURA.
+# The owner (above) is always implicitly allowed — do not repeat it here.
+# Empty list = only the owner can interact.
+# Example: allowed_user_ids = [111222333, 444555666]
+allowed_user_ids = []
+
+# Polling mode.
+# false = long-polling (recommended for Termux — no open port required)
+# true  = webhook (for server deployments with a public HTTPS endpoint)
+# Changing this to true requires additional webhook_url and webhook_port config
+# that is not yet implemented. Leave false for Termux.
+webhook_mode = false
+
+# =============================================================================
+#  § 11. Contextor — Memory Enrichment
 # =============================================================================
 
 [contextor]
@@ -310,7 +353,7 @@ recency_window_ms = 3600000   # 1 hour
 chars_per_token = 4
 
 # =============================================================================
-#  § 11. Ethics and Policy Gate
+#  § 12. Ethics and Policy Gate
 # =============================================================================
 
 [ethics]
@@ -346,7 +389,7 @@ blocked_packages = []
 # blocked_packages = ["com.google.android.apps.authenticator2", "com.chase.sig.android"]
 
 # =============================================================================
-#  § 12. Anti-Sycophancy Guard
+#  § 13. Anti-Sycophancy Guard
 # =============================================================================
 
 [anti_sycophancy]
@@ -366,7 +409,7 @@ warn_threshold = 0.25
 max_regenerations = 3
 
 # =============================================================================
-#  § 13. Power Tier Policies
+#  § 14. Power Tier Policies
 # =============================================================================
 # Each tier defines operational limits when the battery is in that range.
 # model_tier values: "Brainstem1_5B" | "Standard4B" | "Full8B"
@@ -407,7 +450,7 @@ proactive_enabled            = false
 max_concurrent_goals         = 0
 
 # =============================================================================
-#  § 14. Power Tier Hysteresis Boundaries
+#  § 15. Power Tier Hysteresis Boundaries
 # =============================================================================
 # Asymmetric thresholds prevent oscillation near tier boundaries.
 # degrade_at: battery% at or below which we drop to the worse tier.
@@ -439,7 +482,7 @@ degrade_at = 10
 recover_at = 13
 
 # =============================================================================
-#  § 15. LLM Parameters (llama.cpp)
+#  § 16. LLM Parameters (llama.cpp)
 # =============================================================================
 
 [llama.model]
@@ -483,7 +526,7 @@ repeat_penalty = 1.1   # Penalise recently generated tokens (>1.0 = more penalty
 max_tokens     = 512   # Hard cap on output length
 
 # =============================================================================
-#  § 16. Inference Mode Overrides
+#  § 17. Inference Mode Overrides
 # =============================================================================
 # Each mode overrides the default llama.sampling parameters above.
 # stop_sequences: generation stops at the first match (exact string).
@@ -529,7 +572,7 @@ context_budget = 1500
 stop_sequences = ["</reply>", "[END]"]
 
 # =============================================================================
-#  § 17. Checkpoint and Context Package Size Limits
+#  § 18. Checkpoint and Context Package Size Limits
 # =============================================================================
 
 [checkpoint]

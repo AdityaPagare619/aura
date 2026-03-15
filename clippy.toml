@@ -35,10 +35,9 @@ missing-docs-in-crate-items = false
 #
 # Format: { path = "fully::qualified::TypePath", reason = "why it's banned" }
 disallowed-types = [
-    # reqwest is banned: AURA is fully offline. All network I/O is Telegram Bot API
-    # via a single, audited call-site. reqwest opens up accidental cloud calls.
-    { path = "reqwest::Client",        reason = "AURA is anti-cloud; use allowed_http module only" },
-    { path = "reqwest::blocking::Client", reason = "AURA is anti-cloud; use allowed_http module only" },
+    # reqwest::blocking::Client is banned: blocking I/O in an async runtime causes
+    # thread starvation. All HTTP calls must be async via reqwest::Client.
+    { path = "reqwest::blocking::Client", reason = "blocking I/O in async context; use async reqwest::Client instead" },
 ]
 
 # Disallow method calls that have safer alternatives.

@@ -161,7 +161,10 @@ impl ExecutionOutcome {
 
     /// Whether the outcome represents a successful execution.
     pub fn is_success(&self) -> bool {
-        matches!(self.result, OutcomeResult::Success | OutcomeResult::PartialSuccess)
+        matches!(
+            self.result,
+            OutcomeResult::Success | OutcomeResult::PartialSuccess
+        )
     }
 
     /// Whether the user reacted positively.

@@ -4,23 +4,21 @@
 //! coordinates routine automation. Operates on a budget system where each
 //! proactive action costs "initiative points" that regenerate over time.
 
+pub mod attention;
 pub mod morning;
 pub mod routines;
 pub mod suggestions;
 pub mod welcome;
-pub mod attention;
-
-pub use morning::{BriefingSection, MorningBriefing};
-pub use routines::{Automation, DetectedRoutine, RoutineManager};
-pub use suggestions::{Suggestion, SuggestionEngine, SuggestionTrigger};
-pub use attention::{AttentionState, ForestGuardian};
 
 use std::collections::VecDeque;
 
-use serde::{Deserialize, Serialize};
-use tracing::{debug, info, instrument, warn};
-
+pub use attention::{AttentionState, ForestGuardian};
 use aura_types::power::PowerTier;
+pub use morning::{BriefingSection, MorningBriefing};
+pub use routines::{Automation, DetectedRoutine, RoutineManager};
+use serde::{Deserialize, Serialize};
+pub use suggestions::{Suggestion, SuggestionEngine, SuggestionTrigger};
+use tracing::{debug, info, instrument, warn};
 
 use super::{ArcError, ContextMode, DomainId};
 
@@ -169,7 +167,9 @@ impl ProactiveEngine {
     /// Used by the health monitor to throttle proactive activity under battery
     /// or thermal pressure. Pass `0.0` to immediately stop all proactive actions.
     pub fn cap_budget(&mut self, max: f32) {
-        self.initiative_budget = self.initiative_budget.min(max.clamp(0.0, MAX_INITIATIVE_BUDGET));
+        self.initiative_budget = self
+            .initiative_budget
+            .min(max.clamp(0.0, MAX_INITIATIVE_BUDGET));
         debug!(
             budget = self.initiative_budget,
             cap = max,
@@ -224,10 +224,10 @@ impl ProactiveEngine {
                         .push_back(ProactiveAction::Suggest(suggestion));
                     enqueued += 1;
                 }
-            }
+            },
             Err(e) => {
                 warn!(error = %e, "opportunity detection: suggestion trigger evaluation failed");
-            }
+            },
         }
 
         // 2) Check routine automations for the current time window.
@@ -251,9 +251,9 @@ impl ProactiveEngine {
             enqueued += 1;
         }
 
-        // 3) Cross-domain telemetry: high acceptance for a domain is a positive
-        //    signal. Reduce threat score slightly so the LLM sees a healthier
-        //    metric. This is MEASUREMENT only — it does not alter what is surfaced.
+        // 3) Cross-domain telemetry: high acceptance for a domain is a positive signal. Reduce
+        //    threat score slightly so the LLM sees a healthier metric. This is MEASUREMENT only —
+        //    it does not alter what is surfaced.
         let stats = self.suggestions.category_stats_snapshot();
         for (_domain, acceptance_rate, total) in &stats {
             if *total >= 5 && *acceptance_rate > 0.7 {
@@ -284,13 +284,13 @@ impl ProactiveEngine {
     /// Returns the current threat score after accumulation.
     #[instrument(name = "threat_accumulate", skip_all)]
     pub(crate) fn accumulate_threats(&mut self) -> f32 {
-        // 1) Exponential decay — threat_score halves roughly every 30 minutes.
-        //    At 2-min cadence (120s), decay factor ≈ 0.955  (0.5^(120/1800)).
+        // 1) Exponential decay — threat_score halves roughly every 30 minutes. At 2-min cadence
+        //    (120s), decay factor ≈ 0.955  (0.5^(120/1800)).
         const DECAY_FACTOR: f32 = 0.955;
         self.threat_score *= DECAY_FACTOR;
 
-        // 2) Scan category stats for high-rejection domains → update telemetry.
-        //    This is a MEASUREMENT step only. It does not alter what gets surfaced.
+        // 2) Scan category stats for high-rejection domains → update telemetry. This is a
+        //    MEASUREMENT step only. It does not alter what gets surfaced.
         let stats = self.suggestions.category_stats_snapshot();
         for (_domain, acceptance_rate, total) in &stats {
             // Only consider domains with meaningful sample sizes.
@@ -342,15 +342,13 @@ impl ProactiveEngine {
 
             // Determine cost based on action type.
             let cost = match action {
-                ProactiveAction::Suggest(s) => {
-                    0.1 * (1.0 - s.confidence).max(MIN_INITIATIVE_COST)
-                }
+                ProactiveAction::Suggest(s) => 0.1 * (1.0 - s.confidence).max(MIN_INITIATIVE_COST),
                 ProactiveAction::RunAutomation { .. } => 0.1,
                 ProactiveAction::Briefing(_) => 0.15,
                 ProactiveAction::Alert { urgency, .. } => {
                     // Urgent alerts are cheap — we want them to go through.
                     0.05 * (1.0 - urgency).max(MIN_INITIATIVE_COST)
-                }
+                },
             };
 
             if !self.spend_initiative(cost) {
@@ -367,8 +365,7 @@ impl ProactiveEngine {
             if let Some(action) = self.pending_actions.pop_front() {
                 // Count suggestions against daily limit.
                 if matches!(&action, ProactiveAction::Suggest(_)) {
-                    self.daily_suggestions_count =
-                        self.daily_suggestions_count.saturating_add(1);
+                    self.daily_suggestions_count = self.daily_suggestions_count.saturating_add(1);
                 }
                 drained.push(action);
             }
@@ -430,21 +427,19 @@ impl ProactiveEngine {
                 power,
                 PowerTier::P0Always | PowerTier::P1IdlePlus | PowerTier::P2Normal
             )
-        {
-            if self.morning.should_trigger(hour, day) && self.spend_initiative(0.15) {
+            && self.morning.should_trigger(hour, day) && self.spend_initiative(0.15) {
                 match self.morning.generate(day) {
                     Ok(sections) => {
                         if !sections.is_empty() {
                             info!(sections = sections.len(), "morning briefing generated");
                             actions.push(ProactiveAction::Briefing(sections));
                         }
-                    }
+                    },
                     Err(e) => {
                         warn!(error = %e, "morning briefing generation failed");
-                    }
+                    },
                 }
             }
-        }
 
         // --- Suggestions ---
         if !skip_suggestions
@@ -470,10 +465,10 @@ impl ProactiveEngine {
                             actions.push(ProactiveAction::Suggest(suggestion));
                         }
                     }
-                }
+                },
                 Err(e) => {
                     warn!(error = %e, "suggestion evaluation failed");
-                }
+                },
             }
         }
 
@@ -615,7 +610,10 @@ mod tests {
         // No triggers registered, so no actions.
         let actions = result.expect("should be ok");
         // Morning won't trigger at hour 0 (default hour is 7), and no triggers registered.
-        assert!(actions.is_empty(), "expected no actions at hour 0 with no triggers, got {actions:?}");
+        assert!(
+            actions.is_empty(),
+            "expected no actions at hour 0 with no triggers, got {actions:?}"
+        );
     }
 
     #[test]
@@ -629,8 +627,8 @@ mod tests {
             match a {
                 ProactiveAction::Suggest(_) | ProactiveAction::Briefing(_) => {
                     panic!("should not get suggestions/briefings in sleeping mode");
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }

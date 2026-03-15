@@ -223,9 +223,7 @@ impl<const N: usize> MetricsRing<N> {
     /// Return entries matching the given label.
     pub fn query_by_label<'a>(&'a self, label: &str) -> Vec<&'a MetricEntry> {
         let target = encode_label(label);
-        self.occupied_iter()
-            .filter(|e| e.label == target)
-            .collect()
+        self.occupied_iter().filter(|e| e.label == target).collect()
     }
 
     /// Compute a summary (min/max/avg/p50/p95/p99) for each distinct label
@@ -271,12 +269,8 @@ impl<const N: usize> MetricsRing<N> {
                 let p95 = percentile(&values, 95.0);
                 let p99 = percentile(&values, 99.0);
 
-                let label_end = label_bytes
-                    .iter()
-                    .position(|&b| b == 0)
-                    .unwrap_or(32);
-                let label_str =
-                    std::str::from_utf8(&label_bytes[..label_end]).unwrap_or("?");
+                let label_end = label_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+                let label_str = std::str::from_utf8(&label_bytes[..label_end]).unwrap_or("?");
 
                 Some(LabelSummary {
                     label: label_str.to_string(),
@@ -316,11 +310,7 @@ impl<const N: usize> MetricsRing<N> {
 
     /// Iterate over all occupied entries in chronological order.
     fn occupied_iter(&self) -> impl Iterator<Item = &MetricEntry> {
-        let start = if self.count < N {
-            0
-        } else {
-            self.head
-        };
+        let start = if self.count < N { 0 } else { self.head };
         let count = self.count;
         let n = N;
         let entries = &*self.entries;

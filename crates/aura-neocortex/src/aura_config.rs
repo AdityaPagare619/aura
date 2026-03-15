@@ -83,8 +83,8 @@ struct RawAuraTomlConfig {
 /// absent). Drives `ModelManager` and `ModelCapabilities` construction.
 ///
 /// # Invariants
-/// - `model_path` is always `Some` after construction: either from config,
-///   auto-scan, or the compiled fallback path.
+/// - `model_path` is always `Some` after construction: either from config, auto-scan, or the
+///   compiled fallback path.
 /// - `user_override_embedding_dim` is `None` unless the user explicitly set it;
 ///   `ModelCapabilities::from_gguf` will still prefer GGUF metadata over it.
 #[derive(Debug, Clone)]
@@ -136,19 +136,20 @@ impl NeocortexRuntimeConfig {
         match std::fs::read_to_string(config_path) {
             Ok(toml_str) => {
                 info!(path = %config_path.display(), "loading aura.config.toml");
-                let raw: RawAuraTomlConfig = toml::from_str(&toml_str)
-                    .map_err(|e| ConfigError::ParseError(config_path.to_path_buf(), e.to_string()))?;
+                let raw: RawAuraTomlConfig = toml::from_str(&toml_str).map_err(|e| {
+                    ConfigError::ParseError(config_path.to_path_buf(), e.to_string())
+                })?;
                 let mut config = Self::from_raw(raw);
                 config.config_source = ConfigSource::File(config_path.to_path_buf());
                 Ok(config)
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 warn!(
                     path = %config_path.display(),
                     "aura.config.toml not found — using defaults and auto-scan"
                 );
                 Ok(Self::with_auto_scan())
-            }
+            },
             Err(e) => {
                 warn!(
                     path = %config_path.display(),
@@ -156,7 +157,7 @@ impl NeocortexRuntimeConfig {
                     "could not read aura.config.toml — using defaults"
                 );
                 Ok(Self::with_auto_scan())
-            }
+            },
         }
     }
 
@@ -254,7 +255,7 @@ fn auto_scan_for_model() -> Option<PathBuf> {
             Err(e) => {
                 warn!(dir = dir_str, error = %e, "cannot read auto-scan dir");
                 continue;
-            }
+            },
         };
 
         for entry in read_dir.flatten() {

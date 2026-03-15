@@ -14,23 +14,28 @@
 //!
 //! Uses HNSW approximate nearest neighbor index for sub-linear query time.
 
-use std::collections::{HashMap, VecDeque};
-use std::path::Path;
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, VecDeque},
+    path::Path,
+    sync::Arc,
+};
 
+use aura_types::{
+    errors::MemError,
+    ipc::MemoryTier,
+    memory::{Episode, MemoryResult},
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-use aura_types::errors::MemError;
-use aura_types::ipc::MemoryTier;
-use aura_types::memory::{Episode, MemoryResult};
-
-use crate::memory::embeddings::{
-    self, cosine_similarity, embed, embedding_from_bytes, embedding_to_bytes, EMBED_DIM,
+use crate::memory::{
+    embeddings::{
+        self, cosine_similarity, embed, embedding_from_bytes, embedding_to_bytes, EMBED_DIM,
+    },
+    hnsw::HnswIndex,
+    importance,
 };
-use crate::memory::hnsw::HnswIndex;
-use crate::memory::importance;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,6 +82,12 @@ pub struct RetrievalEvent {
 #[derive(Debug)]
 pub struct RetrievalFeedbackBuffer {
     events: VecDeque<RetrievalEvent>,
+}
+
+impl Default for RetrievalFeedbackBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RetrievalFeedbackBuffer {
@@ -182,9 +193,8 @@ impl EpisodicMemory {
     ///
     /// Enables WAL mode for concurrent reads and atomic writes.
     pub fn open(db_path: &Path) -> Result<Self, MemError> {
-        let conn = Connection::open(db_path).map_err(|e| {
-            MemError::DatabaseError(format!("failed to open episodic db: {}", e))
-        })?;
+        let conn = Connection::open(db_path)
+            .map_err(|e| MemError::DatabaseError(format!("failed to open episodic db: {}", e)))?;
 
         // Enable WAL mode for safety and performance
         conn.execute_batch(
@@ -226,9 +236,10 @@ impl EpisodicMemory {
 
     /// Build HNSW index from existing episodes in the database.
     fn build_hnsw_index(&self) -> Result<(), MemError> {
-        let conn = self.conn.try_lock().map_err(|_| {
-            MemError::DatabaseError("could not lock db for HNSW rebuild".into())
-        })?;
+        let conn = self
+            .conn
+            .try_lock()
+            .map_err(|_| MemError::DatabaseError("could not lock db for HNSW rebuild".into()))?;
 
         let mut stmt = conn
             .prepare("SELECT id, embedding FROM episodes WHERE embedding IS NOT NULL")
@@ -242,14 +253,15 @@ impl EpisodicMemory {
             })
             .map_err(|e| MemError::DatabaseError(format!("HNSW rebuild query failed: {}", e)))?;
 
-        let mut hnsw = self.hnsw.lock().map_err(|_| {
-            MemError::DatabaseError("HNSW lock poisoned".into())
-        })?;
+        let mut hnsw = self
+            .hnsw
+            .lock()
+            .map_err(|_| MemError::DatabaseError("HNSW lock poisoned".into()))?;
 
         let mut loaded = 0u64;
         for row in rows {
-            let (sqlite_id, blob) =
-                row.map_err(|e| MemError::DatabaseError(format!("HNSW rebuild row failed: {}", e)))?;
+            let (sqlite_id, blob) = row
+                .map_err(|e| MemError::DatabaseError(format!("HNSW rebuild row failed: {}", e)))?;
             let emb = embedding_from_bytes(&blob);
             if emb.len() == EMBED_DIM {
                 hnsw.insert(sqlite_id, &emb)?;
@@ -265,9 +277,10 @@ impl EpisodicMemory {
     fn migrate_sync(&self) -> Result<(), MemError> {
         // We need to block on the mutex for the sync migration at init.
         // This is only called once during open(), before any async context.
-        let conn = self.conn.try_lock().map_err(|_| {
-            MemError::MigrationFailed("could not lock db for migration".into())
-        })?;
+        let conn = self
+            .conn
+            .try_lock()
+            .map_err(|_| MemError::MigrationFailed("could not lock db for migration".into()))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS episodes (
@@ -331,9 +344,9 @@ impl EpisodicMemory {
             // Release HNSW lock before touching SQLite to avoid holding both.
             let mut embedding = embed(&content);
             {
-                let mut hnsw_state = hnsw.lock().map_err(|_| {
-                    MemError::DatabaseError("HNSW lock poisoned".into())
-                })?;
+                let mut hnsw_state = hnsw
+                    .lock()
+                    .map_err(|_| MemError::DatabaseError("HNSW lock poisoned".into()))?;
                 apply_pattern_separation(&mut hnsw_state, &mut embedding)?;
             } // hnsw lock released here
 
@@ -363,9 +376,9 @@ impl EpisodicMemory {
 
             // Step 3: Re-acquire HNSW lock to index the new embedding.
             {
-                let mut hnsw_state = hnsw.lock().map_err(|_| {
-                    MemError::DatabaseError("HNSW lock poisoned".into())
-                })?;
+                let mut hnsw_state = hnsw
+                    .lock()
+                    .map_err(|_| MemError::DatabaseError("HNSW lock poisoned".into()))?;
                 hnsw_state.insert(sqlite_id, &embedding)?;
             }
 
@@ -398,7 +411,14 @@ impl EpisodicMemory {
 
         let results = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            query_episodes_hnsw(&conn, &hnsw, &query_text, max_results, min_relevance, now_ms)
+            query_episodes_hnsw(
+                &conn,
+                &hnsw,
+                &query_text,
+                max_results,
+                min_relevance,
+                now_ms,
+            )
         })
         .await
         .map_err(|e| MemError::QueryFailed(format!("spawn_blocking failed: {}", e)))??;
@@ -415,7 +435,9 @@ impl EpisodicMemory {
                     });
                 }
             } else {
-                tracing::warn!("episodic feedback buffer lock poisoned — skipping feedback recording");
+                tracing::warn!(
+                    "episodic feedback buffer lock poisoned — skipping feedback recording"
+                );
             }
         }
 
@@ -523,9 +545,12 @@ impl EpisodicMemory {
             let conn = conn.blocking_lock();
             let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!("DELETE FROM episodes WHERE id IN ({})", placeholders);
-            let params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                ids.iter().map(|&id| Box::new(id as i64) as Box<dyn rusqlite::types::ToSql>).collect();
-            let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
+                .iter()
+                .map(|&id| Box::new(id as i64) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
             let deleted = conn
                 .execute(&sql, refs.as_slice())
                 .map_err(|e| MemError::DatabaseError(format!("delete failed: {}", e)))?;
@@ -567,7 +592,9 @@ impl EpisodicMemory {
                     });
                 }
             } else {
-                tracing::warn!("episodic feedback buffer lock poisoned — skipping find_similar feedback");
+                tracing::warn!(
+                    "episodic feedback buffer lock poisoned — skipping find_similar feedback"
+                );
             }
         }
 
@@ -578,7 +605,7 @@ impl EpisodicMemory {
     /// Useful for clustering and analysis where context tags and full metadata are needed.
     pub async fn get_recent_episodes(&self, limit: usize) -> Result<Vec<Episode>, MemError> {
         let conn = self.conn.clone();
-        
+
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let mut stmt = conn
@@ -588,7 +615,9 @@ impl EpisodicMemory {
                      FROM episodes
                      ORDER BY id DESC LIMIT ?1",
                 )
-                .map_err(|e| MemError::QueryFailed(format!("recent query prepare failed: {}", e)))?;
+                .map_err(|e| {
+                    MemError::QueryFailed(format!("recent query prepare failed: {}", e))
+                })?;
 
             let rows = stmt
                 .query_map(params![limit as i64], row_to_episode)
@@ -596,7 +625,9 @@ impl EpisodicMemory {
 
             let mut episodes = Vec::new();
             for row in rows {
-                episodes.push(row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?);
+                episodes.push(
+                    row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?,
+                );
             }
             Ok(episodes)
         })
@@ -627,9 +658,10 @@ impl EpisodicMemory {
 // Synchronous helpers (run inside spawn_blocking)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // Used by spawn_blocking paths in async context
 fn store_episode_sync(
     conn: &Connection,
-    hnsw_state: &HnswState,
+    hnsw_state: &mut HnswState,
     content: &str,
     emotional_valence: f32,
     base_importance: f32,
@@ -644,8 +676,7 @@ fn store_episode_sync(
 
     // 3. Serialize
     let embedding_bytes = embedding_to_bytes(&embedding);
-    let tags_json =
-        serde_json::to_string(context_tags).unwrap_or_else(|_| "[]".to_string());
+    let tags_json = serde_json::to_string(context_tags).unwrap_or_else(|_| "[]".to_string());
 
     // 4. Insert atomically
     conn.execute(
@@ -692,17 +723,15 @@ fn apply_pattern_separation(
     if needs_separation {
         // Inject deterministic noise based on embedding content
         // Using a simple hash-based approach for determinism
-        let seed = embedding
-            .iter()
-            .enumerate()
-            .fold(0u64, |acc, (i, &v)| {
-                acc.wrapping_add((v.to_bits() as u64).wrapping_mul(i as u64 + 1))
-            });
+        let seed = embedding.iter().enumerate().fold(0u64, |acc, (i, &v)| {
+            acc.wrapping_add((v.to_bits() as u64).wrapping_mul(i as u64 + 1))
+        });
 
         for (i, val) in embedding.iter_mut().enumerate() {
             // Simple deterministic pseudo-noise
             let noise_seed = seed.wrapping_mul(i as u64 + 7).wrapping_add(0xDEAD_BEEF);
-            let noise = ((noise_seed % 1000) as f32 / 1000.0 - 0.5) * 2.0 * PATTERN_SEPARATION_NOISE;
+            let noise =
+                ((noise_seed % 1000) as f32 / 1000.0 - 0.5) * 2.0 * PATTERN_SEPARATION_NOISE;
             *val += noise;
         }
 
@@ -753,7 +782,11 @@ fn query_episodes_hnsw(
     let candidate_ids: Vec<i64> = hnsw_results.iter().map(|(id, _)| *id as i64).collect();
 
     // Fetch full episode data for candidates
-    let placeholders: String = candidate_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let placeholders: String = candidate_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!(
         "SELECT id, content, emotional_valence, importance, context_tags,
                 timestamp_ms, access_count, last_access_ms, embedding
@@ -783,21 +816,16 @@ fn query_episodes_hnsw(
     let mut scored: Vec<(MemoryResult, f32)> = Vec::new();
 
     for row in rows {
-        let episode =
-            row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?;
+        let episode = row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?;
 
         // Use HNSW similarity if available, otherwise compute
         let similarity = sim_map
             .remove(&episode.id)
-            .unwrap_or_else(|| {
-                match &episode.embedding {
-                    Some(emb) if emb.len() == query_embedding.len() => {
-                        cosine_similarity(&query_embedding, emb)
-                    }
-                    _ => {
-                        embeddings::jaccard_trigram_similarity(query_text, &episode.content)
-                    }
-                }
+            .unwrap_or_else(|| match &episode.embedding {
+                Some(emb) if emb.len() == query_embedding.len() => {
+                    cosine_similarity(&query_embedding, emb)
+                },
+                _ => embeddings::jaccard_trigram_similarity(query_text, &episode.content),
             });
 
         // Compute recall score
@@ -860,18 +888,17 @@ fn query_episodes_sync(
     let mut scored: Vec<(MemoryResult, f32)> = Vec::new();
 
     for row in rows {
-        let episode =
-            row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?;
+        let episode = row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?;
 
         // Compute similarity
         let similarity = match &episode.embedding {
             Some(emb) if emb.len() == query_embedding.len() => {
                 cosine_similarity(&query_embedding, emb)
-            }
+            },
             _ => {
                 // Fallback to Jaccard trigram similarity
                 embeddings::jaccard_trigram_similarity(query_text, &episode.content)
-            }
+            },
         };
 
         // Compute recall score
@@ -947,7 +974,11 @@ fn find_similar_sync(
     }
 
     let candidate_ids: Vec<i64> = hnsw_results.iter().map(|(id, _)| *id as i64).collect();
-    let placeholders: String = candidate_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let placeholders: String = candidate_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!(
         "SELECT id, content, emotional_valence, importance, context_tags,
                 timestamp_ms, access_count, last_access_ms, embedding
@@ -974,8 +1005,7 @@ fn find_similar_sync(
     let mut results: Vec<(Episode, f32)> = Vec::new();
 
     for row in rows {
-        let episode =
-            row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?;
+        let episode = row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?;
 
         if let Some(sim) = sim_map.remove(&episode.id) {
             if sim >= min_similarity {
@@ -1002,8 +1032,7 @@ fn row_to_episode(row: &rusqlite::Row) -> rusqlite::Result<Episode> {
     let last_access_ms: i64 = row.get(7)?;
     let embedding_blob: Option<Vec<u8>> = row.get(8)?;
 
-    let context_tags: Vec<String> =
-        serde_json::from_str(&tags_json).unwrap_or_default();
+    let context_tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
     let embedding = embedding_blob.map(|blob| embedding_from_bytes(&blob));
 
@@ -1210,10 +1239,22 @@ mod tests {
 
         rt.block_on(store.store("user prefers dark mode".into(), 0.0, 0.5, vec![], now()))
             .unwrap();
-        rt.block_on(store.store("user likes dark theme".into(), 0.0, 0.5, vec![], now() + 1000))
-            .unwrap();
-        rt.block_on(store.store("chocolate cake recipe".into(), 0.0, 0.5, vec![], now() + 2000))
-            .unwrap();
+        rt.block_on(store.store(
+            "user likes dark theme".into(),
+            0.0,
+            0.5,
+            vec![],
+            now() + 1000,
+        ))
+        .unwrap();
+        rt.block_on(store.store(
+            "chocolate cake recipe".into(),
+            0.0,
+            0.5,
+            vec![],
+            now() + 2000,
+        ))
+        .unwrap();
 
         let similar = rt
             .block_on(store.find_similar("dark mode preference", 0.3, 5))
@@ -1291,13 +1332,7 @@ mod tests {
 
         // Store first episode
         let id1 = rt
-            .block_on(store.store(
-                "the user prefers dark mode".into(),
-                0.0,
-                0.5,
-                vec![],
-                now(),
-            ))
+            .block_on(store.store("the user prefers dark mode".into(), 0.0, 0.5, vec![], now()))
             .unwrap();
 
         // Store nearly identical episode (should trigger pattern separation)

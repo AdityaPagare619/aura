@@ -20,25 +20,21 @@
 //! └──────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod connectivity;
 pub mod doze;
 pub mod jni_bridge;
 pub mod notifications;
 pub mod power;
-pub mod thermal;
 pub mod sensors;
-pub mod connectivity;
+pub mod thermal;
 
-pub use doze::DozeManager;
-pub use doze::{OemVendor, OemWhitelistGuidance, detect_oem_vendor, check_oem_status};
+use aura_types::{errors::PlatformError, ipc::ModelTier, power::PowerBudget};
+pub use connectivity::{ConnectivityManager, ConnectivitySnapshot, NetworkQuality, NetworkType};
+pub use doze::{check_oem_status, detect_oem_vendor, DozeManager, OemVendor, OemWhitelistGuidance};
 pub use notifications::{NotificationChannel, NotificationManager, NotificationPriority};
 pub use power::{BatteryTier, PowerManager, TierPolicy};
+pub use sensors::{AmbientLight, ProximityState, SensorManager, SensorSnapshot};
 pub use thermal::{ThermalManager, ThermalThresholds};
-pub use sensors::{SensorManager, AmbientLight, ProximityState, SensorSnapshot};
-pub use connectivity::{ConnectivityManager, NetworkType, NetworkQuality, ConnectivitySnapshot};
-
-use aura_types::errors::PlatformError;
-use aura_types::ipc::ModelTier;
-use aura_types::power::PowerBudget;
 
 // ─── Aggregate Platform State ───────────────────────────────────────────────
 
@@ -137,7 +133,7 @@ impl PlatformState {
                 report.connectivity_updated = true;
                 report.went_offline = !was_offline && self.connectivity.is_offline();
                 report.came_online = was_offline && !self.connectivity.is_offline();
-            }
+            },
             Err(e) => tracing::warn!(error = %e, "connectivity poll failed"),
         }
 
@@ -349,7 +345,8 @@ mod tests {
     fn test_combined_throttle_default() {
         let state = PlatformState::new();
         let throttle = state.combined_throttle();
-        // Default: Normal tier (power=0.8) × Cool thermal (throttle=1.0) × Good network (0.8) = 0.64
+        // Default: Normal tier (power=0.8) × Cool thermal (throttle=1.0) × Good network (0.8) =
+        // 0.64
         assert!((throttle - 0.64).abs() < f32::EPSILON);
     }
 
@@ -412,7 +409,10 @@ mod tests {
         // Should have real physics values, not zeros
         assert!(budget.daily_budget_mwh > 0.0, "daily budget should be >0");
         assert!(budget.battery_capacity_mah > 0.0, "capacity should be >0");
-        assert!(budget.cell_voltage_v > 3.0, "cell voltage should be realistic");
+        assert!(
+            budget.cell_voltage_v > 3.0,
+            "cell voltage should be realistic"
+        );
         // Default thermal state is Cool, default temp is 25°C
         assert_eq!(budget.thermal, aura_types::power::ThermalState::Cool);
     }

@@ -6,8 +6,10 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ProactiveConsent {
     /// User has not been asked - NO proactive behavior allowed
+    #[default]
     Unasked,
     /// User explicitly declined - NO proactive behavior
     Declined,
@@ -15,11 +17,6 @@ pub enum ProactiveConsent {
     AcceptedAll,
 }
 
-impl Default for ProactiveConsent {
-    fn default() -> Self {
-        Self::Unasked
-    }
-}
 
 impl ProactiveConsent {
     /// Check if proactive behavior is allowed for this user

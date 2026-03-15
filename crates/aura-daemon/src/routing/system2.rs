@@ -1,8 +1,9 @@
-use std::collections::HashMap;
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
-use aura_types::events::ParsedEvent;
-use aura_types::ipc::{ContextPackage, DaemonToNeocortex, InferenceMode};
+use aura_types::{
+    events::ParsedEvent,
+    ipc::{ContextPackage, DaemonToNeocortex, InferenceMode},
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -35,7 +36,7 @@ impl fmt::Display for RoutingError {
         match self {
             Self::PendingCapacityExceeded { current, max } => {
                 write!(f, "pending request capacity exceeded: {current} / {max}")
-            }
+            },
         }
     }
 }
@@ -181,7 +182,7 @@ impl System2 {
     /// Check whether a pending request has timed out.
     #[instrument(skip(self))]
     pub fn is_timed_out(&self, request_id: u64, now_ms: u64) -> bool {
-        self.pending.get(&request_id).map_or(false, |req| {
+        self.pending.get(&request_id).is_some_and(|req| {
             now_ms.saturating_sub(req.created_ms) > req.timeout_ms
         })
     }
@@ -220,8 +221,9 @@ impl Default for System2 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::events::{EventSource, Intent};
+
+    use super::*;
 
     fn make_event(content: &str) -> ParsedEvent {
         ParsedEvent {
@@ -285,7 +287,7 @@ mod tests {
         let cancel_msg = s2.cancel_request(r.request_id);
         assert!(cancel_msg.is_some());
         match cancel_msg.expect("just checked is_some") {
-            DaemonToNeocortex::Cancel => { /* correct */ }
+            DaemonToNeocortex::Cancel => { /* correct */ },
             other => panic!("expected Cancel, got {:?}", other),
         }
         assert_eq!(s2.pending_count(), 0);
@@ -307,7 +309,7 @@ mod tests {
                     context.conversation_history[0].content,
                     "what is the weather"
                 );
-            }
+            },
             other => panic!("expected Converse, got {:?}", other),
         }
     }
@@ -327,7 +329,7 @@ mod tests {
             DaemonToNeocortex::Plan { context, failure } => {
                 assert_eq!(context.inference_mode, InferenceMode::Planner);
                 assert!(failure.is_none());
-            }
+            },
             other => panic!("expected Plan, got {:?}", other),
         }
     }
@@ -398,7 +400,8 @@ mod tests {
             .expect("should succeed");
         assert_eq!(s2.pending_count(), 2);
 
-        // Sweep at 41_000 — first entry (10_000) is 31s old (stale), second (12_000) is 29s (fresh).
+        // Sweep at 41_000 — first entry (10_000) is 31s old (stale), second (12_000) is 29s
+        // (fresh).
         s2.sweep_stale(41_000);
         assert_eq!(s2.pending_count(), 1);
     }

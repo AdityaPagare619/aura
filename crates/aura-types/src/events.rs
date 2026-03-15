@@ -41,7 +41,6 @@ pub struct HealthSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DaemonEvent {
     // ── Heartbeat / periodic ──────────────────────────────────────────────
-
     /// Periodic heartbeat carrying a full health snapshot.
     ///
     /// Emitted by the `run_heartbeat_loop` task at the interval dictated by
@@ -49,7 +48,6 @@ pub enum DaemonEvent {
     Heartbeat(HealthSnapshot),
 
     // ── Memory pressure ───────────────────────────────────────────────────
-
     /// Daemon RSS crossed the memory-pressure warning threshold.
     ///
     /// `critical = false` → warm consolidation should run.
@@ -64,7 +62,6 @@ pub enum DaemonEvent {
     },
 
     // ── Battery ───────────────────────────────────────────────────────────
-
     /// Battery dropped below 20 % — reduce proactive initiative budget.
     BatteryLow {
         /// Battery level as a percentage [0, 100] at the time of the event.
@@ -78,7 +75,6 @@ pub enum DaemonEvent {
     },
 
     // ── Thermal ───────────────────────────────────────────────────────────
-
     /// Thermal state is Critical or Shutdown — pause LLM inference tasks.
     ///
     /// Normal service resumes automatically when a subsequent `Heartbeat`
@@ -86,7 +82,6 @@ pub enum DaemonEvent {
     ThermalCritical,
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
-
     /// All startup phases completed successfully.  The daemon is ready to
     /// accept accessibility events, user commands, and IPC messages.
     DaemonReady {

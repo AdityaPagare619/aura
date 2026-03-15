@@ -7,11 +7,14 @@ pub mod personality;
 pub mod proactive_consent;
 pub mod prompt_personality;
 pub mod relationship;
-pub mod user_profile;
 pub mod thinking_partner;
+pub mod user_profile;
+
+use std::collections::HashSet;
 
 pub use affective::{AffectiveEngine, MoodEvent};
 pub use anti_sycophancy::{GateResult, ResponseRecord, SycophancyGuard, SycophancyVerdict};
+use aura_types::identity::OceanTraits;
 pub use behavior_modifiers::{AutonomyLevel, GoalWeights, ResponseStyleParams, VerbosityLevel};
 pub use epistemic::{EpistemicAwareness, EpistemicLevel, KnowledgeDomain};
 pub use ethics::{
@@ -25,11 +28,8 @@ pub use personality::{
 pub use proactive_consent::{ProactiveConsent, ProactiveSettings};
 pub use prompt_personality::PersonalityPromptInjector;
 pub use relationship::{InteractionType, RelationshipTracker, RiskLevel, UserRelationship};
-pub use user_profile::UserProfile;
 pub use thinking_partner::{ChallengeLevel, ThinkingPartner};
-
-use std::collections::HashSet;
-use aura_types::identity::OceanTraits;
+pub use user_profile::UserProfile;
 
 // ---------------------------------------------------------------------------
 // Unified Identity Engine — facade over all identity subsystems
@@ -89,7 +89,7 @@ impl IdentityEngine {
         let relationship = self.relationships.get_relationship(user_id);
 
         let stage = relationship
-            .map(|r| r.stage.clone())
+            .map(|r| r.stage)
             .unwrap_or(aura_types::identity::RelationshipStage::Stranger);
 
         let trust = relationship.map(|r| r.trust).unwrap_or(0.0);
@@ -157,16 +157,16 @@ impl IdentityEngine {
         static STOP: OnceLock<HashSet<&str>> = OnceLock::new();
         STOP.get_or_init(|| {
             [
-                "a", "an", "the", "and", "or", "but", "in", "on", "at", "to",
-                "for", "of", "is", "it", "that", "this", "was", "are", "be",
-                "has", "had", "have", "with", "as", "by", "from", "not", "so",
-                "if", "its", "do", "no", "can", "will", "just", "i", "you",
-                "we", "my", "your", "he", "she", "they", "me", "him", "her",
-                "us", "them", "what", "which", "who", "how", "when", "where",
-                "about", "would", "could", "should", "been", "being", "did",
-                "does", "am", "were", "than", "then", "also", "very", "more",
-                "some", "any", "all", "each", "there", "up", "out", "into",
-            ].into_iter().collect()
+                "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "is",
+                "it", "that", "this", "was", "are", "be", "has", "had", "have", "with", "as", "by",
+                "from", "not", "so", "if", "its", "do", "no", "can", "will", "just", "i", "you",
+                "we", "my", "your", "he", "she", "they", "me", "him", "her", "us", "them", "what",
+                "which", "who", "how", "when", "where", "about", "would", "could", "should",
+                "been", "being", "did", "does", "am", "were", "than", "then", "also", "very",
+                "more", "some", "any", "all", "each", "there", "up", "out", "into",
+            ]
+            .into_iter()
+            .collect()
         })
     }
 
@@ -247,13 +247,17 @@ impl IdentityEngine {
         let overlap = Self::content_overlap(user_input, response_text);
 
         const AGREEMENT_PHRASES: &[&str] = &[
-            "you're right", "you are right", "i agree", "exactly right",
-            "that's correct", "good point", "you make a good point",
-            "i couldn't agree more", "spot on",
+            "you're right",
+            "you are right",
+            "i agree",
+            "exactly right",
+            "that's correct",
+            "good point",
+            "you make a good point",
+            "i couldn't agree more",
+            "spot on",
         ];
-        let agreement_density = Self::phrase_density(
-            response_text, &resp_lower, AGREEMENT_PHRASES,
-        );
+        let agreement_density = Self::phrase_density(response_text, &resp_lower, AGREEMENT_PHRASES);
 
         // Composite agreement signal: overlap × 0.6 + explicit density × 0.4
         let agreement_signal = overlap * 0.6 + agreement_density * 0.4;
@@ -279,13 +283,19 @@ impl IdentityEngine {
         // High openness personalities naturally explore alternatives — raise
         // the threshold so exploratory hedging isn't flagged as sycophantic.
         const HEDGE_PHRASES: &[&str] = &[
-            "i think", "perhaps", "maybe", "it could be", "it might be",
-            "i'm not sure", "possibly", "it seems", "to some extent",
-            "arguably", "one could say",
+            "i think",
+            "perhaps",
+            "maybe",
+            "it could be",
+            "it might be",
+            "i'm not sure",
+            "possibly",
+            "it seems",
+            "to some extent",
+            "arguably",
+            "one could say",
         ];
-        let hedge_density = Self::phrase_density(
-            response_text, &resp_lower, HEDGE_PHRASES,
-        );
+        let hedge_density = Self::phrase_density(response_text, &resp_lower, HEDGE_PHRASES);
         // Base threshold = 0.04.  High openness (>0.5) raises it.
         let hedge_threshold = 0.04 + (personality.openness - 0.5).max(0.0) * 0.03;
         let hedged = hedge_density > hedge_threshold;
@@ -305,22 +315,31 @@ impl IdentityEngine {
         //   b) Stance flip: previous response challenged/disagreed, current
         //      response agrees — detected via keyword regime shift.
         const REVERSAL_PHRASES: &[&str] = &[
-            "on second thought", "actually, you", "i was wrong",
-            "let me reconsider", "i take that back", "i stand corrected",
+            "on second thought",
+            "actually, you",
+            "i was wrong",
+            "let me reconsider",
+            "i take that back",
+            "i stand corrected",
             "you've changed my mind",
         ];
         let reversed_opinion = match previous_response {
             Some(prev) => {
-                let reversal_density = Self::phrase_density(
-                    response_text, &resp_lower, REVERSAL_PHRASES,
-                );
+                let reversal_density =
+                    Self::phrase_density(response_text, &resp_lower, REVERSAL_PHRASES);
                 // Stance flip detection: did previous response challenge
                 // but current one agrees?
                 let prev_lower = prev.to_ascii_lowercase();
-                let prev_challenged = Self::phrase_hits(&prev_lower, &[
-                    "however", "i disagree", "i'd push back",
-                    "on the other hand", "that's not quite",
-                ]) > 0;
+                let prev_challenged = Self::phrase_hits(
+                    &prev_lower,
+                    &[
+                        "however",
+                        "i disagree",
+                        "i'd push back",
+                        "on the other hand",
+                        "that's not quite",
+                    ],
+                ) > 0;
                 let now_agrees = Self::phrase_hits(&resp_lower, AGREEMENT_PHRASES) > 0;
                 let stance_flip = prev_challenged && now_agrees;
 
@@ -335,40 +354,41 @@ impl IdentityEngine {
                     "sycophancy: opinion reversal analysis"
                 );
                 reversed
-            }
+            },
             None => {
                 // No prior response to compare against, but explicit reversal
                 // markers ("on second thought", "let me reconsider") still
                 // signal self-contradiction and should be flagged.
-                let reversal_density = Self::phrase_density(
-                    response_text, &resp_lower, REVERSAL_PHRASES,
-                );
+                let reversal_density =
+                    Self::phrase_density(response_text, &resp_lower, REVERSAL_PHRASES);
                 reversal_density > 0.0
-            }
+            },
         };
 
         // ── 4. Praise density ──────────────────────────────────────
         // Ratio of praise/superlative phrases to total word count.
         const PRAISE_PHRASES: &[&str] = &[
-            "great question", "excellent point", "that's brilliant",
-            "well said", "insightful", "great idea", "wonderful",
-            "fantastic", "amazing question", "love that",
-            "really smart", "brilliant observation",
+            "great question",
+            "excellent point",
+            "that's brilliant",
+            "well said",
+            "insightful",
+            "great idea",
+            "wonderful",
+            "fantastic",
+            "amazing question",
+            "love that",
+            "really smart",
+            "brilliant observation",
         ];
-        let praise_density = Self::phrase_density(
-            response_text, &resp_lower, PRAISE_PHRASES,
-        );
+        let praise_density = Self::phrase_density(response_text, &resp_lower, PRAISE_PHRASES);
         // Threshold: low bar — any measurable praise density in a response
         // is notable.  No personality adjustment here: praise is either
         // present or it isn't, and all personalities should be flagged
         // equally for unprompted flattery.
         let praised = praise_density > 0.0 && resp_word_count > 0.0;
 
-        tracing::debug!(
-            praise_density,
-            praised,
-            "sycophancy: praise analysis"
-        );
+        tracing::debug!(praise_density, praised, "sycophancy: praise analysis");
 
         // ── 5. Challenge detection ─────────────────────────────────
         // Did AURA critically engage with the user's input?
@@ -382,14 +402,21 @@ impl IdentityEngine {
         // produce more natural challengers.  For agreeable personalities,
         // we lower the bar so that *any* challenge counts.
         const CHALLENGE_PHRASES: &[&str] = &[
-            "however", "i disagree", "that's not quite", "on the other hand",
-            "i'd push back", "consider the alternative", "actually,",
-            "to be fair", "it's worth noting", "one concern",
-            "that said", "i'd challenge", "a counterpoint",
+            "however",
+            "i disagree",
+            "that's not quite",
+            "on the other hand",
+            "i'd push back",
+            "consider the alternative",
+            "actually,",
+            "to be fair",
+            "it's worth noting",
+            "one concern",
+            "that said",
+            "i'd challenge",
+            "a counterpoint",
         ];
-        let challenge_density = Self::phrase_density(
-            response_text, &resp_lower, CHALLENGE_PHRASES,
-        );
+        let challenge_density = Self::phrase_density(response_text, &resp_lower, CHALLENGE_PHRASES);
 
         // Check if user asserted something (simple heuristic: declarative
         // sentences without question marks dominate the input).
@@ -397,7 +424,7 @@ impl IdentityEngine {
             false
         } else {
             let sentences: Vec<&str> = user_input
-                .split(|c: char| c == '.' || c == '!' || c == '?')
+                .split(['.', '!', '?'])
                 .filter(|s| !s.trim().is_empty())
                 .collect();
             let question_count = user_input.chars().filter(|&c| c == '?').count();
@@ -411,13 +438,13 @@ impl IdentityEngine {
         let new_info_ratio = if user_input.is_empty() {
             1.0 // Can't compare without user input; assume new info.
         } else {
-            let user_set: HashSet<String> =
-                Self::content_words(user_input).into_iter().collect();
+            let user_set: HashSet<String> = Self::content_words(user_input).into_iter().collect();
             let resp_words = Self::content_words(response_text);
             if resp_words.is_empty() {
                 0.0
             } else {
-                let novel = resp_words.iter()
+                let novel = resp_words
+                    .iter()
                     .filter(|w| !user_set.contains(w.as_str()))
                     .count() as f32;
                 (novel / resp_words.len() as f32).clamp(0.0, 1.0)
@@ -428,8 +455,7 @@ impl IdentityEngine {
         // For high-agreeableness personalities, this is already generous.
         // We also credit challenge if the response introduced substantial
         // new information (new_info_ratio > 0.5) in response to an assertion.
-        let challenged = challenge_density > 0.0
-            || (user_has_assertion && new_info_ratio > 0.5);
+        let challenged = challenge_density > 0.0 || (user_has_assertion && new_info_ratio > 0.5);
 
         tracing::debug!(
             challenge_density,
@@ -569,17 +595,17 @@ impl IdentityEngine {
                 lower.contains("i don't know")
                     || lower.contains("i'm not sure")
                     || lower.contains("i don't have information")
-            }
+            },
             epistemic::EpistemicLevel::CanDiscover => {
                 lower.contains("i could check")
                     || lower.contains("let me look")
                     || lower.contains("i could look into")
-            }
+            },
             epistemic::EpistemicLevel::Believes => {
                 lower.contains("i think")
                     || lower.contains("based on what i've seen")
                     || lower.contains("it seems like")
-            }
+            },
             epistemic::EpistemicLevel::Knows => true,
         };
 
@@ -626,9 +652,15 @@ impl IdentityEngine {
             (&["evening", "night", "sleep", "bedtime"], "evening_routine"),
             (&["music", "song", "playlist", "album"], "music_preference"),
             (&["weather", "temperature", "forecast", "rain"], "weather"),
-            (&["calendar", "meeting", "schedule", "appointment"], "calendar"),
+            (
+                &["calendar", "meeting", "schedule", "appointment"],
+                "calendar",
+            ),
             (&["work", "office", "deadline", "project"], "work_schedule"),
-            (&["food", "restaurant", "meal", "cook", "recipe"], "food_preference"),
+            (
+                &["food", "restaurant", "meal", "cook", "recipe"],
+                "food_preference",
+            ),
             (&["exercise", "workout", "gym", "run", "fitness"], "fitness"),
             (&["news", "headline", "article", "current events"], "news"),
             (&["commute", "traffic", "drive", "transit"], "commute"),
@@ -679,7 +711,7 @@ impl IdentityEngine {
             Some(profile) => {
                 self.user_profile = Some(profile);
                 Ok(())
-            }
+            },
             None => Ok(()),
         }
     }
@@ -774,11 +806,7 @@ impl IdentityEngine {
         journal.append(crate::persistence::JournalCategory::Consent, &payload)?;
         journal.commit()?;
 
-        tracing::debug!(
-            category,
-            granted,
-            "consent change persisted and applied"
-        );
+        tracing::debug!(category, granted, "consent change persisted and applied");
         Ok(())
     }
 
@@ -824,7 +852,7 @@ fn encode_personality_event(event: &personality::PersonalityEvent) -> Vec<u8> {
             let mut buf = vec![2u8];
             buf.extend_from_slice(msg.as_bytes());
             buf
-        }
+        },
         personality::PersonalityEvent::ContextualPressure {
             trait_name,
             direction,
@@ -836,7 +864,7 @@ fn encode_personality_event(event: &personality::PersonalityEvent) -> Vec<u8> {
             buf.extend_from_slice(name_bytes);
             buf.extend_from_slice(&direction.to_le_bytes());
             buf
-        }
+        },
     }
 }
 
@@ -853,18 +881,18 @@ pub fn decode_personality_event(payload: &[u8]) -> Option<personality::Personali
         2 => {
             let msg = std::str::from_utf8(&payload[1..]).ok()?;
             Some(personality::PersonalityEvent::UserFeedback(msg.to_string()))
-        }
+        },
         3 => {
             if payload.len() < 4 {
                 return None;
             }
-            let name_len =
-                u16::from_le_bytes([payload[1], payload[2]]) as usize;
+            let name_len = u16::from_le_bytes([payload[1], payload[2]]) as usize;
             if payload.len() < 3 + name_len + 4 {
                 return None;
             }
-            let trait_name =
-                std::str::from_utf8(&payload[3..3 + name_len]).ok()?.to_string();
+            let trait_name = std::str::from_utf8(&payload[3..3 + name_len])
+                .ok()?
+                .to_string();
             let dir_start = 3 + name_len;
             let direction = f32::from_le_bytes([
                 payload[dir_start],
@@ -876,7 +904,7 @@ pub fn decode_personality_event(payload: &[u8]) -> Option<personality::Personali
                 trait_name,
                 direction,
             })
-        }
+        },
         _ => None,
     }
 }
@@ -910,7 +938,9 @@ pub fn decode_trust_event(payload: &[u8]) -> Option<(String, InteractionType, u6
     if payload.len() < 2 + id_len + 1 + 8 {
         return None;
     }
-    let user_id = std::str::from_utf8(&payload[2..2 + id_len]).ok()?.to_string();
+    let user_id = std::str::from_utf8(&payload[2..2 + id_len])
+        .ok()?
+        .to_string();
     let interaction = match payload[2 + id_len] {
         0 => InteractionType::Positive,
         1 => InteractionType::Negative,
@@ -953,7 +983,9 @@ pub fn decode_consent_event(payload: &[u8]) -> Option<(String, bool, u64)> {
     if payload.len() < 2 + cat_len + 1 + 8 {
         return None;
     }
-    let category = std::str::from_utf8(&payload[2..2 + cat_len]).ok()?.to_string();
+    let category = std::str::from_utf8(&payload[2..2 + cat_len])
+        .ok()?
+        .to_string();
     let granted = payload[2 + cat_len] != 0;
     let ts_start = 2 + cat_len + 1;
     let timestamp_ms = u64::from_le_bytes([
@@ -983,15 +1015,15 @@ fn encode_mood_event(event: &MoodEvent, now_ms: u64) -> Vec<u8> {
         MoodEvent::Silence { duration_ms } => {
             buf.push(6u8);
             buf.extend_from_slice(&duration_ms.to_le_bytes());
-        }
+        },
         MoodEvent::VoiceStressDetected { level } => {
             buf.push(7u8);
             buf.extend_from_slice(&level.to_le_bytes());
-        }
+        },
         MoodEvent::VoiceFatigueDetected { level } => {
             buf.push(8u8);
             buf.extend_from_slice(&level.to_le_bytes());
-        }
+        },
     }
     buf.extend_from_slice(&now_ms.to_le_bytes());
     buf
@@ -1015,25 +1047,25 @@ pub fn decode_mood_event(payload: &[u8]) -> Option<(MoodEvent, u64)> {
                 return None;
             }
             let duration_ms = u64::from_le_bytes([
-                payload[1], payload[2], payload[3], payload[4],
-                payload[5], payload[6], payload[7], payload[8],
+                payload[1], payload[2], payload[3], payload[4], payload[5], payload[6], payload[7],
+                payload[8],
             ]);
             (MoodEvent::Silence { duration_ms }, 9)
-        }
+        },
         7 => {
             if payload.len() < 5 {
                 return None;
             }
             let level = f32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
             (MoodEvent::VoiceStressDetected { level }, 5)
-        }
+        },
         8 => {
             if payload.len() < 5 {
                 return None;
             }
             let level = f32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
             (MoodEvent::VoiceFatigueDetected { level }, 5)
-        }
+        },
         _ => return None,
     };
 
@@ -1059,8 +1091,9 @@ pub fn decode_mood_event(payload: &[u8]) -> Option<(MoodEvent, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::identity::OceanTraits;
+
+    use super::*;
 
     #[test]
     fn test_identity_engine_default() {
@@ -1138,9 +1171,13 @@ mod tests {
     fn test_context_aware_agreement_echo_detection() {
         // When AURA just echoes the user's words back, overlap is high.
         let user = "Rust is the best programming language for systems work.";
-        let response = "Rust is indeed the best language for systems programming work, you're right.";
+        let response =
+            "Rust is indeed the best language for systems programming work, you're right.";
         let r = IdentityEngine::analyze_response_in_context(
-            user, response, None, &OceanTraits::DEFAULT,
+            user,
+            response,
+            None,
+            &OceanTraits::DEFAULT,
         );
         assert!(
             r.agreed,
@@ -1155,7 +1192,10 @@ mod tests {
         let response = "The forecast shows partly cloudy skies with temperatures around 22°C. \
                         There's a 30% chance of rain in the afternoon.";
         let r = IdentityEngine::analyze_response_in_context(
-            user, response, None, &OceanTraits::DEFAULT,
+            user,
+            response,
+            None,
+            &OceanTraits::DEFAULT,
         );
         assert!(
             !r.agreed,
@@ -1171,7 +1211,10 @@ mod tests {
                         in CPU-bound data processing. Python's strength lies in its ecosystem \
                         of libraries like pandas and numpy, which use C extensions internally.";
         let r = IdentityEngine::analyze_response_in_context(
-            user, response, None, &OceanTraits::DEFAULT,
+            user,
+            response,
+            None,
+            &OceanTraits::DEFAULT,
         );
         assert!(
             r.challenged,
@@ -1193,12 +1236,8 @@ mod tests {
             agreeableness: 0.2,
             ..OceanTraits::DEFAULT
         };
-        let r_high = IdentityEngine::analyze_response_in_context(
-            user, response, None, &high_a,
-        );
-        let r_low = IdentityEngine::analyze_response_in_context(
-            user, response, None, &low_a,
-        );
+        let r_high = IdentityEngine::analyze_response_in_context(user, response, None, &high_a);
+        let r_low = IdentityEngine::analyze_response_in_context(user, response, None, &low_a);
         // With high agreeableness, agreement is natural → may not flag.
         // With low agreeableness, same agreement is unusual → should flag.
         // At minimum: low-A should be at least as likely to flag as high-A.
@@ -1221,12 +1260,8 @@ mod tests {
             openness: 0.2,
             ..OceanTraits::DEFAULT
         };
-        let r_high = IdentityEngine::analyze_response_in_context(
-            "", response, None, &high_o,
-        );
-        let r_low = IdentityEngine::analyze_response_in_context(
-            "", response, None, &low_o,
-        );
+        let r_high = IdentityEngine::analyze_response_in_context("", response, None, &high_o);
+        let r_low = IdentityEngine::analyze_response_in_context("", response, None, &low_o);
         // High openness might tolerate more hedging; low openness flags it.
         assert!(
             !r_high.hedged || r_low.hedged,
@@ -1289,15 +1324,16 @@ mod tests {
             None,
             &OceanTraits::DEFAULT,
         );
-        assert!(!r.praised, "substantive response without praise should not flag");
+        assert!(
+            !r.praised,
+            "substantive response without praise should not flag"
+        );
     }
 
     #[test]
     fn test_empty_strings_no_panic() {
         // Edge case: completely empty inputs should not panic.
-        let r = IdentityEngine::analyze_response_in_context(
-            "", "", None, &OceanTraits::DEFAULT,
-        );
+        let r = IdentityEngine::analyze_response_in_context("", "", None, &OceanTraits::DEFAULT);
         assert!(!r.agreed);
         assert!(!r.hedged);
         assert!(!r.reversed_opinion);

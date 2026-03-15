@@ -7,8 +7,7 @@
 //! 4. **Rate limiting** — sliding-window limits per chat ID.
 //! 5. **Audit trail** — every command attempt logged (delegates to [`super::audit`]).
 
-use std::collections::HashMap;
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 
 use serde::{Deserialize, Serialize};
 use tracing::{instrument, warn};
@@ -45,10 +44,10 @@ impl std::fmt::Display for SecurityError {
                     f,
                     "insufficient permission: need {required:?}, have {actual:?}"
                 )
-            }
+            },
             Self::RateLimited { retry_after_secs } => {
                 write!(f, "rate limited — retry after {retry_after_secs}s")
-            }
+            },
             Self::InvalidPin => write!(f, "invalid PIN"),
             Self::PinNotConfigured => write!(f, "no PIN configured — use /pin set first"),
         }
@@ -130,7 +129,10 @@ impl RateLimiter {
                 .min_by_key(|(_, ts)| ts.len())
                 .map(|(&id, _)| id);
             if let Some(id) = evict {
-                warn!(evicted_chat_id = id, "rate-limiter map full — evicting least-active entry");
+                warn!(
+                    evicted_chat_id = id,
+                    "rate-limiter map full — evicting least-active entry"
+                );
                 self.windows.remove(&id);
             }
         }
@@ -156,9 +158,7 @@ impl RateLimiter {
             .count() as u32;
         if recent_count >= self.max_per_minute {
             let oldest_in_minute = timestamps
-                .iter()
-                .filter(|t| now.duration_since(**t).as_secs() < 60)
-                .next()
+                .iter().find(|t| now.duration_since(**t).as_secs() < 60)
                 .copied()
                 .unwrap_or(now);
             let retry_after =
@@ -188,6 +188,12 @@ impl RateLimiter {
 pub struct PinStore {
     hash: Option<[u8; 32]>,
     salt: [u8; 16],
+}
+
+impl Default for PinStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PinStore {
@@ -232,7 +238,7 @@ impl PinStore {
             Some(stored) => {
                 let candidate = Self::hash_pin(pin, &self.salt);
                 constant_time_eq(stored, &candidate)
-            }
+            },
             None => false,
         }
     }

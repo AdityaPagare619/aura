@@ -197,6 +197,9 @@ mod tests {
         // Triggered exactly 24 hours ago → elapsed
         assert!(trigger_cooldown_elapsed(1_000_000, 1_000_000 + ONE_DAY_MS));
         // Triggered 25 hours ago → elapsed
-        assert!(trigger_cooldown_elapsed(1_000_000, 1_000_000 + ONE_DAY_MS + 3_600_000));
+        assert!(trigger_cooldown_elapsed(
+            1_000_000,
+            1_000_000 + ONE_DAY_MS + 3_600_000
+        ));
     }
 }

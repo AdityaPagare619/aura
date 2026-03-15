@@ -16,9 +16,10 @@
 //! - State: `AttentionState` (HealthyInteraction, ContextThrashing, AttentionLockIn)
 //! - Events: `AppSwitch`, `SessionDurationExceeded`, `RapidScrollSpike`
 
+use std::time::{Duration, Instant};
+
 use aura_types::identity::{OceanTraits, RelationshipStage};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// Defines the classification of the user's current attention span on the device.
@@ -91,9 +92,12 @@ impl ForestGuardian {
 
         // 2. Check for Attention Lock-in (Doomscrolling)
         let session_duration = now.duration_since(self.current_app_session_start);
-        if is_infinite_scroll_app && session_duration.as_secs() > (self.lock_in_threshold_mins * 60) {
-            warn!("ForestGuardian: Attention lock-in detected in {}. Session > {} mins.", 
-                app_package, self.lock_in_threshold_mins);
+        if is_infinite_scroll_app && session_duration.as_secs() > (self.lock_in_threshold_mins * 60)
+        {
+            warn!(
+                "ForestGuardian: Attention lock-in detected in {}. Session > {} mins.",
+                app_package, self.lock_in_threshold_mins
+            );
             return AttentionState::AttentionLockIn(session_duration);
         }
 
@@ -122,7 +126,7 @@ impl ForestGuardian {
                 intervention_kind: InterventionKind::ContextThrashing,
                 rapid_switch_count: Some(*count),
                 lock_in_duration_secs: None,
-                relationship_stage: relationship.clone(),
+                relationship_stage: *relationship,
                 // Raw trait values passed as-is — the LLM reads them in its
                 // system prompt and adjusts tone. Rust does NOT branch on them.
                 neuroticism: aura_traits.neuroticism,
@@ -132,7 +136,7 @@ impl ForestGuardian {
                 intervention_kind: InterventionKind::AttentionLockIn,
                 rapid_switch_count: None,
                 lock_in_duration_secs: Some(duration.as_secs()),
-                relationship_stage: relationship.clone(),
+                relationship_stage: *relationship,
                 neuroticism: aura_traits.neuroticism,
                 conscientiousness: aura_traits.conscientiousness,
             }),

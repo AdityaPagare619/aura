@@ -4,12 +4,11 @@
 //! Each job stores its interval, last-run timestamp, priority, power-tier
 //! minimum, and a closure-less job identifier dispatched by the scheduler.
 
-use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use tracing::{debug, instrument, trace, warn};
+use std::{cmp::Ordering, collections::BinaryHeap};
 
 use aura_types::power::PowerTier;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, instrument, trace, warn};
 
 use super::{ArcError, ContextMode, DomainId};
 

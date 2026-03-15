@@ -318,13 +318,13 @@ impl Default for ThermalThresholds {
 ///
 /// # Tuning
 ///
-/// - Kp: Proportional gain — immediate response to temperature overshoot.
-///   Too high → oscillation. Too low → slow response.
-/// - Ki: Integral gain — eliminates steady-state error (temperature offset).
-///   Too high → windup overshoot. Too low → permanent offset.
+/// - Kp: Proportional gain — immediate response to temperature overshoot. Too high → oscillation.
+///   Too low → slow response.
+/// - Ki: Integral gain — eliminates steady-state error (temperature offset). Too high → windup
+///   overshoot. Too low → permanent offset.
 /// - Ki is bounded by anti-windup clamping.
-/// - Kd: Derivative gain — dampens oscillation by responding to rate of change.
-///   Too high → noise amplification. Too low → underdamped oscillation.
+/// - Kd: Derivative gain — dampens oscillation by responding to rate of change. Too high → noise
+///   amplification. Too low → underdamped oscillation.
 #[derive(Debug, Clone)]
 struct ThermalPidController {
     /// Target skin temperature (°C) — the setpoint.
@@ -407,9 +407,9 @@ impl ThermalPidController {
         // Map PID output to throttle factor:
         // pid_output <= 0 → no throttle (1.0) — we're below setpoint
         // pid_output >= 1 → full throttle (0.0) — we're way above
-        let throttle = (1.0 - pid_output).clamp(0.0, 1.0);
+        
 
-        throttle
+        (1.0 - pid_output).clamp(0.0, 1.0)
     }
 
     /// Reset the PID state (e.g., after a long idle period).
@@ -673,7 +673,7 @@ impl ThermalManager {
                 if temp_c >= self.thresholds.warm_c {
                     return ThermalState::Warm;
                 }
-            }
+            },
             ThermalState::Warm => {
                 if temp_c >= self.thresholds.hot_c {
                     return ThermalState::Hot;
@@ -682,7 +682,7 @@ impl ThermalManager {
                 if temp_c < self.thresholds.warm_c - self.hysteresis_c {
                     return ThermalState::Cool;
                 }
-            }
+            },
             ThermalState::Hot => {
                 if temp_c >= self.thresholds.critical_c {
                     return ThermalState::Critical;
@@ -690,13 +690,13 @@ impl ThermalManager {
                 if temp_c < self.thresholds.hot_c - self.hysteresis_c {
                     return ThermalState::Warm;
                 }
-            }
+            },
             ThermalState::Critical => {
                 // Only recover from critical if well below the threshold.
                 if temp_c < self.thresholds.critical_c - self.hysteresis_c {
                     return ThermalState::Hot;
                 }
-            }
+            },
         }
 
         self.state

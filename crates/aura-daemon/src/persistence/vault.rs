@@ -24,11 +24,12 @@
 //! All data stays on-device. The vault NEVER transmits data externally.
 //! Export manifests list keys and metadata, NEVER values.
 
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
 use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -123,8 +124,7 @@ impl<T> BoundedVec<T> {
     #[must_use]
     pub fn to_vec(&self) -> Vec<T>
     where
-        T: Clone,
-    {
+        T: Clone, {
         self.inner.iter().cloned().collect()
     }
 }
@@ -365,10 +365,7 @@ pub enum VaultError {
     /// Vault has reached `MAX_VAULT_ENTRIES`.
     VaultFull,
     /// Attempted to store data at a lower tier than expected.
-    TierMismatch {
-        expected: DataTier,
-        got: DataTier,
-    },
+    TierMismatch { expected: DataTier, got: DataTier },
     /// Encryption/decryption failure from the platform keystore.
     EncryptionFailed(String),
     /// Decryption failure — ciphertext corrupted or wrong key.
@@ -390,7 +387,7 @@ impl std::fmt::Display for VaultError {
             Self::VaultFull => write!(f, "vault is full ({MAX_VAULT_ENTRIES} entries)"),
             Self::TierMismatch { expected, got } => {
                 write!(f, "tier mismatch: expected {expected}, got {got}")
-            }
+            },
             Self::EncryptionFailed(msg) => write!(f, "encryption failed: {msg}"),
             Self::DecryptionFailed(msg) => write!(f, "decryption failed: {msg}"),
             Self::HashFailed(msg) => write!(f, "hash operation failed: {msg}"),
@@ -465,13 +462,9 @@ pub struct ExportManifest {
 /// for encryption-tier assignment — no confidence scoring, no routing.
 /// The LLM reasons about user intent; this only asks "what tier encrypts this?"
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct DataClassifier {}
 
-impl Default for DataClassifier {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 impl DataClassifier {
     /// Create a new classifier with default confidence threshold.
@@ -555,20 +548,26 @@ impl DataClassifier {
             };
             let val = if double {
                 let doubled = d * 2;
-                if doubled > 9 { doubled - 9 } else { doubled }
+                if doubled > 9 {
+                    doubled - 9
+                } else {
+                    doubled
+                }
             } else {
                 d
             };
             sum += val;
             double = !double;
         }
-        sum % 10 == 0 && sum > 0
+        sum.is_multiple_of(10) && sum > 0
     }
 
     /// Aadhaar number: exactly 12 digits (possibly with spaces).
     fn looks_like_aadhaar(&self, value: &str) -> bool {
         let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
-        let non_digit_non_space = value.chars().any(|c| !c.is_ascii_digit() && !c.is_whitespace() && c != '-');
+        let non_digit_non_space = value
+            .chars()
+            .any(|c| !c.is_ascii_digit() && !c.is_whitespace() && c != '-');
         digits.len() == 12 && !non_digit_non_space
     }
 
@@ -620,9 +619,9 @@ impl DataClassifier {
         let has_plus = value.contains('+');
         (has_plus && digits.len() >= 10 && digits.len() <= 15)
             || (digits.len() == 10
-                && value
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || c.is_whitespace() || c == '-' || c == '(' || c == ')'))
+                && value.chars().all(|c| {
+                    c.is_ascii_digit() || c.is_whitespace() || c == '-' || c == '(' || c == ')'
+                }))
     }
 
     /// Email: contains @ with text on both sides.
@@ -646,7 +645,19 @@ impl DataClassifier {
 
     /// Address-like patterns.
     fn looks_like_address(&self, lower: &str) -> bool {
-        let address_words = ["street", "road", "lane", "avenue", "blvd", "apartment", "flat", "house no", "pin code", "postal", "zip code"];
+        let address_words = [
+            "street",
+            "road",
+            "lane",
+            "avenue",
+            "blvd",
+            "apartment",
+            "flat",
+            "house no",
+            "pin code",
+            "postal",
+            "zip code",
+        ];
         let matches = address_words.iter().filter(|w| lower.contains(**w)).count();
         matches >= 2
     }
@@ -781,8 +792,8 @@ fn vault_decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, VaultError> {
 // format is a different length/structure. Callers should handle this by:
 //   1. Detecting a `HashFailed("stored PIN hash too short")` error.
 //   2. Falling back to the legacy verification **once** for migration.
-//   3. On successful legacy verify, immediately re-hash with `hash_pin()`
-//      and persist the new 48-byte blob.
+//   3. On successful legacy verify, immediately re-hash with `hash_pin()` and persist the new
+//      48-byte blob.
 //   4. After migration, delete any legacy hash material.
 //
 // This ensures a seamless one-time upgrade without forcing users to reset
@@ -799,8 +810,7 @@ fn vault_decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, VaultError> {
 /// These are compile-time constants; `Params::new` is a `const fn` that only
 /// fails for out-of-range values, so the `expect` is safe for these literals.
 fn argon2_params() -> Params {
-    Params::new(65_536, 3, 4, Some(32))
-        .expect("hardcoded Argon2id params are valid")
+    Params::new(65_536, 3, 4, Some(32)).expect("hardcoded Argon2id params are valid")
 }
 
 /// Hash a PIN using Argon2id with a random 16-byte CSPRNG salt.
@@ -862,8 +872,8 @@ fn verify_pin(pin: &[u8], stored: &[u8]) -> Result<bool, VaultError> {
 // The install.sh creates an initial PIN hash in one of two legacy formats:
 //
 //   1. Unsalted:  "sha256:<64 hex chars>"                  (71 bytes)
-//   2. Salted:    "sha256:<32 hex salt>:<64 hex hash>"     (104 bytes)
-//      Hash = SHA-256(salt_hex || pin_plaintext)
+//   2. Salted:    "sha256:<32 hex salt>:<64 hex hash>"     (104 bytes) Hash = SHA-256(salt_hex ||
+//      pin_plaintext)
 //
 // On daemon first start, we detect these legacy formats and transparently
 // upgrade to Argon2id. The legacy hash is verified ONCE, then replaced.
@@ -901,7 +911,7 @@ fn is_salted_sha256_format(stored: &[u8]) -> bool {
 /// is constant-time compared to prevent timing side-channels even
 /// during migration.
 fn verify_legacy_sha256_pin(pin: &[u8], stored: &[u8]) -> bool {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     if !is_legacy_sha256_format(stored) {
         return false;
@@ -925,7 +935,7 @@ fn verify_legacy_sha256_pin(pin: &[u8], stored: &[u8]) -> bool {
 ///
 /// SECURITY: Same one-time migration semantics as `verify_legacy_sha256_pin`.
 fn verify_salted_sha256_pin(pin: &[u8], stored: &[u8]) -> bool {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     if !is_salted_sha256_format(stored) {
         return false;
@@ -1051,8 +1061,7 @@ impl CriticalVault {
     /// # Errors
     ///
     /// - [`VaultError::InvalidKey`] if `key` is empty.
-    /// - [`VaultError::VaultFull`] if the vault has reached capacity and
-    ///   the key is new.
+    /// - [`VaultError::VaultFull`] if the vault has reached capacity and the key is new.
     pub fn store(
         &mut self,
         key: &str,
@@ -1091,7 +1100,7 @@ impl CriticalVault {
                     return Err(VaultError::EncryptionFailed(
                         "vault encryption key not configured".into(),
                     ));
-                }
+                },
             }
         } else {
             // Tier 0 (Ephemeral): RAM-only, no encryption needed.
@@ -1131,8 +1140,8 @@ impl CriticalVault {
     /// # Authentication
     ///
     /// - Tier 2 (Sensitive): `authenticated` must be `true`.
-    /// - Tier 3 (Critical): both `authenticated` must be `true` (represents
-    ///   biometric + PIN verification performed by the platform layer).
+    /// - Tier 3 (Critical): both `authenticated` must be `true` (represents biometric + PIN
+    ///   verification performed by the platform layer).
     ///
     /// # Errors
     ///
@@ -1465,7 +1474,6 @@ impl CriticalVault {
             });
         }
     }
-
 }
 
 impl Default for CriticalVault {
@@ -1559,7 +1567,12 @@ mod tests {
 
     #[test]
     fn test_tier_roundtrip() {
-        for tier in [DataTier::Ephemeral, DataTier::Personal, DataTier::Sensitive, DataTier::Critical] {
+        for tier in [
+            DataTier::Ephemeral,
+            DataTier::Personal,
+            DataTier::Sensitive,
+            DataTier::Critical,
+        ] {
             assert_eq!(DataTier::from_u8(tier.as_u8()), Some(tier));
         }
         assert_eq!(DataTier::from_u8(4), None);
@@ -1611,7 +1624,9 @@ mod tests {
     fn test_store_and_retrieve_personal() {
         let mut vault = make_test_vault();
         let meta = make_metadata("User's name", DataCategory::Personal);
-        vault.store("name", b"Aditya", DataTier::Personal, meta).unwrap();
+        vault
+            .store("name", b"Aditya", DataTier::Personal, meta)
+            .unwrap();
 
         let val = vault.retrieve("name", "test", false).unwrap();
         assert_eq!(val, b"Aditya");
@@ -1621,7 +1636,9 @@ mod tests {
     fn test_sensitive_requires_auth() {
         let mut vault = make_test_vault();
         let meta = make_metadata("Phone number", DataCategory::Contact);
-        vault.store("phone", b"+919876543210", DataTier::Sensitive, meta).unwrap();
+        vault
+            .store("phone", b"+919876543210", DataTier::Sensitive, meta)
+            .unwrap();
 
         // Unauthenticated access should fail.
         let result = vault.retrieve("phone", "test", false);
@@ -1636,7 +1653,9 @@ mod tests {
     fn test_critical_requires_biometric() {
         let mut vault = make_test_vault();
         let meta = make_metadata("Bank account", DataCategory::Financial);
-        vault.store("bank", b"1234567890", DataTier::Critical, meta).unwrap();
+        vault
+            .store("bank", b"1234567890", DataTier::Critical, meta)
+            .unwrap();
 
         let result = vault.retrieve("bank", "test", false);
         assert!(matches!(result, Err(VaultError::BiometricRequired)));
@@ -1650,10 +1669,14 @@ mod tests {
         let mut vault = make_test_vault();
 
         let meta_p = make_metadata("Username", DataCategory::Personal);
-        vault.store("username", b"aditya", DataTier::Personal, meta_p).unwrap();
+        vault
+            .store("username", b"aditya", DataTier::Personal, meta_p)
+            .unwrap();
 
         let meta_c = make_metadata("Password", DataCategory::Credential);
-        vault.store("password", b"s3cret", DataTier::Critical, meta_c).unwrap();
+        vault
+            .store("password", b"s3cret", DataTier::Critical, meta_c)
+            .unwrap();
 
         // Search with max tier = Critical should still not return Tier 3.
         let results = vault.search("", DataTier::Critical);
@@ -1666,10 +1689,14 @@ mod tests {
         let mut vault = make_test_vault();
 
         let meta_p = make_metadata("Name", DataCategory::Personal);
-        vault.store("name", b"Aditya", DataTier::Personal, meta_p).unwrap();
+        vault
+            .store("name", b"Aditya", DataTier::Personal, meta_p)
+            .unwrap();
 
         let meta_s = make_metadata("Email", DataCategory::Contact);
-        vault.store("email", b"a@b.com", DataTier::Sensitive, meta_s).unwrap();
+        vault
+            .store("email", b"a@b.com", DataTier::Sensitive, meta_s)
+            .unwrap();
 
         let results = vault.search("", DataTier::Personal);
         assert_eq!(results.len(), 1);
@@ -1681,10 +1708,14 @@ mod tests {
         let mut vault = make_test_vault();
 
         let meta_p = make_metadata("Name", DataCategory::Personal);
-        vault.store("name", b"Aditya", DataTier::Personal, meta_p).unwrap();
+        vault
+            .store("name", b"Aditya", DataTier::Personal, meta_p)
+            .unwrap();
 
         let meta_s = make_metadata("Email", DataCategory::Contact);
-        vault.store("email", b"a@b.com", DataTier::Sensitive, meta_s).unwrap();
+        vault
+            .store("email", b"a@b.com", DataTier::Sensitive, meta_s)
+            .unwrap();
 
         assert!(vault.is_safe_for_llm("name"));
         assert!(!vault.is_safe_for_llm("email"));
@@ -1696,10 +1727,14 @@ mod tests {
         let mut vault = make_test_vault();
 
         let meta_s = make_metadata("Email", DataCategory::Contact);
-        vault.store("email", b"a@b.com", DataTier::Sensitive, meta_s).unwrap();
+        vault
+            .store("email", b"a@b.com", DataTier::Sensitive, meta_s)
+            .unwrap();
 
         let meta_c = make_metadata("Password", DataCategory::Credential);
-        vault.store("pass", b"secret", DataTier::Critical, meta_c).unwrap();
+        vault
+            .store("pass", b"secret", DataTier::Critical, meta_c)
+            .unwrap();
 
         assert!(vault.is_safe_for_search("email"));
         assert!(!vault.is_safe_for_search("pass"));
@@ -1709,7 +1744,9 @@ mod tests {
     fn test_delete_entry() {
         let mut vault = make_test_vault();
         let meta = make_metadata("Temp data", DataCategory::Personal);
-        vault.store("temp", b"data", DataTier::Personal, meta).unwrap();
+        vault
+            .store("temp", b"data", DataTier::Personal, meta)
+            .unwrap();
 
         assert!(vault.contains_key("temp"));
         vault.delete("temp", false).unwrap();
@@ -1720,7 +1757,9 @@ mod tests {
     fn test_secure_delete() {
         let mut vault = make_test_vault();
         let meta = make_metadata("Secret", DataCategory::Credential);
-        vault.store("secret", b"important", DataTier::Critical, meta).unwrap();
+        vault
+            .store("secret", b"important", DataTier::Critical, meta)
+            .unwrap();
 
         vault.delete("secret", true).unwrap();
         assert!(!vault.contains_key("secret"));
@@ -1739,10 +1778,14 @@ mod tests {
 
         let mut meta = make_metadata("Expiring", DataCategory::Personal);
         meta.expiry_ms = Some(1000); // expired long ago
-        vault.store("old", b"data", DataTier::Personal, meta).unwrap();
+        vault
+            .store("old", b"data", DataTier::Personal, meta)
+            .unwrap();
 
         let meta_fresh = make_metadata("Fresh", DataCategory::Personal);
-        vault.store("new", b"data", DataTier::Personal, meta_fresh).unwrap();
+        vault
+            .store("new", b"data", DataTier::Personal, meta_fresh)
+            .unwrap();
 
         let purged = vault.purge_expired(current_timestamp_ms());
         assert_eq!(purged, 1);
@@ -1793,7 +1836,9 @@ mod tests {
     fn test_export_manifest_no_values() {
         let mut vault = make_test_vault();
         let meta = make_metadata("Secret stuff", DataCategory::Credential);
-        vault.store("secret", b"TOP_SECRET_VALUE", DataTier::Critical, meta).unwrap();
+        vault
+            .store("secret", b"TOP_SECRET_VALUE", DataTier::Critical, meta)
+            .unwrap();
 
         let manifest = vault.export_manifest();
         assert_eq!(manifest.entries.len(), 1);
@@ -1808,14 +1853,19 @@ mod tests {
     fn test_access_log_for_key() {
         let mut vault = make_test_vault();
         let meta = make_metadata("Email", DataCategory::Contact);
-        vault.store("email", b"a@b.com", DataTier::Sensitive, meta).unwrap();
+        vault
+            .store("email", b"a@b.com", DataTier::Sensitive, meta)
+            .unwrap();
 
         // Authenticated retrieval creates a log entry.
         let _ = vault.retrieve("email", "test_caller", true);
 
         let logs = vault.access_log_for_key("email");
         assert!(!logs.is_empty());
-        assert_eq!(logs.last().map(|l| &l.caller), Some(&"test_caller".to_string()));
+        assert_eq!(
+            logs.last().map(|l| &l.caller),
+            Some(&"test_caller".to_string())
+        );
     }
 
     #[test]
@@ -1823,10 +1873,14 @@ mod tests {
         let mut vault = make_test_vault();
 
         let meta1 = make_metadata("Old name", DataCategory::Personal);
-        vault.store("name", b"Old", DataTier::Personal, meta1).unwrap();
+        vault
+            .store("name", b"Old", DataTier::Personal, meta1)
+            .unwrap();
 
         let meta2 = make_metadata("New name", DataCategory::Personal);
-        vault.store("name", b"New", DataTier::Personal, meta2).unwrap();
+        vault
+            .store("name", b"New", DataTier::Personal, meta2)
+            .unwrap();
 
         let val = vault.retrieve("name", "test", false).unwrap();
         assert_eq!(val, b"New");
@@ -1914,7 +1968,9 @@ mod tests {
 
     #[test]
     fn test_vault_error_display() {
-        assert!(VaultError::BiometricRequired.to_string().contains("biometric"));
+        assert!(VaultError::BiometricRequired
+            .to_string()
+            .contains("biometric"));
         assert!(VaultError::VaultFull.to_string().contains("full"));
         assert!(VaultError::InvalidKey.to_string().contains("invalid"));
     }
@@ -1922,7 +1978,10 @@ mod tests {
     #[test]
     fn test_data_category_display() {
         assert_eq!(DataCategory::Financial.to_string(), "Financial");
-        assert_eq!(DataCategory::Other("custom".to_string()).to_string(), "Other(custom)");
+        assert_eq!(
+            DataCategory::Other("custom".to_string()).to_string(),
+            "Other(custom)"
+        );
     }
 
     #[test]
@@ -1942,13 +2001,12 @@ mod tests {
             b"hello world",
             b"",
             b"\x00\x01\x02\x03",
-            &[0xFF; 1024],      // 1KB payload
+            &[0xFF; 1024], // 1KB payload
             b"sensitive data: password123!@#",
         ];
 
         for plaintext in &test_cases {
-            let encrypted = vault_encrypt(&key, plaintext)
-                .expect("encryption should not fail");
+            let encrypted = vault_encrypt(&key, plaintext).expect("encryption should not fail");
 
             // Ciphertext must differ from plaintext (unless empty — AES-GCM
             // still produces a 16-byte auth tag for empty input).
@@ -1967,8 +2025,7 @@ mod tests {
                 encrypted.len()
             );
 
-            let decrypted = vault_decrypt(&key, &encrypted)
-                .expect("decryption should not fail");
+            let decrypted = vault_decrypt(&key, &encrypted).expect("decryption should not fail");
             assert_eq!(
                 decrypted.as_slice(),
                 *plaintext,

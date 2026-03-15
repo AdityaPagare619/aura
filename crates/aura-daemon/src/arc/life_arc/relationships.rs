@@ -126,8 +126,8 @@ impl TrackedRelationship {
         let mut gap_sum_ms: u64 = 0;
         let mut gap_count: u32 = 0;
         for i in 1..n {
-            let gap = self.interaction_timestamps[i]
-                .saturating_sub(self.interaction_timestamps[i - 1]);
+            let gap =
+                self.interaction_timestamps[i].saturating_sub(self.interaction_timestamps[i - 1]);
             gap_sum_ms = gap_sum_ms.saturating_add(gap);
             gap_count += 1;
         }
@@ -151,8 +151,7 @@ impl TrackedRelationship {
         if self.last_interaction_ms == 0 {
             return false;
         }
-        let elapsed_hours =
-            now_ms.saturating_sub(self.last_interaction_ms) as f32 / 3_600_000.0;
+        let elapsed_hours = now_ms.saturating_sub(self.last_interaction_ms) as f32 / 3_600_000.0;
         elapsed_hours > DRIFT_FACTOR * self.avg_interaction_interval_hours
     }
 
@@ -178,8 +177,7 @@ impl TrackedRelationship {
             168.0 // 7-day default
         };
 
-        let elapsed_hours =
-            now_ms.saturating_sub(self.last_interaction_ms) as f32 / 3_600_000.0;
+        let elapsed_hours = now_ms.saturating_sub(self.last_interaction_ms) as f32 / 3_600_000.0;
         let ratio = elapsed_hours / reference_hours;
 
         // ratio = 0 (just interacted) → score 1.0
@@ -237,7 +235,11 @@ impl RelationshipArc {
     ) -> Result<(), &'static str> {
         self.total_events = self.total_events.saturating_add(1);
 
-        if let Some(rel) = self.relationships.iter_mut().find(|r| r.person_id == person_id) {
+        if let Some(rel) = self
+            .relationships
+            .iter_mut()
+            .find(|r| r.person_id == person_id)
+        {
             rel.record_interaction(now_ms);
             return Ok(());
         }
@@ -257,7 +259,11 @@ impl RelationshipArc {
 
     /// Update the importance level for a tracked relationship.
     pub fn set_importance(&mut self, person_id: &str, importance: u8) {
-        if let Some(rel) = self.relationships.iter_mut().find(|r| r.person_id == person_id) {
+        if let Some(rel) = self
+            .relationships
+            .iter_mut()
+            .find(|r| r.person_id == person_id)
+        {
             rel.user_importance_level = importance.clamp(1, 10);
         }
     }
@@ -319,9 +325,7 @@ impl RelationshipArc {
         }
 
         let drifting = self.drifting_relationships(now_ms);
-        let high_importance_drifting = drifting
-            .iter()
-            .any(|r| r.user_importance_level >= 7);
+        let high_importance_drifting = drifting.iter().any(|r| r.user_importance_level >= 7);
 
         let should_trigger = self.health.warrants_proactive() || high_importance_drifting;
         if !should_trigger {
@@ -329,9 +333,7 @@ impl RelationshipArc {
         }
 
         // Enforce 24-hour cooldown.
-        if self.last_trigger_ms > 0
-            && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS
-        {
+        if self.last_trigger_ms > 0 && now_ms.saturating_sub(self.last_trigger_ms) < ONE_DAY_MS {
             return None;
         }
 
@@ -355,10 +357,7 @@ impl RelationshipArc {
     #[must_use]
     pub fn to_llm_context(&self, now_ms: u64) -> String {
         let drifting = self.drifting_relationships(now_ms);
-        let drifting_names: Vec<&str> = drifting
-            .iter()
-            .map(|r| r.display_name.as_str())
-            .collect();
+        let drifting_names: Vec<&str> = drifting.iter().map(|r| r.display_name.as_str()).collect();
 
         let rel_summary: Vec<String> = self
             .relationships
@@ -459,24 +458,21 @@ mod tests {
         // Just interacted — should not be drifting.
         let now = T0 + 4 * ONE_WEEK + ONE_HOUR;
         let drifting = arc.drifting_relationships(now);
-        assert!(drifting.is_empty(), "Carol just interacted, should not drift");
+        assert!(
+            drifting.is_empty(),
+            "Carol just interacted, should not drift"
+        );
     }
 
     #[test]
     fn test_capacity_limit() {
         let mut arc = RelationshipArc::new();
         for i in 0..MAX_RELATIONSHIPS {
-            arc.record_interaction(
-                &format!("person_{i}"),
-                None,
-                None,
-                T0 + i as u64 * ONE_HOUR,
-            )
-            .expect("within capacity");
+            arc.record_interaction(&format!("person_{i}"), None, None, T0 + i as u64 * ONE_HOUR)
+                .expect("within capacity");
         }
         // One more should fail.
-        let result =
-            arc.record_interaction("overflow_person", None, None, T0 + 9999 * ONE_HOUR);
+        let result = arc.record_interaction("overflow_person", None, None, T0 + 9999 * ONE_HOUR);
         assert!(result.is_err(), "should hit capacity limit");
     }
 
@@ -487,12 +483,20 @@ mod tests {
         arc.record_interaction("vip", Some("VIP"), Some(10), T0)
             .expect("ok");
         // Low-importance person with stale interaction.
-        arc.record_interaction("acquaintance", Some("Acquaintance"), Some(1), T0.saturating_sub(30 * ONE_DAY_MS))
-            .expect("ok");
+        arc.record_interaction(
+            "acquaintance",
+            Some("Acquaintance"),
+            Some(1),
+            T0.saturating_sub(30 * ONE_DAY_MS),
+        )
+        .expect("ok");
 
         // Score at T0 + 1 hour: VIP was just seen (high weight) → should pull score up.
         let s = arc.score(T0 + ONE_HOUR);
-        assert!(s > 0.5, "high-importance recent interaction should improve score, got {s}");
+        assert!(
+            s > 0.5,
+            "high-importance recent interaction should improve score, got {s}"
+        );
     }
 
     #[test]

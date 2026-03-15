@@ -183,21 +183,21 @@ impl Personality {
             PersonalityEvent::PositiveInteraction => {
                 self.nudge_all(POSITIVE_DELTA_BASE * attenuation);
                 self.apply_micro_drift(MICRO_DRIFT_BASE * attenuation);
-            }
+            },
             PersonalityEvent::NegativeInteraction => {
                 self.nudge_all(NEGATIVE_DELTA_BASE * attenuation);
                 self.apply_micro_drift(-MICRO_DRIFT_BASE * attenuation);
-            }
+            },
             PersonalityEvent::ContextualPressure {
                 ref trait_name,
                 direction,
             } => {
                 // User-directed pressure is NOT attenuated — respect explicit intent.
                 self.nudge_trait(trait_name, direction);
-            }
+            },
             PersonalityEvent::UserFeedback(ref _msg) => {
                 tracing::debug!("user feedback recorded (no trait change yet)");
-            }
+            },
         }
         self.traits.clamp_all();
         self.evolution_count += 1;
@@ -219,35 +219,35 @@ impl Personality {
             PersonalityOutcome::RoutineFollowed => {
                 self.traits.conscientiousness = (self.traits.conscientiousness + n).min(0.9);
                 self.traits.openness = (self.traits.openness - n * 0.5).max(0.1);
-            }
+            },
             PersonalityOutcome::RoutineDeviatedPositive => {
                 self.traits.openness = (self.traits.openness + n).min(0.9);
                 self.traits.conscientiousness = (self.traits.conscientiousness - n * 0.5).max(0.1);
-            }
+            },
             PersonalityOutcome::RoutineDeviatedNegative => {
                 self.traits.neuroticism = (self.traits.neuroticism + n).min(0.9);
                 self.traits.conscientiousness = (self.traits.conscientiousness + n * 0.5).min(0.9);
-            }
+            },
             PersonalityOutcome::ExploredNew => {
                 self.traits.openness = (self.traits.openness + n).min(0.9);
-            }
+            },
             PersonalityOutcome::AvoidedNew => {
                 self.traits.openness = (self.traits.openness - n * 0.5).max(0.1);
                 self.traits.conscientiousness = (self.traits.conscientiousness + n * 0.5).min(0.9);
-            }
+            },
             PersonalityOutcome::EmotionalPositive => {
                 self.traits.extraversion = (self.traits.extraversion + n * 0.7).min(0.9);
                 self.traits.agreeableness = (self.traits.agreeableness + n).min(0.9);
                 self.traits.neuroticism = (self.traits.neuroticism - n * 0.5).max(0.1);
-            }
+            },
             PersonalityOutcome::EmotionalNegative => {
                 self.traits.neuroticism = (self.traits.neuroticism + n).min(0.9);
                 self.traits.extraversion = (self.traits.extraversion - n * 0.3).max(0.1);
-            }
+            },
             PersonalityOutcome::CooperativeAct => {
                 self.traits.agreeableness = (self.traits.agreeableness + n).min(0.9);
                 self.traits.extraversion = (self.traits.extraversion + n * 0.3).min(0.9);
-            }
+            },
         }
         // No clamp_all needed — all branches already enforce [0.1, 0.9] per trait.
         self.evolution_count += 1;
@@ -301,8 +301,8 @@ impl Personality {
     /// Checks for:
     /// 1. Total drift from baseline exceeding `MAX_TOTAL_DRIFT`
     /// 2. Any single trait at the extreme boundary (0.1 or 0.9)
-    /// 3. Implausible trait combinations (e.g., neuroticism at max while
-    ///    conscientiousness also at max — unlikely in OCEAN literature)
+    /// 3. Implausible trait combinations (e.g., neuroticism at max while conscientiousness also at
+    ///    max — unlikely in OCEAN literature)
     pub fn consistency_check(&self) -> ConsistencyReport {
         let mut issues = Vec::new();
 
@@ -347,7 +347,6 @@ impl Personality {
     }
 
     /// Classify the current personality into the nearest archetype.
-    ///
     // IRON LAW: LLM classifies behavioral archetypes. Rust does not.
     // Weighted scoring formulas that MAKE decisions violate Iron Law #2.
     // The LLM receives raw OCEAN numbers via serialize_identity_block() and
@@ -361,10 +360,11 @@ impl Personality {
 
         // Score each archetype by how well the traits match its profile.
         // Higher score = better match. Winner-takes-all.
-        let analyst_score   = (o - 0.5).max(0.0) + (c - 0.5).max(0.0) + (0.5 - n).max(0.0);
-        let helper_score    = (a - 0.5).max(0.0) + (e - 0.5).max(0.0) + (0.5 - n).max(0.0);
-        let explorer_score  = (o - 0.5).max(0.0) + (e - 0.5).max(0.0) + (0.5 - c).max(0.0) + (0.5 - n).max(0.0);
-        let guardian_score  = (n - 0.5).max(0.0) + (c - 0.5).max(0.0) + (0.5 - o).max(0.0);
+        let analyst_score = (o - 0.5).max(0.0) + (c - 0.5).max(0.0) + (0.5 - n).max(0.0);
+        let helper_score = (a - 0.5).max(0.0) + (e - 0.5).max(0.0) + (0.5 - n).max(0.0);
+        let explorer_score =
+            (o - 0.5).max(0.0) + (e - 0.5).max(0.0) + (0.5 - c).max(0.0) + (0.5 - n).max(0.0);
+        let guardian_score = (n - 0.5).max(0.0) + (c - 0.5).max(0.0) + (0.5 - o).max(0.0);
         let commander_score = (e - 0.5).max(0.0) + (0.5 - a).max(0.0) + (0.5 - n).max(0.0);
 
         let max_score = analyst_score
@@ -379,12 +379,19 @@ impl Personality {
             return PersonalityArchetype::Balanced;
         }
 
-        if (max_score - analyst_score).abs() < f32::EPSILON   { PersonalityArchetype::Analyst }
-        else if (max_score - helper_score).abs() < f32::EPSILON    { PersonalityArchetype::Helper }
-        else if (max_score - explorer_score).abs() < f32::EPSILON  { PersonalityArchetype::Explorer }
-        else if (max_score - guardian_score).abs() < f32::EPSILON  { PersonalityArchetype::Guardian }
-        else if (max_score - commander_score).abs() < f32::EPSILON { PersonalityArchetype::Commander }
-        else { PersonalityArchetype::Balanced }
+        if (max_score - analyst_score).abs() < f32::EPSILON {
+            PersonalityArchetype::Analyst
+        } else if (max_score - helper_score).abs() < f32::EPSILON {
+            PersonalityArchetype::Helper
+        } else if (max_score - explorer_score).abs() < f32::EPSILON {
+            PersonalityArchetype::Explorer
+        } else if (max_score - guardian_score).abs() < f32::EPSILON {
+            PersonalityArchetype::Guardian
+        } else if (max_score - commander_score).abs() < f32::EPSILON {
+            PersonalityArchetype::Commander
+        } else {
+            PersonalityArchetype::Balanced
+        }
     }
 
     // -- private helpers ----------------------------------------------------
@@ -395,11 +402,11 @@ impl Personality {
     /// - Conscientiousness & Neuroticism are most trait-like (slower to change)
     /// See: McCrae & Costa (2003), Concept Design §4.1, AGI Audit §6.
     fn nudge_all(&mut self, delta: f32) {
-        self.traits.openness += delta * 1.0;            // Moderate stability
-        self.traits.conscientiousness += delta * 0.7;   // High stability (trait-like)
-        self.traits.extraversion += delta * 1.2;        // Socially malleable
-        self.traits.agreeableness += delta * 1.3;       // Most interaction-sensitive
-        self.traits.neuroticism += delta * 0.8;         // Relatively stable
+        self.traits.openness += delta * 1.0; // Moderate stability
+        self.traits.conscientiousness += delta * 0.7; // High stability (trait-like)
+        self.traits.extraversion += delta * 1.2; // Socially malleable
+        self.traits.agreeableness += delta * 1.3; // Most interaction-sensitive
+        self.traits.neuroticism += delta * 0.8; // Relatively stable
     }
 
     fn nudge_trait(&mut self, name: &str, direction: f32) {
@@ -411,7 +418,7 @@ impl Personality {
             "neuroticism" => self.traits.neuroticism += direction,
             other => {
                 tracing::warn!(trait_name = other, "unknown trait in contextual pressure");
-            }
+            },
         }
     }
 
@@ -597,7 +604,8 @@ mod tests {
         assert!(
             delta_a > delta_c,
             "Agreeableness delta ({:.4}) should exceed Conscientiousness delta ({:.4})",
-            delta_a, delta_c
+            delta_a,
+            delta_c
         );
         let ratio = delta_a / delta_c;
         assert!(
@@ -742,9 +750,18 @@ mod tests {
     fn test_to_llm_context() {
         let p = Personality::new();
         let ctx = p.to_llm_context();
-        assert!(ctx.contains("Personality:"), "context should start with Personality:");
-        assert!(ctx.contains("archetype:"), "context should include archetype");
-        assert!(ctx.contains("evolutions"), "context should include evolution count");
+        assert!(
+            ctx.contains("Personality:"),
+            "context should start with Personality:"
+        );
+        assert!(
+            ctx.contains("archetype:"),
+            "context should include archetype"
+        );
+        assert!(
+            ctx.contains("evolutions"),
+            "context should include evolution count"
+        );
     }
 
     // ==================== Archetype tests ==================================

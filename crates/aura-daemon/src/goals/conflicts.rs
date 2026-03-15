@@ -3,11 +3,11 @@
 //!
 //! # Conflict Types
 //!
-//! - **Resource**: Two goals need the same app/resource simultaneously
-//!   (e.g., two goals both need the camera).
+//! - **Resource**: Two goals need the same app/resource simultaneously (e.g., two goals both need
+//!   the camera).
 //! - **Temporal**: Goals have overlapping deadline windows that cannot both be met.
-//! - **Logical**: Goals are mutually exclusive by intent (e.g., "enable dark mode"
-//!   vs. "enable light mode").
+//! - **Logical**: Goals are mutually exclusive by intent (e.g., "enable dark mode" vs. "enable
+//!   light mode").
 //!
 //! # Resolution Strategies
 //!
@@ -271,7 +271,7 @@ impl ConflictResolver {
                     winner,
                     deferred,
                 )
-            }
+            },
             ConflictType::Temporal => {
                 // Try temporal scheduling — if both have deadlines, schedule sequentially.
                 let (winner, deferred) = if conflict.score_a >= conflict.score_b {
@@ -285,7 +285,7 @@ impl ConflictResolver {
                     winner,
                     deferred,
                 )
-            }
+            },
             ConflictType::Logical => {
                 // Logical conflicts are harder — if scores are close, ask user.
                 let score_diff = (conflict.score_a - conflict.score_b).abs();
@@ -311,7 +311,7 @@ impl ConflictResolver {
                         deferred,
                     )
                 }
-            }
+            },
         };
 
         conflict.resolved = true;
@@ -483,7 +483,7 @@ impl ConflictResolver {
             Err(_) => {
                 tracing::warn!("conflict capacity exceeded, dropping new conflict");
                 None
-            }
+            },
         }
     }
 
@@ -539,11 +539,26 @@ impl ConflictResolver {
         }
 
         // They must share at least one non-action subject keyword.
-        let all_action: Vec<&str> = ENABLE_WORDS.iter().chain(DISABLE_WORDS.iter()).copied().collect();
-        let a_subjects: Vec<&str> = a_kw.iter().filter(|w| !all_action.contains(w)).copied().collect();
-        let b_subjects: Vec<&str> = b_kw.iter().filter(|w| !all_action.contains(w)).copied().collect();
+        let all_action: Vec<&str> = ENABLE_WORDS
+            .iter()
+            .chain(DISABLE_WORDS.iter())
+            .copied()
+            .collect();
+        let a_subjects: Vec<&str> = a_kw
+            .iter()
+            .filter(|w| !all_action.contains(w))
+            .copied()
+            .collect();
+        let b_subjects: Vec<&str> = b_kw
+            .iter()
+            .filter(|w| !all_action.contains(w))
+            .copied()
+            .collect();
 
-        let shared: Vec<&&str> = a_subjects.iter().filter(|w| b_subjects.contains(w)).collect();
+        let shared: Vec<&&str> = a_subjects
+            .iter()
+            .filter(|w| b_subjects.contains(w))
+            .collect();
         if shared.is_empty() {
             return None;
         }

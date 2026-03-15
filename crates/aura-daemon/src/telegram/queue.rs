@@ -5,13 +5,11 @@
 //! dequeued in priority order and sent. Messages with the same `coalesce_key`
 //! are merged (newer replaces older) to avoid spamming status updates.
 
+use aura_types::errors::AuraError;
+use bincode::config::standard as bincode_config;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
-
-use bincode::config::standard as bincode_config;
-
-use aura_types::errors::AuraError;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -258,7 +256,7 @@ impl MessageQueue {
                     Err(e) => {
                         warn!(id, "failed to deserialize queued message: {e}");
                         continue;
-                    }
+                    },
                 };
 
             ids_to_mark.push(id);

@@ -14,12 +14,14 @@
 //!
 //! All public functions return `Result<T, AuraError>` — no panics.
 
-use aura_types::actions::{ActionType, ScrollDirection, TargetSelector};
-use aura_types::dsl::{DslStep, FailureStrategy, ToolCall, ToolCallResult};
-use aura_types::errors::{AuraError, LlmError};
-use aura_types::etg::{ActionPlan, PlanSource};
-use aura_types::ipc::InferenceMode;
-use aura_types::tools::{find_tool, ParamValue, RiskLevel, TOOL_REGISTRY};
+use aura_types::{
+    actions::{ActionType, ScrollDirection, TargetSelector},
+    dsl::{DslStep, FailureStrategy, ToolCall, ToolCallResult},
+    errors::{AuraError, LlmError},
+    etg::{ActionPlan, PlanSource},
+    ipc::InferenceMode,
+    tools::{find_tool, ParamValue, RiskLevel, TOOL_REGISTRY},
+};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -98,7 +100,7 @@ pub fn parse_action_plan(json: &str) -> Result<ActionPlan, AuraError> {
             Ok(step) => steps.push(step),
             Err(e) => {
                 tracing::warn!(step_index = i, error = %e, "skipping malformed plan step");
-            }
+            },
         }
     }
 
@@ -130,7 +132,7 @@ pub fn parse_dsl_step(value: &serde_json::Value) -> Result<DslStep, AuraError> {
                 "DSL step: missing action field".into(),
             ))
         })
-        .and_then(|v| parse_action_type(v))?;
+        .and_then(parse_action_type)?;
 
     let target = obj
         .get("target")
@@ -193,7 +195,7 @@ pub fn parse_dsl_steps(json: &str) -> Result<Vec<DslStep>, AuraError> {
             Ok(step) => steps.push(step),
             Err(e) => {
                 tracing::warn!(step_index = i, error = %e, "skipping malformed DSL step");
-            }
+            },
         }
     }
 
@@ -227,12 +229,12 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
             let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Ok(ActionType::Tap { x, y })
-        }
+        },
         "longpress" | "long_press" => {
             let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Ok(ActionType::LongPress { x, y })
-        }
+        },
         "swipe" => {
             let from_x = obj.get("from_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let from_y = obj.get("from_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -249,7 +251,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 to_y,
                 duration_ms,
             })
-        }
+        },
         "type" | "text" => {
             let text = obj
                 .get("text")
@@ -257,7 +259,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 .unwrap_or("")
                 .to_string();
             Ok(ActionType::Type { text })
-        }
+        },
         "scroll" => {
             let direction = obj
                 .get("direction")
@@ -266,7 +268,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 .unwrap_or(ScrollDirection::Down);
             let amount = obj.get("amount").and_then(|v| v.as_i64()).unwrap_or(300) as i32;
             Ok(ActionType::Scroll { direction, amount })
-        }
+        },
         "back" => Ok(ActionType::Back),
         "home" => Ok(ActionType::Home),
         "recents" => Ok(ActionType::Recents),
@@ -277,7 +279,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 .unwrap_or("")
                 .to_string();
             Ok(ActionType::OpenApp { package })
-        }
+        },
         _ => Err(AuraError::Llm(LlmError::InferenceFailed(format!(
             "unknown action type: {type_str}"
         )))),
@@ -326,16 +328,16 @@ fn parse_target_selector(value: &serde_json::Value) -> Result<TargetSelector, Au
         "text" => Ok(TargetSelector::Text(val)),
         "content_description" | "contentdescription" | "description" => {
             Ok(TargetSelector::ContentDescription(val))
-        }
+        },
         "class_name" | "classname" | "class" => Ok(TargetSelector::ClassName(val)),
         "coordinates" | "coords" => {
             let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Ok(TargetSelector::Coordinates { x, y })
-        }
+        },
         "llm_description" | "llmdescription" | "description_llm" => {
             Ok(TargetSelector::LlmDescription(val))
-        }
+        },
         _ => {
             // Last resort: if there's a "value" field, treat as LLM description.
             if !val.is_empty() {
@@ -345,7 +347,7 @@ fn parse_target_selector(value: &serde_json::Value) -> Result<TargetSelector, Au
                     "unknown target selector type: {type_str}"
                 ))))
             }
-        }
+        },
     }
 }
 
@@ -377,7 +379,7 @@ fn parse_failure_strategy(value: &serde_json::Value) -> Result<FailureStrategy, 
                 "retry" => {
                     let max = obj.get("max").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
                     Ok(FailureStrategy::Retry { max })
-                }
+                },
                 "skip" => Ok(FailureStrategy::Skip),
                 "abort" => Ok(FailureStrategy::Abort),
                 "ask_user" | "askuser" => {
@@ -387,7 +389,7 @@ fn parse_failure_strategy(value: &serde_json::Value) -> Result<FailureStrategy, 
                         .unwrap_or("What should I do?")
                         .to_string();
                     Ok(FailureStrategy::AskUser(msg))
-                }
+                },
                 _ => Ok(FailureStrategy::default()),
             };
         }
@@ -496,14 +498,14 @@ fn json_to_param_value(value: &serde_json::Value) -> ParamValue {
 ///
 /// **Not yet called externally.** Wire this when the following are implemented:
 ///
-/// - **ALPHA** (`ipc_handler.rs` → `handle_inference()`): When a `Replan` or
-///   `Strategist` request arrives and `payload.previous_plan` is `Some(_)`,
-///   call `format_plan_for_context(&previous_plan)` and inject the result into
-///   the `ContextBuilder` before dispatching to the inference engine.
+/// - **ALPHA** (`ipc_handler.rs` → `handle_inference()`): When a `Replan` or `Strategist` request
+///   arrives and `payload.previous_plan` is `Some(_)`, call
+///   `format_plan_for_context(&previous_plan)` and inject the result into the `ContextBuilder`
+///   before dispatching to the inference engine.
 ///
-/// - **EPSILON** (`context.rs` → `ContextBuilder::build()`): Alongside the
-///   existing `previous_attempt` injection, inject the previous plan text so
-///   the LLM can reason about what it previously produced vs. what failed.
+/// - **EPSILON** (`context.rs` → `ContextBuilder::build()`): Alongside the existing
+///   `previous_attempt` injection, inject the previous plan text so the LLM can reason about what
+///   it previously produced vs. what failed.
 ///
 /// DO NOT DELETE — part of the re-planning feedback loop.
 #[allow(dead_code)]
@@ -543,15 +545,14 @@ pub fn format_plan_for_context(plan: &ActionPlan) -> String {
 ///
 /// **Not yet called externally.** Wire this when the following are implemented:
 ///
-/// - **ALPHA** (`ipc_handler.rs` → `DaemonToNeocortex::ReActStep` handler,
-///   ~lines 341–355): The current handler builds a raw observation string
-///   manually. Once the daemon sends typed `ToolCallResult` structs instead of
-///   raw strings, replace that manual construction with a call to this function.
+/// - **ALPHA** (`ipc_handler.rs` → `DaemonToNeocortex::ReActStep` handler, ~lines 341–355): The
+///   current handler builds a raw observation string manually. Once the daemon sends typed
+///   `ToolCallResult` structs instead of raw strings, replace that manual construction with a call
+///   to this function.
 ///
-/// - **BETA** (`inference.rs` → `infer_react_loop()`, ~lines 617–626): When
-///   assembling the observation turn after a tool call returns, call
-///   `format_tool_result_for_context(&result)` to produce the observation text
-///   instead of constructing it inline.
+/// - **BETA** (`inference.rs` → `infer_react_loop()`, ~lines 617–626): When assembling the
+///   observation turn after a tool call returns, call `format_tool_result_for_context(&result)` to
+///   produce the observation text instead of constructing it inline.
 ///
 /// Prerequisite: daemon IPC must be updated to send `ToolCallResult` typed
 /// payloads rather than `(tool_name: String, observation: String)` pairs.
@@ -631,10 +632,10 @@ pub fn format_action_brief(action: &ActionType) -> String {
                 text.clone()
             };
             format!("Type(\"{preview}\")")
-        }
+        },
         ActionType::Scroll { direction, amount } => {
             format!("Scroll({direction:?},{amount})")
-        }
+        },
         ActionType::Back => "Back".to_string(),
         ActionType::Home => "Home".to_string(),
         ActionType::Recents => "Recents".to_string(),
@@ -648,10 +649,10 @@ pub fn format_action_brief(action: &ActionType) -> String {
             timeout_ms,
         } => {
             format!("WaitFor({selector:?},{}ms)", timeout_ms)
-        }
+        },
         ActionType::AssertElement { selector, expected } => {
             format!("Assert({selector:?}={expected:?})")
-        }
+        },
     }
 }
 
@@ -681,11 +682,11 @@ pub fn parse_for_mode(mode: InferenceMode, output: &str) -> Result<ParsedOutput,
         InferenceMode::Planner | InferenceMode::Strategist => {
             let plan = parse_action_plan(output)?;
             Ok(ParsedOutput::Plan(plan))
-        }
+        },
         InferenceMode::Composer => {
             let steps = parse_dsl_steps(output)?;
             Ok(ParsedOutput::Steps(steps))
-        }
+        },
         InferenceMode::Conversational => {
             let reply = output.trim().to_string();
             if reply.is_empty() {
@@ -694,7 +695,7 @@ pub fn parse_for_mode(mode: InferenceMode, output: &str) -> Result<ParsedOutput,
                 )));
             }
             Ok(ParsedOutput::Reply(reply))
-        }
+        },
     }
 }
 

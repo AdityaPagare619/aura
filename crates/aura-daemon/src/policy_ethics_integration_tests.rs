@@ -8,24 +8,32 @@
 
 #[cfg(test)]
 mod policy_ethics_tests {
-    use crate::daemon_core::react::{
-        execute_task, AgenticSession, ExecutionMode, ExecutionStrategy, Iteration, TaskOutcome,
-        ToolCall,
-    };
-    use crate::identity::anti_sycophancy::{
-        GateResult, ResponseRecord, SycophancyGuard, SycophancyVerdict,
-    };
-    use crate::identity::ethics::{
-        check_manipulation, ActionContext, ManipulationVerdict, PolicyGate as EthicsPolicyGate,
-        PolicyVerdict, TruthFramework, TruthValidation,
-    };
-    use crate::identity::IdentityEngine;
-    use crate::policy::audit::{AuditLevel, AuditLog, AuditResult};
-    use crate::policy::gate::{PolicyDecision, PolicyGate, RateLimiter};
-    use crate::policy::rules::RuleEffect;
-    use aura_types::actions::ActionResult;
-    use aura_types::config::{PolicyConfig, PolicyRuleConfig};
     use std::time::Duration;
+
+    use aura_types::{
+        actions::ActionResult,
+        config::{PolicyConfig, PolicyRuleConfig},
+    };
+
+    use crate::{
+        daemon_core::react::{
+            execute_task, AgenticSession, ExecutionMode, ExecutionStrategy, Iteration, TaskOutcome,
+            ToolCall,
+        },
+        identity::{
+            anti_sycophancy::{GateResult, ResponseRecord, SycophancyGuard, SycophancyVerdict},
+            ethics::{
+                check_manipulation, ActionContext, ManipulationVerdict,
+                PolicyGate as EthicsPolicyGate, PolicyVerdict, TruthFramework, TruthValidation,
+            },
+            IdentityEngine,
+        },
+        policy::{
+            audit::{AuditLevel, AuditLog, AuditResult},
+            gate::{PolicyDecision, PolicyGate, RateLimiter},
+            rules::RuleEffect,
+        },
+    };
 
     // =========================================================================
     // PolicyGate Action Path Tests
@@ -146,7 +154,8 @@ mod policy_ethics_tests {
     #[test]
     fn test_truth_framework_clean_response_passes() {
         let tf = TruthFramework::new();
-        let validation = tf.validate_response("Here is a helpful answer with detailed steps for you to try.");
+        let validation =
+            tf.validate_response("Here is a helpful answer with detailed steps for you to try.");
         assert!(validation.passes);
         assert!(validation.overall > 0.8);
     }
@@ -162,14 +171,16 @@ mod policy_ethics_tests {
     #[test]
     fn test_truth_framework_detects_bias() {
         let tf = TruthFramework::new();
-        let validation = tf.validate_response("Obviously no sane person would disagree with this approach.");
+        let validation =
+            tf.validate_response("Obviously no sane person would disagree with this approach.");
         assert!(validation.unbiased < 1.0);
     }
 
     #[test]
     fn test_truth_framework_detects_evasion() {
         let tf = TruthFramework::new();
-        let validation = tf.validate_response("Just trust me on this, don't ask why we need to do it.");
+        let validation =
+            tf.validate_response("Just trust me on this, don't ask why we need to do it.");
         assert!(validation.transparent < 1.0);
     }
 
@@ -220,7 +231,10 @@ mod policy_ethics_tests {
             });
         }
         let verdict = guard.evaluate();
-        assert!(matches!(verdict, SycophancyVerdict::Block(_) | SycophancyVerdict::Warn(_)));
+        assert!(matches!(
+            verdict,
+            SycophancyVerdict::Block(_) | SycophancyVerdict::Warn(_)
+        ));
     }
 
     #[test]
@@ -263,7 +277,10 @@ mod policy_ethics_tests {
         }
         let result = guard.gate();
         // Either Warn or Block is acceptable for mixed responses
-        assert!(matches!(result, GateResult::Nudge { .. } | GateResult::Block { .. }));
+        assert!(matches!(
+            result,
+            GateResult::Nudge { .. } | GateResult::Block { .. }
+        ));
     }
 
     #[test]
@@ -279,7 +296,7 @@ mod policy_ethics_tests {
                 challenged: false,
             });
         }
-        
+
         // Should request regeneration up to MAX times
         assert!(guard.should_regenerate());
         assert!(guard.should_regenerate());
@@ -328,12 +345,9 @@ mod policy_ethics_tests {
     #[test]
     fn test_audit_log_records_decisions() {
         let mut log = AuditLog::new(100);
-        let seq = log.log_policy_decision(
-            "tap(100,200)",
-            &RuleEffect::Allow,
-            "safe navigation",
-            0,
-        ).unwrap();
+        let seq = log
+            .log_policy_decision("tap(100,200)", &RuleEffect::Allow, "safe navigation", 0)
+            .unwrap();
         assert_eq!(seq, 0);
         assert_eq!(log.len(), 1);
     }
@@ -341,12 +355,8 @@ mod policy_ethics_tests {
     #[test]
     fn test_audit_log_records_denial() {
         let mut log = AuditLog::new(100);
-        log.log_policy_decision(
-            "factory reset",
-            &RuleEffect::Deny,
-            "destructive action",
-            0,
-        ).unwrap();
+        log.log_policy_decision("factory reset", &RuleEffect::Deny, "destructive action", 0)
+            .unwrap();
         let entry = log.entries().front().unwrap();
         assert!(matches!(entry.result, AuditResult::Denied(_)));
     }
@@ -354,9 +364,12 @@ mod policy_ethics_tests {
     #[test]
     fn test_audit_log_chain_integrity() {
         let mut log = AuditLog::new(100);
-        log.log_policy_decision("a1", &RuleEffect::Allow, "test", 0).unwrap();
-        log.log_policy_decision("a2", &RuleEffect::Allow, "test", 0).unwrap();
-        log.log_policy_decision("a3", &RuleEffect::Allow, "test", 0).unwrap();
+        log.log_policy_decision("a1", &RuleEffect::Allow, "test", 0)
+            .unwrap();
+        log.log_policy_decision("a2", &RuleEffect::Allow, "test", 0)
+            .unwrap();
+        log.log_policy_decision("a3", &RuleEffect::Allow, "test", 0)
+            .unwrap();
         assert!(log.verify_chain().is_ok());
     }
 
@@ -426,7 +439,7 @@ mod policy_ethics_tests {
         // Low trust: audit becomes block
         let verdict = gate.check_with_trust("com.example", "show password reset", 0.1);
         assert!(matches!(verdict, PolicyVerdict::Block { .. }));
-        
+
         // High trust: audit becomes allow
         let verdict = gate.check_with_trust("com.example", "show password reset", 0.8);
         assert_eq!(verdict, PolicyVerdict::Allow);
@@ -438,10 +451,8 @@ mod policy_ethics_tests {
 
     #[tokio::test]
     async fn test_execute_task_with_policy_blocks_dangerous() {
-        use aura_types::dsl::DslStep;
-        use aura_types::etg::ActionPlan;
-        use aura_types::actions::ActionType;
-        
+        use aura_types::{actions::ActionType, dsl::DslStep, etg::ActionPlan};
+
         let plan = ActionPlan {
             goal_description: "perform factory reset".to_string(),
             steps: vec![DslStep {
@@ -464,17 +475,21 @@ mod policy_ethics_tests {
             5,
             Some(plan.clone()),
             None,
-        ).await;
+        )
+        .await;
 
         // In standalone mode, no policy means it proceeds
         // This test verifies the execute_task function works
-        assert!(matches!(outcome, TaskOutcome::Success { .. } | TaskOutcome::Failed { .. }));
+        assert!(matches!(
+            outcome,
+            TaskOutcome::Success { .. } | TaskOutcome::Failed { .. }
+        ));
     }
 
     #[test]
     fn test_policy_context_check_action_returns_none_for_allowed() {
         use crate::daemon_core::react::PolicyContext;
-        
+
         let config = PolicyConfig {
             default_effect: "allow".to_string(),
             log_all_decisions: false,
@@ -483,12 +498,12 @@ mod policy_ethics_tests {
         };
         let mut gate = PolicyGate::from_config(&config).unwrap();
         let mut audit = AuditLog::new(100);
-        
+
         let mut ctx = PolicyContext {
             gate: &mut gate,
             audit: &mut audit,
         };
-        
+
         let result = ctx.check_action("safe action");
         assert!(result.is_none());
     }
@@ -496,7 +511,7 @@ mod policy_ethics_tests {
     #[test]
     fn test_policy_context_check_action_returns_error_for_denied() {
         use crate::daemon_core::react::PolicyContext;
-        
+
         let config = PolicyConfig {
             default_effect: "allow".to_string(),
             log_all_decisions: false,
@@ -511,12 +526,12 @@ mod policy_ethics_tests {
         };
         let mut gate = PolicyGate::from_config(&config).unwrap();
         let mut audit = AuditLog::new(100);
-        
+
         let mut ctx = PolicyContext {
             gate: &mut gate,
             audit: &mut audit,
         };
-        
+
         let result = ctx.check_action("do dangerous thing");
         assert!(result.is_some());
         assert!(!result.unwrap().success);

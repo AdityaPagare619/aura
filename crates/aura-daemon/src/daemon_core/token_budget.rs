@@ -124,7 +124,9 @@ impl TokenBudgetManager {
     /// Returns 0 if consumption already exceeds the planning budget.
     #[must_use]
     pub fn available_tokens(&self) -> u32 {
-        let planning_budget = self.session_tokens_limit.saturating_sub(self.response_reserve);
+        let planning_budget = self
+            .session_tokens_limit
+            .saturating_sub(self.response_reserve);
         planning_budget.saturating_sub(self.session_tokens_used)
     }
 
@@ -148,7 +150,10 @@ impl TokenBudgetManager {
         }
 
         if pct >= self.force_compaction_threshold {
-            return BudgetStatus::Critical { available, used_pct: pct };
+            return BudgetStatus::Critical {
+                available,
+                used_pct: pct,
+            };
         }
 
         if pct >= self.compaction_threshold {
@@ -159,7 +164,10 @@ impl TokenBudgetManager {
             };
         }
 
-        BudgetStatus::Healthy { available, used_pct: pct }
+        BudgetStatus::Healthy {
+            available,
+            used_pct: pct,
+        }
     }
 
     /// Returns `true` if the budget has crossed the compaction threshold.
@@ -235,8 +243,9 @@ impl TokenBudgetManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::config::TokenBudgetConfig;
+
+    use super::*;
 
     fn make_manager() -> TokenBudgetManager {
         TokenBudgetManager::new(TokenBudgetConfig::default())
@@ -266,7 +275,10 @@ mod tests {
             matches!(status, BudgetStatus::Warning { .. }),
             "80% usage must yield Warning, got {status:?}"
         );
-        assert!(mgr.should_summarize(), "should_summarize must be true at 80%");
+        assert!(
+            mgr.should_summarize(),
+            "should_summarize must be true at 80%"
+        );
         assert!(!mgr.must_summarize(), "must_summarize must be false at 80%");
     }
 

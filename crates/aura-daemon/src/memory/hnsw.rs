@@ -4,8 +4,7 @@
 //! Parameters: M=16, ef_construction=200, ef_search=50.
 //! Distance metric: cosine distance (1 - cosine_similarity).
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::{cmp::Ordering, collections::BinaryHeap};
 
 use aura_types::errors::{AuraError, MemError};
 use tracing::{info, instrument, warn};
@@ -370,10 +369,10 @@ impl HnswIndex {
             match fresh.insert(embedding) {
                 Ok(new_id) => {
                     id_map.push((*old_id, new_id));
-                }
+                },
                 Err(e) => {
                     warn!(old_id, ?e, "compact: failed to re-insert node, skipping");
-                }
+                },
             }
         }
 
@@ -932,12 +931,7 @@ mod tests {
         // Insert 10 random-ish vectors.
         let mut ids = Vec::new();
         for i in 0..10u32 {
-            let v = vec![
-                (i as f32 * 0.1).sin(),
-                (i as f32 * 0.2).cos(),
-                0.5,
-                0.5,
-            ];
+            let v = vec![(i as f32 * 0.1).sin(), (i as f32 * 0.2).cos(), 0.5, 0.5];
             ids.push(idx.insert(&v).expect("insert"));
         }
         assert_eq!(idx.len(), 10);

@@ -10,11 +10,10 @@
 
 use std::time::Duration;
 
+use aura_types::errors::AuraError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, instrument, warn};
-
-use aura_types::errors::AuraError;
 
 use super::queue::{MessageContent, MessageQueue};
 
@@ -133,11 +132,15 @@ pub struct StubHttpBackend;
 #[async_trait::async_trait]
 impl HttpBackend for StubHttpBackend {
     async fn get(&self, _url: &str) -> Result<Vec<u8>, AuraError> {
-        Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+        Err(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))
     }
 
     async fn post_json(&self, _url: &str, _body: &[u8]) -> Result<Vec<u8>, AuraError> {
-        Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+        Err(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))
     }
 
     async fn post_multipart(
@@ -146,7 +149,9 @@ impl HttpBackend for StubHttpBackend {
         _fields: Vec<(&str, String)>,
         _file_field: Option<(&str, Vec<u8>, &str)>,
     ) -> Result<Vec<u8>, AuraError> {
-        Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
+        Err(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))
     }
 }
 
@@ -175,11 +180,7 @@ impl TelegramPoller {
     /// Create a new poller.
     ///
     /// `bot_token` is the Telegram Bot API token (e.g., `123456:ABC-DEF...`).
-    pub fn new(
-        bot_token: String,
-        allowed_chat_ids: Vec<i64>,
-        http: Box<dyn HttpBackend>,
-    ) -> Self {
+    pub fn new(bot_token: String, allowed_chat_ids: Vec<i64>, http: Box<dyn HttpBackend>) -> Self {
         let base_url = format!("https://api.telegram.org/bot{bot_token}");
         Self {
             bot_token,
@@ -229,7 +230,9 @@ impl TelegramPoller {
                         // Pre-download voice data so the handler can process it
                         // without needing direct access to the HTTP backend.
                         let mut update = update;
-                        if let Some(NonTextContent::Voice { ref file_id, .. }) = update.non_text_content {
+                        if let Some(NonTextContent::Voice { ref file_id, .. }) =
+                            update.non_text_content
+                        {
                             match self.download_file(file_id).await {
                                 Ok(bytes) => {
                                     debug!(
@@ -238,11 +241,11 @@ impl TelegramPoller {
                                         "pre-downloaded voice message"
                                     );
                                     update.voice_data = Some(bytes);
-                                }
+                                },
                                 Err(e) => {
                                     warn!(error = %e, "failed to download voice file — handler will use text fallback");
                                     // voice_data stays None — handler falls back gracefully.
-                                }
+                                },
                             }
                         }
 
@@ -257,11 +260,11 @@ impl TelegramPoller {
                             return Ok(());
                         }
                     }
-                }
+                },
                 Err(e) => {
                     warn!(error = %e, "getUpdates failed — will retry after backoff");
                     tokio::time::sleep(Duration::from_secs(5)).await;
-                }
+                },
             }
         }
     }
@@ -276,13 +279,13 @@ impl TelegramPoller {
         );
 
         let body = self.http.get(&url).await?;
-        let resp: TelegramApiResponse<Vec<serde_json::Value>> =
-            serde_json::from_slice(&body).map_err(|_e| {
-                AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-            })?;
+        let resp: TelegramApiResponse<Vec<serde_json::Value>> = serde_json::from_slice(&body)
+            .map_err(|_e| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         if !resp.ok {
-            return Err(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed));
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
         }
 
         let raw_updates = resp.result.unwrap_or_default();
@@ -315,21 +318,17 @@ impl TelegramPoller {
             payload["parse_mode"] = serde_json::Value::String(pm.to_string());
         }
 
-        let body_bytes = serde_json::to_vec(&payload).map_err(|_| {
-            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-        })?;
+        let body_bytes = serde_json::to_vec(&payload)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         let url = format!("{}/sendMessage", self.base_url);
         let resp_bytes = self.http.post_json(&url, &body_bytes).await?;
 
-        let resp: TelegramApiResponse<SentMessage> =
-            serde_json::from_slice(&resp_bytes).map_err(|_| {
-                AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-            })?;
+        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
-        resp.result.ok_or_else(|| {
-            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-        })
+        resp.result
+            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
     }
 
     /// Edit an existing message.
@@ -351,9 +350,8 @@ impl TelegramPoller {
             payload["parse_mode"] = serde_json::Value::String(pm.to_string());
         }
 
-        let body_bytes = serde_json::to_vec(&payload).map_err(|_| {
-            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-        })?;
+        let body_bytes = serde_json::to_vec(&payload)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         let url = format!("{}/editMessageText", self.base_url);
         let _ = self.http.post_json(&url, &body_bytes).await?;
@@ -376,14 +374,11 @@ impl TelegramPoller {
 
         let resp_bytes = self.http.post_multipart(&url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> =
-            serde_json::from_slice(&resp_bytes).map_err(|_| {
-                AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-            })?;
+        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
-        resp.result.ok_or_else(|| {
-            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-        })
+        resp.result
+            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
     }
 
     /// Send an OGG/Opus voice message.
@@ -406,14 +401,11 @@ impl TelegramPoller {
 
         let resp_bytes = self.http.post_multipart(&url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> =
-            serde_json::from_slice(&resp_bytes).map_err(|_| {
-                AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-            })?;
+        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
-        resp.result.ok_or_else(|| {
-            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-        })
+        resp.result
+            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))
     }
 
     /// Download a file from Telegram by file_id.
@@ -423,18 +415,16 @@ impl TelegramPoller {
         // Step 1: getFile to get the file_path.
         let url = format!("{}/getFile", self.base_url);
         let payload = serde_json::json!({ "file_id": file_id });
-        let body_bytes = serde_json::to_vec(&payload).map_err(|_| {
-            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-        })?;
+        let body_bytes = serde_json::to_vec(&payload)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
         let resp_bytes = self.http.post_json(&url, &body_bytes).await?;
 
         // Parse the file path from the response.
-        let resp: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|_| {
-            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-        })?;
-        let file_path = resp["result"]["file_path"]
-            .as_str()
-            .ok_or(AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?;
+        let resp: serde_json::Value = serde_json::from_slice(&resp_bytes)
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        let file_path = resp["result"]["file_path"].as_str().ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::ConnectionFailed,
+        ))?;
 
         // Step 2: Download the actual file content.
         // base_url is like https://api.telegram.org/bot<TOKEN>
@@ -451,22 +441,21 @@ impl TelegramPoller {
     /// Send all pending messages from the offline queue.
     async fn flush_queue(&self, queue: &MessageQueue) -> Result<(), AuraError> {
         // Use spawn_blocking for the SQLite read.
-        // In real code: let batch = tokio::task::spawn_blocking(|| queue.dequeue_batch(10)).await??;
-        // For now, since MessageQueue isn't Send, we call directly (acceptable for single-threaded runtime).
+        // In real code: let batch = tokio::task::spawn_blocking(||
+        // queue.dequeue_batch(10)).await??; For now, since MessageQueue isn't Send, we call
+        // directly (acceptable for single-threaded runtime).
         let batch = queue.dequeue_batch(10)?;
 
         for msg in &batch {
             let result = match &msg.content {
-                MessageContent::Text { text, parse_mode } => {
-                    self.send_message(msg.chat_id, text, parse_mode.as_deref())
-                        .await
-                        .map(|_| ())
-                }
-                MessageContent::Photo { data, caption } => {
-                    self.send_photo(msg.chat_id, data, caption)
-                        .await
-                        .map(|_| ())
-                }
+                MessageContent::Text { text, parse_mode } => self
+                    .send_message(msg.chat_id, text, parse_mode.as_deref())
+                    .await
+                    .map(|_| ()),
+                MessageContent::Photo { data, caption } => self
+                    .send_photo(msg.chat_id, data, caption)
+                    .await
+                    .map(|_| ()),
                 MessageContent::EditText {
                     message_id,
                     text,
@@ -474,27 +463,26 @@ impl TelegramPoller {
                 } => {
                     self.edit_message(msg.chat_id, *message_id, text, parse_mode.as_deref())
                         .await
-                }
+                },
                 MessageContent::Voice {
                     data,
                     duration_secs,
                     caption,
-                } => {
-                    self.send_voice(msg.chat_id, data, *duration_secs, caption.as_deref())
-                        .await
-                        .map(|_| ())
-                }
+                } => self
+                    .send_voice(msg.chat_id, data, *duration_secs, caption.as_deref())
+                    .await
+                    .map(|_| ()),
             };
 
             match result {
                 Ok(()) => {
                     queue.mark_sent(msg.id)?;
                     debug!(id = msg.id, "message sent from queue");
-                }
+                },
                 Err(e) => {
                     warn!(id = msg.id, error = %e, "failed to send queued message");
                     queue.mark_failed(msg.id)?;
-                }
+                },
             }
         }
 
@@ -539,8 +527,14 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
     // Try message first, then callback_query.
     if let Some(msg) = raw.get("message") {
         let chat_id = msg.get("chat")?.get("id")?.as_i64()?;
-        let from_user_id = msg.get("from").and_then(|f| f.get("id")).and_then(|id| id.as_i64());
-        let text = msg.get("text").and_then(|t| t.as_str()).map(|s| s.to_string());
+        let from_user_id = msg
+            .get("from")
+            .and_then(|f| f.get("id"))
+            .and_then(|id| id.as_i64());
+        let text = msg
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string());
         let message_id = msg.get("message_id").and_then(|m| m.as_i64());
 
         // Detect non-text content types from the Telegram message object.
@@ -553,10 +547,7 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
                     .and_then(|f| f.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                duration_secs: voice
-                    .get("duration")
-                    .and_then(|d| d.as_u64())
-                    .unwrap_or(0) as u32,
+                duration_secs: voice.get("duration").and_then(|d| d.as_u64()).unwrap_or(0) as u32,
             })
         } else if let Some(audio) = msg.get("audio") {
             Some(NonTextContent::Audio {
@@ -635,8 +626,14 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
 
     if let Some(cb) = raw.get("callback_query") {
         let chat_id = cb.get("message")?.get("chat")?.get("id")?.as_i64()?;
-        let from_user_id = cb.get("from").and_then(|f| f.get("id")).and_then(|id| id.as_i64());
-        let data = cb.get("data").and_then(|d| d.as_str()).map(|s| s.to_string());
+        let from_user_id = cb
+            .get("from")
+            .and_then(|f| f.get("id"))
+            .and_then(|id| id.as_i64());
+        let data = cb
+            .get("data")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string());
         let message_id = cb
             .get("message")
             .and_then(|m| m.get("message_id"))
@@ -694,7 +691,10 @@ mod tests {
         assert_eq!(update.chat_id, 42);
         assert_eq!(update.text, Some("/status".to_string()));
         assert_eq!(update.message_id, Some(1));
-        assert!(update.non_text_content.is_none(), "pure text should have no non_text_content");
+        assert!(
+            update.non_text_content.is_none(),
+            "pure text should have no non_text_content"
+        );
     }
 
     #[test]
@@ -739,10 +739,13 @@ mod tests {
         assert_eq!(update.chat_id, 42);
         assert!(update.text.is_none());
         match &update.non_text_content {
-            Some(NonTextContent::Voice { file_id, duration_secs }) => {
+            Some(NonTextContent::Voice {
+                file_id,
+                duration_secs,
+            }) => {
                 assert_eq!(file_id, "AwACAgIAAxkBAAI_voice_id");
                 assert_eq!(*duration_secs, 5);
-            }
+            },
             other => panic!("expected Voice, got {:?}", other),
         }
     }
@@ -767,7 +770,7 @@ mod tests {
         match &update.non_text_content {
             Some(NonTextContent::Photo { file_id }) => {
                 assert_eq!(file_id, "large_id", "should pick the largest photo");
-            }
+            },
             other => panic!("expected Photo, got {:?}", other),
         }
     }
@@ -792,7 +795,7 @@ mod tests {
         match &update.non_text_content {
             Some(NonTextContent::Sticker { emoji }) => {
                 assert_eq!(emoji.as_deref(), Some("😀"));
-            }
+            },
             other => panic!("expected Sticker, got {:?}", other),
         }
     }
@@ -830,11 +833,8 @@ mod tests {
 
     #[test]
     fn test_poller_offset_persistence() {
-        let mut poller = TelegramPoller::new(
-            "123:ABC".to_string(),
-            vec![42],
-            Box::new(StubHttpBackend),
-        );
+        let mut poller =
+            TelegramPoller::new("123:ABC".to_string(), vec![42], Box::new(StubHttpBackend));
         poller.set_offset(500);
         assert_eq!(poller.offset(), 500);
     }

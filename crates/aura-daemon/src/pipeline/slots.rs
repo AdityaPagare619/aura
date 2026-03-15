@@ -5,9 +5,8 @@
 //! 1. Infers them from context (recent conversation, working memory)
 //! 2. Generates a natural clarification question for the user
 
-use tracing::{debug, instrument, trace};
-
 use aura_types::tools::{find_tool, ParamType, ToolSchema};
+use tracing::{debug, instrument, trace};
 
 use super::entity::{Entity, EntityType};
 
@@ -98,14 +97,14 @@ impl ConversationContext {
             match entity.entity_type {
                 EntityType::Contact => {
                     self.last_contact = Some(entity.value.clone());
-                }
+                },
                 EntityType::App => {
                     self.last_app = Some(entity.value.clone());
-                }
+                },
                 EntityType::Time => {
                     self.last_time = Some(entity.value.clone());
-                }
-                _ => {}
+                },
+                _ => {},
             }
             self.recent_entities.push(entity.clone());
         }
@@ -149,7 +148,7 @@ impl SlotFiller {
                     missing: vec![tool_name.to_string()],
                     clarification: Some(format!("Unknown tool: {}", tool_name)),
                 };
-            }
+            },
         };
 
         let mut slots = build_slots(tool);
@@ -309,7 +308,9 @@ fn generate_clarification(tool: &ToolSchema, missing: &[String]) -> String {
         }
     } else {
         let names: Vec<&str> = missing.iter().map(|s| s.as_str()).collect();
-        let last = names.last().expect("names is non-empty: inside else branch where missing.len() > 1");
+        let last = names
+            .last()
+            .expect("names is non-empty: inside else branch where missing.len() > 1");
         if names.len() == 2 {
             format!("I need the {} and the {}.", names[0], last)
         } else {

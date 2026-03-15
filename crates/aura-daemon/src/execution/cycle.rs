@@ -285,11 +285,11 @@ impl CycleDetector {
                 let recent = self.entry_at(i as usize);
                 let earlier = self.entry_at((i + period) as usize);
                 match (recent, earlier) {
-                    (Some(r), Some(e)) if r.state_hash == e.state_hash => {}
+                    (Some(r), Some(e)) if r.state_hash == e.state_hash => {},
                     _ => {
                         is_orbit = false;
                         break;
-                    }
+                    },
                 }
             }
             if is_orbit {
@@ -466,8 +466,8 @@ mod tests {
     fn test_exact_loop_detection() {
         let mut det = CycleDetector::new();
 
-        // Build pattern: state_A -> action_X -> state_B -> action_X -> state_A -> action_X -> state_B
-        // This creates the triple (A, X, B) appearing multiple times
+        // Build pattern: state_A -> action_X -> state_B -> action_X -> state_A -> action_X ->
+        // state_B This creates the triple (A, X, B) appearing multiple times
         det.record_and_check(0xAAAA, 0x11, 1000); // entry: state A, action X
         det.record_and_check(0xBBBB, 0x22, 2000); // entry: state B, action Y
         det.record_and_check(0xAAAA, 0x11, 3000); // entry: state A, action X (same as first)

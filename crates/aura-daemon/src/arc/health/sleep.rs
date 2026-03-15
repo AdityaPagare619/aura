@@ -204,7 +204,11 @@ impl SleepTracker {
         let onset_tod = {
             let raw = record.onset_time_of_day() as f64;
             // Handle wrap-around: if after midnight, treat as late-night.
-            if raw < 12.0 * 3600.0 { raw + 86400.0 } else { raw }
+            if raw < 12.0 * 3600.0 {
+                raw + 86400.0
+            } else {
+                raw
+            }
         };
         self.learned_ideal_hours =
             SLEEP_EMA_ALPHA * dur + (1.0 - SLEEP_EMA_ALPHA) * self.learned_ideal_hours;
@@ -456,7 +460,11 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority,
                 category: "duration",
-                signal: if dur < 0.4 { "duration_very_low" } else { "duration_low" },
+                signal: if dur < 0.4 {
+                    "duration_very_low"
+                } else {
+                    "duration_low"
+                },
                 confidence: (1.0 - dur).clamp(0.0, 1.0),
             });
         }
@@ -481,7 +489,11 @@ impl SleepTracker {
             recs.push(SleepRecommendation {
                 priority,
                 category: "consistency",
-                signal: if con < 0.3 { "consistency_very_low" } else { "consistency_low" },
+                signal: if con < 0.3 {
+                    "consistency_very_low"
+                } else {
+                    "consistency_low"
+                },
                 confidence: (1.0 - con).clamp(0.0, 1.0),
             });
         }

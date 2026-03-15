@@ -16,7 +16,6 @@ pub use gap::GapDetector;
 pub use graph::SocialGraph;
 pub use health::RelationshipHealthEngine;
 pub use importance::ImportanceScorer;
-
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 

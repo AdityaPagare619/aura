@@ -5,14 +5,18 @@
 //! It handles automatic reconnection with exponential backoff and enforces
 //! per-request timeouts.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
 use tracing::{debug, error, info, instrument, warn};
 
-use super::protocol::{self, IpcStream};
-use super::IpcError;
+use super::{
+    protocol::{self, IpcStream},
+    IpcError,
+};
 
 // ─── Backoff configuration ──────────────────────────────────────────────────
 
@@ -221,17 +225,20 @@ impl NeocortexClient {
 
         self.send(msg).await?;
 
-        let result =
-            tokio::time::timeout(protocol::REQUEST_TIMEOUT, self.recv()).await;
+        let result = tokio::time::timeout(protocol::REQUEST_TIMEOUT, self.recv()).await;
 
         match result {
             Ok(inner) => {
                 let resp = inner?;
                 debug!(req_id, resp = ?std::mem::discriminant(&resp), "received response");
                 Ok(resp)
-            }
+            },
             Err(_elapsed) => {
-                warn!(req_id, "request timed out after {:?}", protocol::REQUEST_TIMEOUT);
+                warn!(
+                    req_id,
+                    "request timed out after {:?}",
+                    protocol::REQUEST_TIMEOUT
+                );
                 // Timeout likely means the Neocortex process is stuck.
                 // Mark disconnected so the next call triggers reconnect.
                 self.stream = None;
@@ -241,7 +248,7 @@ impl NeocortexClient {
                         protocol::REQUEST_TIMEOUT
                     ),
                 })
-            }
+            },
         }
     }
 
@@ -275,7 +282,7 @@ impl NeocortexClient {
                 self.stream = Some(stream);
                 self.reconnect_backoff.reset();
                 Ok(())
-            }
+            },
             Err(e) => {
                 warn!(
                     error = %e,
@@ -283,7 +290,7 @@ impl NeocortexClient {
                     "reconnect failed"
                 );
                 Err(e)
-            }
+            },
         }
     }
 
@@ -303,11 +310,8 @@ mod tests {
 
     #[test]
     fn backoff_progression() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-            2,
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(30), 2);
         assert_eq!(backoff.next_backoff(), Duration::from_secs(1));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(2));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(4));
@@ -320,11 +324,8 @@ mod tests {
 
     #[test]
     fn backoff_reset() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-            2,
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(30), 2);
         let _ = backoff.next_backoff(); // 1s
         let _ = backoff.next_backoff(); // 2s
         assert_eq!(backoff.attempts(), 2);

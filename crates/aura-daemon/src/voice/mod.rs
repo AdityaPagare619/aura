@@ -228,11 +228,7 @@ impl VoiceEngine {
         }
 
         // Feed reference to AEC so it can cancel echo
-        let float_samples: Vec<f32> = audio
-            .samples
-            .iter()
-            .map(|&s| s as f32 / 32768.0)
-            .collect();
+        let float_samples: Vec<f32> = audio.samples.iter().map(|&s| s as f32 / 32768.0).collect();
         self.signal_proc.aec.feed_reference(&float_samples)?;
         self.signal_proc.aec.set_active(true);
 
@@ -245,7 +241,9 @@ impl VoiceEngine {
             SpeechPriority::Normal => SpeakingMode::Response,
             SpeechPriority::Low => SpeakingMode::Proactive,
         };
-        let _ = self.state_machine.transition(VoiceEvent::ResponseReady { mode });
+        let _ = self
+            .state_machine
+            .transition(VoiceEvent::ResponseReady { mode });
 
         Ok(())
     }
@@ -255,10 +253,7 @@ impl VoiceEngine {
     ///
     /// Returns transcribed text if a complete utterance was captured and
     /// processed, along with optional biomarkers.
-    pub fn process_frame(
-        &mut self,
-        frame: &mut [i16],
-    ) -> VoiceResult<Option<ProcessedUtterance>> {
+    pub fn process_frame(&mut self, frame: &mut [i16]) -> VoiceResult<Option<ProcessedUtterance>> {
         if !self.running {
             return Err(VoiceError::NotRunning);
         }
@@ -288,12 +283,13 @@ impl VoiceEngine {
             ModalityState::WakeWordListening => {
                 // Check wake word
                 if let Some(_event) = self.wake_word.process_frame(frame) {
-                    self.state_machine.transition(VoiceEvent::WakeWordDetected)?;
+                    self.state_machine
+                        .transition(VoiceEvent::WakeWordDetected)?;
                     self.speech_buffer.clear();
                     self.stt.reset_streaming();
                 }
                 Ok(None)
-            }
+            },
 
             ModalityState::ActiveListening { .. } => {
                 // Run VAD
@@ -308,19 +304,20 @@ impl VoiceEngine {
                 };
 
                 self.process_vad_frame(vad_frame, frame)
-            }
+            },
 
             ModalityState::Speaking { .. } => {
                 // While speaking, still monitor for barge-in via wake word
                 if let Some(_event) = self.wake_word.process_frame(frame) {
-                    self.state_machine.transition(VoiceEvent::WakeWordDetected)?;
+                    self.state_machine
+                        .transition(VoiceEvent::WakeWordDetected)?;
                     self.audio.stop_playback()?;
                     self.signal_proc.aec.set_active(false);
                     self.speech_buffer.clear();
                     self.stt.reset_streaming();
                 }
                 Ok(None)
-            }
+            },
 
             _ => Ok(None),
         }
@@ -343,11 +340,11 @@ impl VoiceEngine {
                 };
                 self.state_machine
                     .transition(VoiceEvent::CallStarted { call_state })?;
-            }
+            },
             CallEvent::CallEnded => {
                 self.state_machine.transition(VoiceEvent::CallEnded)?;
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         self.call_handler.on_call_event(event);
@@ -399,35 +396,33 @@ impl VoiceEngine {
                 let _ = self.stt.feed_audio(original_frame);
 
                 Ok(None)
-            }
+            },
 
             VadEvent::SpeechEnded { duration_ms } => {
                 self.state_machine.transition(VoiceEvent::SpeechEnded)?;
 
                 // Transcribe
-                let text = self.stt.smart_transcribe(
-                    &self.speech_buffer,
-                    self.config.sample_rate,
-                )?;
+                let text = self
+                    .stt
+                    .smart_transcribe(&self.speech_buffer, self.config.sample_rate)?;
 
                 // Extract biomarkers if enabled
-                let biomarkers = if self.config.enable_biomarkers
-                    && self.speech_buffer.len() >= 1600
-                {
-                    self.biomarkers.extract(&self.speech_buffer).ok()
-                } else {
-                    None
-                };
+                let biomarkers =
+                    if self.config.enable_biomarkers && self.speech_buffer.len() >= 1600 {
+                        self.biomarkers.extract(&self.speech_buffer).ok()
+                    } else {
+                        None
+                    };
 
-                let emotional_signal = biomarkers
-                    .as_ref()
-                    .map(|b| b.to_emotional_signal());
+                let emotional_signal = biomarkers.as_ref().map(|b| b.to_emotional_signal());
 
                 // Clean up
                 self.speech_buffer.clear();
                 self.stt.reset_streaming();
 
-                let _ = self.state_machine.transition(VoiceEvent::ProcessingComplete);
+                let _ = self
+                    .state_machine
+                    .transition(VoiceEvent::ProcessingComplete);
 
                 Ok(Some(ProcessedUtterance {
                     text,
@@ -435,7 +430,7 @@ impl VoiceEngine {
                     biomarkers,
                     emotional_signal,
                 }))
-            }
+            },
 
             VadEvent::Silence => Ok(None),
         }
@@ -473,15 +468,15 @@ pub struct ProcessedUtterance {
 pub fn estimated_memory_usage() -> MemoryBudget {
     MemoryBudget {
         audio_buffers_bytes: audio_io::MAX_BUFFER_SAMPLES * 2 * 2, // input + output, i16
-        rnnoise_bytes: 200_000,                // ~200 KB
-        silero_vad_bytes: 2_000_000,           // ~2 MB model
-        wake_word_bytes: 5_000_000,            // ~5 MB
-        zipformer_bytes: 30_000_000,           // ~30 MB
-        whisper_bytes: 75_000_000,             // ~75 MB (tiny)
-        piper_bytes: 30_000_000,               // ~30 MB
-        espeak_bytes: 1_000_000,               // ~1 MB
-        speech_buffer_bytes: 160_000 * 2,      // 10s at 16kHz, i16
-        total_bytes: 0, // computed below
+        rnnoise_bytes: 200_000,                                    // ~200 KB
+        silero_vad_bytes: 2_000_000,                               // ~2 MB model
+        wake_word_bytes: 5_000_000,                                // ~5 MB
+        zipformer_bytes: 30_000_000,                               // ~30 MB
+        whisper_bytes: 75_000_000,                                 // ~75 MB (tiny)
+        piper_bytes: 30_000_000,                                   // ~30 MB
+        espeak_bytes: 1_000_000,                                   // ~1 MB
+        speech_buffer_bytes: 160_000 * 2,                          // 10s at 16kHz, i16
+        total_bytes: 0,                                            // computed below
     }
 }
 

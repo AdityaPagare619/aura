@@ -16,14 +16,14 @@ pub mod protocol;
 pub mod spawn;
 
 // Re-export primary public types.
+use std::io;
+
 pub use client::NeocortexClient;
 pub use protocol::{
     CONNECT_TIMEOUT, FRAME_HEADER_SIZE, MAX_MESSAGE_SIZE, REQUEST_TIMEOUT, SOCKET_ADDR,
     TCP_FALLBACK_ADDR, TCP_FALLBACK_PORT,
 };
 pub use spawn::NeocortexProcess;
-
-use std::io;
 
 /// Errors arising from IPC communication with the Neocortex process.
 #[derive(Debug, thiserror::Error)]

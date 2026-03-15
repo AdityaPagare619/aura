@@ -3,22 +3,20 @@
 //!
 //! # Architecture
 //!
-//! - [`MetricsRing`] — fixed-size circular buffer for time-series metrics.
-//!   O(1) push, zero heap allocation on hot path.
-//! - [`CounterSet`] — up to 64 named `AtomicU64` counters for lock-free
-//!   event counting from any thread.
-//! - [`TelemetryEngine`] — aggregate that owns both and provides a
-//!   convenient recording API.
+//! - [`MetricsRing`] — fixed-size circular buffer for time-series metrics. O(1) push, zero heap
+//!   allocation on hot path.
+//! - [`CounterSet`] — up to 64 named `AtomicU64` counters for lock-free event counting from any
+//!   thread.
+//! - [`TelemetryEngine`] — aggregate that owns both and provides a convenient recording API.
 
 pub mod counters;
 pub mod ring;
 
 use std::time::{Duration, Instant};
 
-use tracing::{debug, warn};
-
 pub use counters::{CounterError, CounterSet, CounterSnapshot, PREDEFINED_COUNTERS};
 pub use ring::{LabelSummary, MetricEntry, MetricKind, MetricsRing, RingError};
+use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
 // TelemetryEngine
@@ -141,8 +139,7 @@ impl TelemetryEngine {
     /// Returns the closure's return value.
     pub fn time<F, R>(&mut self, label: &str, f: F) -> R
     where
-        F: FnOnce() -> R,
-    {
+        F: FnOnce() -> R, {
         let start = Instant::now();
         let result = f();
         let elapsed_us = start.elapsed().as_micros() as f64;

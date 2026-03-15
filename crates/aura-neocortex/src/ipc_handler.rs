@@ -1260,10 +1260,12 @@ mod tests {
                     confidence: 0.85,
                     source: PlanSource::LlmGenerated,
                 },
+                tokens_used: 0,
             },
             NeocortexToDaemon::ConversationReply {
                 text: "Hello!".into(),
                 mood_hint: Some(0.8),
+                tokens_used: 0,
             },
             NeocortexToDaemon::ComposedScript {
                 steps: vec![DslStep {

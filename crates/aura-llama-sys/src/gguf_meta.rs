@@ -20,8 +20,10 @@
 //! println!("thinking:     {}", meta.supports_thinking_mode());
 //! ```
 
-use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::{
+    io::{BufReader, Read, Seek, SeekFrom},
+    path::Path,
+};
 
 /// Magic bytes at the start of every GGUF file: "GGUF" in little-endian u32.
 const GGUF_MAGIC: u32 = 0x46554747;
@@ -137,22 +139,25 @@ impl GgufMeta {
     ///
     /// Falls back to 4096 if the field is absent (conservative default).
     pub fn effective_context(&self) -> u32 {
-        self.context_length
-            .unwrap_or(4096)
-            .min(MAX_MOBILE_CONTEXT)
+        self.context_length.unwrap_or(4096).min(MAX_MOBILE_CONTEXT)
     }
 
     /// Estimated RAM usage in MB at the detected quantization level.
     ///
-    /// Formula (conservative):
-    ///   weights ≈ (embedding² × 8 + embedding × ffn × 3) × layers × bits/8 × 1.1
-    ///   kv_cache ≈ 2 × layers × heads_kv × head_dim × context × sizeof(fp16)
+    /// Formula (conservative, GQA-aware):
+    ///   weights ≈ (2×emb² + 2×emb×kv_dim + emb×ffn×3) × layers × bits/8 × 1.1
+    ///   kv_cache ≈ 2 × layers × heads_kv × head_dim × practical_ctx × sizeof(fp16)
+    ///
+    /// Uses a practical mobile context (2048 tokens) for KV cache sizing rather
+    /// than the model's full context window to match real on-device usage.
     ///
     /// Falls back to rough per-architecture heuristics when dims are missing.
     pub fn ram_estimate_mb(&self) -> u32 {
         let bits = self.quant_bits_per_weight();
         let emb = self.embedding_length.unwrap_or(0) as u64;
-        let ffn = self.feed_forward_length.unwrap_or((emb * 4).min(u32::MAX as u64) as u32) as u64;
+        let ffn = self
+            .feed_forward_length
+            .unwrap_or((emb * 4).min(u32::MAX as u64) as u32) as u64;
         let layers = self.block_count.unwrap_or(0) as u64;
 
         if emb == 0 || layers == 0 {
@@ -160,29 +165,35 @@ impl GgufMeta {
             return self.ram_fallback_mb();
         }
 
-        // Weight memory: each layer has:
-        //   - 2 × emb² attention projections (q/k/v/o fused: 4 × emb²) — simplified to 8 × emb²
-        //   - 3 × emb × ffn FFN projections (gate, up, down)
-        let attn_params: u64 = 8 * emb * emb;
+        // GQA-aware attention parameters:
+        //   Q projection: emb × emb
+        //   K projection: emb × (kv_heads × head_dim)
+        //   V projection: emb × (kv_heads × head_dim)
+        //   O projection: emb × emb
+        // Total: 2 × emb² + 2 × emb × kv_dim
+        let head_count_kv = self.attention_head_count_kv.unwrap_or(8) as u64;
+        let head_count_q = self.attention_head_count.unwrap_or(32) as u64;
+        let head_dim = emb.checked_div(head_count_q).unwrap_or(64);
+        let kv_dim = head_count_kv * head_dim;
+        let attn_params: u64 = 2 * emb * emb + 2 * emb * kv_dim;
         let ffn_params: u64 = 3 * emb * ffn;
         let params_per_layer: u64 = attn_params + ffn_params;
         let total_params: u64 = params_per_layer * layers + 2 * emb * emb; // + embedding table
 
-        let weight_bytes: u64 = total_params * bits as u64 / 8;
+        let weight_bytes: u64 = (total_params as f64 * bits as f64 / 8.0) as u64;
 
         // KV cache: 2 (K+V) × layers × n_kv_heads × head_dim × context × 2 bytes (fp16)
-        let head_count_kv = self.attention_head_count_kv.unwrap_or(8) as u64;
-        let head_count_q = self.attention_head_count.unwrap_or(32) as u64;
-        let head_dim = if head_count_q > 0 { emb / head_count_q } else { 64 };
-        let ctx = self.effective_context() as u64;
-        let kv_cache_bytes: u64 = 2 * layers * head_count_kv * head_dim * ctx * 2;
+        // Use a practical mobile context (2048) rather than the model's max context,
+        // since mobile devices won't allocate the full context window at once.
+        let practical_ctx: u64 = (self.effective_context() as u64).min(2048);
+        let kv_cache_bytes: u64 = 2 * layers * head_count_kv * head_dim * practical_ctx * 2;
 
         // 10% overhead for activations, page tables, runtime state
         let total_bytes = (weight_bytes as f64 * 1.1) as u64 + kv_cache_bytes;
         let mb = (total_bytes / (1024 * 1024)) as u32;
 
         // Clamp to a reasonable range (models don't shrink below ~200 MB or exceed 48 GB)
-        mb.max(200).min(49152)
+        mb.clamp(200, 49152)
     }
 
     /// Fallback RAM estimate when architecture dims are not present.
@@ -202,37 +213,37 @@ impl GgufMeta {
     /// Returns 4.5 (Q4_K_M equivalent) when file_type is absent.
     pub fn quant_bits_per_weight(&self) -> f32 {
         match self.file_type {
-            Some(0) => 32.0,  // F32
-            Some(1) => 16.0,  // F16
-            Some(2) => 4.0,   // Q4_0
-            Some(3) => 4.0,   // Q4_1
-            Some(6) => 5.0,   // Q5_0
-            Some(7) => 5.0,   // Q5_1
-            Some(8) => 8.0,   // Q8_0
-            Some(10) => 2.0,  // Q2_K
-            Some(11) => 3.0,  // Q3_K_S
-            Some(12) => 3.0,  // Q3_K_M
-            Some(13) => 3.0,  // Q3_K_L
-            Some(14) => 4.0,  // Q4_K_S
-            Some(15) => 4.5,  // Q4_K_M  ← most common
-            Some(16) => 5.0,  // Q5_K_S
-            Some(17) => 5.5,  // Q5_K_M
-            Some(18) => 6.5,  // Q6_K
-            Some(19) => 8.0,  // Q8_K (full)
-            Some(20) => 2.0,  // IQ2_XXS
-            Some(21) => 2.5,  // IQ2_XS
-            Some(24) => 3.0,  // IQ3_XXS
-            Some(25) => 1.5,  // IQ1_S
-            Some(26) => 4.0,  // IQ4_NL
-            Some(27) => 3.0,  // IQ3_S
-            Some(28) => 3.0,  // IQ3_M
-            Some(29) => 2.5,  // IQ2_S
-            Some(30) => 2.5,  // IQ2_M
-            Some(31) => 6.5,  // IQ4_XS (close to Q6)
-            Some(36) => 1.5,  // IQ1_M
+            Some(0) => 32.0,    // F32
+            Some(1) => 16.0,    // F16
+            Some(2) => 4.0,     // Q4_0
+            Some(3) => 4.0,     // Q4_1
+            Some(6) => 5.0,     // Q5_0
+            Some(7) => 5.0,     // Q5_1
+            Some(8) => 8.0,     // Q8_0
+            Some(10) => 2.0,    // Q2_K
+            Some(11) => 3.0,    // Q3_K_S
+            Some(12) => 3.0,    // Q3_K_M
+            Some(13) => 3.0,    // Q3_K_L
+            Some(14) => 4.0,    // Q4_K_S
+            Some(15) => 4.5,    // Q4_K_M  ← most common
+            Some(16) => 5.0,    // Q5_K_S
+            Some(17) => 5.5,    // Q5_K_M
+            Some(18) => 6.5,    // Q6_K
+            Some(19) => 8.0,    // Q8_K (full)
+            Some(20) => 2.0,    // IQ2_XXS
+            Some(21) => 2.5,    // IQ2_XS
+            Some(24) => 3.0,    // IQ3_XXS
+            Some(25) => 1.5,    // IQ1_S
+            Some(26) => 4.0,    // IQ4_NL
+            Some(27) => 3.0,    // IQ3_S
+            Some(28) => 3.0,    // IQ3_M
+            Some(29) => 2.5,    // IQ2_S
+            Some(30) => 2.5,    // IQ2_M
+            Some(31) => 6.5,    // IQ4_XS (close to Q6)
+            Some(36) => 1.5,    // IQ1_M
             Some(1024) => 16.0, // MOSTLY_F16 (some layers F16, rest Q4)
             Some(2048) => 32.0, // ALL_F32
-            _ => 4.5, // safe default — Q4_K_M equivalent
+            _ => 4.5,           // safe default — Q4_K_M equivalent
         }
     }
 
@@ -354,7 +365,7 @@ pub fn parse_from_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMeta, Ggu
     }
 
     let version = read_u32_le(reader)?;
-    if version < 2 || version > 3 {
+    if !(2..=3).contains(&version) {
         return Err(GgufError::UnsupportedVersion(version));
     }
 
@@ -384,59 +395,59 @@ pub fn parse_from_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMeta, Ggu
             GGUF_TYPE_STRING => {
                 let val = read_gguf_string(reader)?;
                 apply_string_kv(&mut meta, &key_lower, val);
-            }
+            },
             GGUF_TYPE_UINT32 => {
                 let val = read_u32_le(reader)?;
                 apply_u32_kv(&mut meta, &key_lower, val);
-            }
+            },
             GGUF_TYPE_UINT64 => {
                 let val = read_u64_le(reader)?;
                 apply_u64_kv(&mut meta, &key_lower, val);
-            }
+            },
             GGUF_TYPE_INT32 => {
                 let val = read_i32_le(reader)?;
                 apply_i32_kv(&mut meta, &key_lower, val);
-            }
+            },
             GGUF_TYPE_INT64 => {
                 let val = read_i64_le(reader)?;
                 // No i64 fields we care about — skip
                 let _ = val;
-            }
+            },
             GGUF_TYPE_FLOAT32 => {
                 let val = read_f32_le(reader)?;
                 // No f32 fields we care about — skip
                 let _ = val;
-            }
+            },
             GGUF_TYPE_FLOAT64 => {
                 let val = read_f64_le(reader)?;
                 let _ = val;
-            }
+            },
             GGUF_TYPE_BOOL => {
                 let val = read_u8(reader)?;
                 let _ = val;
-            }
+            },
             GGUF_TYPE_UINT8 => {
                 let val = read_u8(reader)?;
                 let _ = val;
-            }
+            },
             GGUF_TYPE_INT8 => {
                 let val = read_u8(reader)?;
                 let _ = val;
-            }
+            },
             GGUF_TYPE_UINT16 => {
                 let val = read_u16_le(reader)?;
                 let _ = val;
-            }
+            },
             GGUF_TYPE_INT16 => {
                 let val = read_u16_le(reader)?;
                 let _ = val;
-            }
+            },
             GGUF_TYPE_ARRAY => {
                 skip_gguf_array(reader)?;
-            }
+            },
             other => {
                 return Err(GgufError::UnknownType(other));
-            }
+            },
         }
     }
 
@@ -530,14 +541,14 @@ fn skip_gguf_array<R: Read + Seek>(reader: &mut R) -> Result<(), GgufError> {
                 reader.seek(SeekFrom::Current(len as i64))?;
             }
             return Ok(());
-        }
+        },
         GGUF_TYPE_ARRAY => {
             // Nested array: recurse for each element
             for _ in 0..count {
                 skip_gguf_array(reader)?;
             }
             return Ok(());
-        }
+        },
         other => return Err(GgufError::UnknownType(other)),
     };
 
@@ -611,8 +622,9 @@ fn read_gguf_string<R: Read + Seek>(r: &mut R) -> Result<String, GgufError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Cursor;
+
+    use super::*;
 
     // ── Mini GGUF builder for tests ──────────────────────────────────────
 
@@ -668,7 +680,8 @@ mod tests {
             self.write_gguf_string(key);
             self.buf.extend_from_slice(&GGUF_TYPE_ARRAY.to_le_bytes());
             self.buf.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
-            self.buf.extend_from_slice(&(vals.len() as u64).to_le_bytes());
+            self.buf
+                .extend_from_slice(&(vals.len() as u64).to_le_bytes());
             for v in vals {
                 self.buf.extend_from_slice(&v.to_le_bytes());
             }
@@ -680,7 +693,8 @@ mod tests {
             self.write_gguf_string(key);
             self.buf.extend_from_slice(&GGUF_TYPE_ARRAY.to_le_bytes());
             self.buf.extend_from_slice(&GGUF_TYPE_STRING.to_le_bytes());
-            self.buf.extend_from_slice(&(vals.len() as u64).to_le_bytes());
+            self.buf
+                .extend_from_slice(&(vals.len() as u64).to_le_bytes());
             for v in vals {
                 self.write_gguf_string(v);
             }
@@ -690,7 +704,8 @@ mod tests {
 
         fn write_gguf_string(&mut self, s: &str) {
             let bytes = s.as_bytes();
-            self.buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            self.buf
+                .extend_from_slice(&(bytes.len() as u64).to_le_bytes());
             self.buf.extend_from_slice(bytes);
         }
 
@@ -832,7 +847,10 @@ mod tests {
     #[test]
     fn parses_chat_template() {
         let bytes = GgufBuilder::new(3, 0)
-            .add_string("tokenizer.chat_template", "{% if thinking %}<think>{% endif %}")
+            .add_string(
+                "tokenizer.chat_template",
+                "{% if thinking %}<think>{% endif %}",
+            )
             .finish();
         let meta = parse_bytes(bytes).unwrap();
         assert!(meta.chat_template.is_some());
@@ -851,7 +869,10 @@ mod tests {
     fn thinking_mode_detected_via_template() {
         let bytes = GgufBuilder::new(3, 0)
             .add_string("general.architecture", "mistral")
-            .add_string("tokenizer.chat_template", "use <think> blocks for reasoning")
+            .add_string(
+                "tokenizer.chat_template",
+                "use <think> blocks for reasoning",
+            )
             .finish();
         let meta = parse_bytes(bytes).unwrap();
         assert!(meta.supports_thinking_mode());

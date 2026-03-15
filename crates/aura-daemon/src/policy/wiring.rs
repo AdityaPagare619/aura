@@ -10,8 +10,10 @@
 
 // ── Production wiring ───────────────────────────────────────────────────
 
-use crate::policy::gate::PolicyGate;
-use crate::policy::rules::{PolicyRule, RuleEffect};
+use crate::policy::{
+    gate::PolicyGate,
+    rules::{PolicyRule, RuleEffect},
+};
 
 /// Build the production `PolicyGate` wired into the executor.
 ///
@@ -25,9 +27,8 @@ use crate::policy::rules::{PolicyRule, RuleEffect};
 /// blocked and logged automatically.
 ///
 /// # Wiring contract
-/// - `Executor::new` / `normal` / `safety` / `power` all call
-///   `PolicyGate::allow_all()` directly today; a future PR should plumb
-///   the result of this function through instead.
+/// - `Executor::new` / `normal` / `safety` / `power` all call `PolicyGate::allow_all()` directly
+///   today; a future PR should plumb the result of this function through instead.
 /// - Rate limiting, deny-list rules, and audit hooks are all configured here.
 pub fn production_policy_gate() -> PolicyGate {
     let mut gate = PolicyGate::deny_by_default();
@@ -69,7 +70,8 @@ pub fn production_policy_gate() -> PolicyGate {
         name: "deny-network-access".to_string(),
         action_pattern: "*network*access*".to_string(),
         effect: RuleEffect::Deny,
-        reason: "Arbitrary network access is forbidden. AURA is anti-cloud and privacy-first.".to_string(),
+        reason: "Arbitrary network access is forbidden. AURA is anti-cloud and privacy-first."
+            .to_string(),
         priority: 2,
     });
     gate.add_rule(PolicyRule {
@@ -83,7 +85,8 @@ pub fn production_policy_gate() -> PolicyGate {
         name: "deny-upload-data".to_string(),
         action_pattern: "*upload*data*".to_string(),
         effect: RuleEffect::Deny,
-        reason: "Data upload is forbidden — AURA does not transmit user data externally.".to_string(),
+        reason: "Data upload is forbidden — AURA does not transmit user data externally."
+            .to_string(),
         priority: 2,
     });
 
@@ -92,7 +95,8 @@ pub fn production_policy_gate() -> PolicyGate {
         name: "deny-package-install".to_string(),
         action_pattern: "*install*package*".to_string(),
         effect: RuleEffect::Deny,
-        reason: "Package installation is forbidden without explicit user-initiated flow.".to_string(),
+        reason: "Package installation is forbidden without explicit user-initiated flow."
+            .to_string(),
         priority: 3,
     });
     gate.add_rule(PolicyRule {
@@ -138,7 +142,8 @@ pub fn production_policy_gate() -> PolicyGate {
         name: "deny-contacts-export".to_string(),
         action_pattern: "*export*contact*".to_string(),
         effect: RuleEffect::Deny,
-        reason: "Contact list export is forbidden — user's social graph must not leave the device.".to_string(),
+        reason: "Contact list export is forbidden — user's social graph must not leave the device."
+            .to_string(),
         priority: 5,
     });
 
@@ -355,14 +360,16 @@ pub fn production_policy_gate() -> PolicyGate {
         name: "allow-proactive-notify".to_string(),
         action_pattern: "proactive*notify*".to_string(),
         effect: RuleEffect::Audit,
-        reason: "Proactive notification is permitted when initiative budget > 0 (audited).".to_string(),
+        reason: "Proactive notification is permitted when initiative budget > 0 (audited)."
+            .to_string(),
         priority: 55,
     });
     gate.add_rule(PolicyRule {
         name: "allow-arc-notify".to_string(),
         action_pattern: "arc*notify*".to_string(),
         effect: RuleEffect::Audit,
-        reason: "ARC-initiated notification is permitted when initiative budget > 0 (audited).".to_string(),
+        reason: "ARC-initiated notification is permitted when initiative budget > 0 (audited)."
+            .to_string(),
         priority: 55,
     });
 
@@ -373,11 +380,15 @@ pub fn production_policy_gate() -> PolicyGate {
 
 #[cfg(test)]
 mod tests {
-    use crate::identity::{GateResult, IdentityEngine, ManipulationVerdict};
-    use crate::policy::audit::AuditLog;
-    use crate::policy::emergency::{AnomalyDetector, EmergencyReason, EmergencyState, EmergencyStop};
-    use crate::policy::gate::PolicyGate;
-    use crate::policy::rules::RuleEffect;
+    use crate::{
+        identity::{GateResult, IdentityEngine, ManipulationVerdict},
+        policy::{
+            audit::AuditLog,
+            emergency::{AnomalyDetector, EmergencyReason, EmergencyState, EmergencyStop},
+            gate::PolicyGate,
+            rules::RuleEffect,
+        },
+    };
 
     // ---------------------------------------------------------------------------
     // Helper constructors
@@ -564,7 +575,8 @@ mod tests {
     #[test]
     fn audit_log_records_allow_decision() {
         let mut log = test_audit_log();
-        let result = log.log_policy_decision("open_browser", &RuleEffect::Allow, "normal action", 0);
+        let result =
+            log.log_policy_decision("open_browser", &RuleEffect::Allow, "normal action", 0);
         assert!(result.is_ok(), "logging an Allow decision should succeed");
         assert!(!log.entries().is_empty(), "audit log should have an entry");
     }
@@ -760,7 +772,7 @@ mod tests {
         let engine = test_identity();
         let verdict = engine.policy_gate.check_action("user_chat", "conversation");
         match verdict {
-            crate::identity::PolicyVerdict::Allow => {} // expected
+            crate::identity::PolicyVerdict::Allow => {}, // expected
             other => panic!("expected Allow, got {:?}", other),
         }
     }
@@ -790,7 +802,8 @@ mod tests {
     fn audit_log_respects_capacity() {
         let mut log = AuditLog::new(5);
         for i in 0..10 {
-            let _ = log.log_policy_decision(&format!("action_{}", i), &RuleEffect::Allow, "test", 0);
+            let _ =
+                log.log_policy_decision(&format!("action_{}", i), &RuleEffect::Allow, "test", 0);
         }
         let entries = log.entries();
         assert!(

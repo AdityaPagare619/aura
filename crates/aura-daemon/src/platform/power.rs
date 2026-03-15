@@ -24,15 +24,19 @@
 //!
 //! See `AURA-V4-POWER-AGENCY-REBALANCE.md` §5 — Five-Tier Degradation Model.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
+    time::{Duration, Instant},
+};
 
-use aura_types::errors::PlatformError;
-use aura_types::ipc::ModelTier;
-use aura_types::power::{
-    DegradationLevel, PowerBudget, DEFAULT_BATTERY_CAPACITY_MAH, DEFAULT_DAILY_ENERGY_SHARE,
-    ENERGY_PER_TOKEN_1_5B_MJ, ENERGY_PER_TOKEN_4B_MJ, ENERGY_PER_TOKEN_8B_MJ, LIPO_NOMINAL_VOLTAGE,
-    POWER_DELIVERY_EFFICIENCY,
+use aura_types::{
+    errors::PlatformError,
+    ipc::ModelTier,
+    power::{
+        DegradationLevel, PowerBudget, DEFAULT_BATTERY_CAPACITY_MAH, DEFAULT_DAILY_ENERGY_SHARE,
+        ENERGY_PER_TOKEN_1_5B_MJ, ENERGY_PER_TOKEN_4B_MJ, ENERGY_PER_TOKEN_8B_MJ,
+        LIPO_NOMINAL_VOLTAGE, POWER_DELIVERY_EFFICIENCY,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -617,8 +621,8 @@ impl PowerManager {
             0.0
         };
 
-        let throttle = energy_throttle as f32;
-        throttle
+        
+        energy_throttle as f32
     }
 
     /// Get the full [`TierPolicy`] for the current tier.
@@ -847,9 +851,9 @@ impl Default for PowerManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{atomic::AtomicU32, Arc};
+
     use super::*;
-    use std::sync::atomic::AtomicU32;
-    use std::sync::Arc;
 
     #[test]
     fn test_tier_from_high_battery() {

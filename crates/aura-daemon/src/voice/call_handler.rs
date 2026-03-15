@@ -68,7 +68,10 @@ impl CallState {
 
     /// Check if a call is active or on hold.
     pub fn is_in_call(&self) -> bool {
-        matches!(self, CallState::Active { .. } | CallState::OnHold { .. } | CallState::Ringing { .. })
+        matches!(
+            self,
+            CallState::Active { .. } | CallState::OnHold { .. } | CallState::Ringing { .. }
+        )
     }
 
     /// Duration of the active call.
@@ -215,7 +218,11 @@ impl CallHandler {
     /// Answer an incoming call by tapping the Answer button via A11Y.
     pub async fn answer_call(&mut self) -> CallResult<()> {
         match &self.state {
-            CallState::Ringing { incoming: true, caller, .. } => {
+            CallState::Ringing {
+                incoming: true,
+                caller,
+                ..
+            } => {
                 let caller = caller.clone();
                 Self::try_click_labels(ANSWER_LABELS).await?;
                 self.state = CallState::Active {
@@ -225,10 +232,12 @@ impl CallHandler {
                     speaker: false,
                 };
                 Ok(())
-            }
-            CallState::Ringing { incoming: false, .. } => {
-                Err(CallError::A11yActionFailed("cannot answer outgoing call".into()))
-            }
+            },
+            CallState::Ringing {
+                incoming: false, ..
+            } => Err(CallError::A11yActionFailed(
+                "cannot answer outgoing call".into(),
+            )),
             _ => Err(CallError::NoActiveCall),
         }
     }
@@ -240,7 +249,7 @@ impl CallHandler {
                 Self::try_click_labels(REJECT_LABELS).await?;
                 self.state = CallState::Idle;
                 Ok(())
-            }
+            },
             _ => Err(CallError::NoActiveCall),
         }
     }
@@ -252,7 +261,7 @@ impl CallHandler {
                 Self::try_click_labels(END_CALL_LABELS).await?;
                 self.state = CallState::Idle;
                 Ok(())
-            }
+            },
             _ => Err(CallError::NoActiveCall),
         }
     }
@@ -264,7 +273,7 @@ impl CallHandler {
                 Self::try_click_labels(MUTE_LABELS).await?;
                 *muted = !*muted;
                 Ok(())
-            }
+            },
             _ => Err(CallError::NoActiveCall),
         }
     }
@@ -276,7 +285,7 @@ impl CallHandler {
                 Self::try_click_labels(SPEAKER_LABELS).await?;
                 *speaker = !*speaker;
                 Ok(())
-            }
+            },
             _ => Err(CallError::NoActiveCall),
         }
     }
@@ -289,13 +298,13 @@ impl CallHandler {
                     caller,
                     incoming: true,
                 };
-            }
+            },
             CallEvent::OutgoingCall { callee } => {
                 self.state = CallState::Ringing {
                     caller: callee,
                     incoming: false,
                 };
-            }
+            },
             CallEvent::CallConnected => {
                 let caller = self.state.caller().map(String::from);
                 self.state = CallState::Active {
@@ -304,17 +313,17 @@ impl CallHandler {
                     muted: false,
                     speaker: false,
                 };
-            }
+            },
             CallEvent::CallEnded => {
                 self.state = CallState::Idle;
-            }
+            },
             CallEvent::CallHeld => {
                 let caller = self.state.caller().map(String::from);
                 self.state = CallState::OnHold {
                     caller,
                     hold_start: Instant::now(),
                 };
-            }
+            },
             CallEvent::CallResumed => {
                 let caller = self.state.caller().map(String::from);
                 self.state = CallState::Active {
@@ -323,7 +332,7 @@ impl CallHandler {
                     muted: false,
                     speaker: false,
                 };
-            }
+            },
         }
     }
 
@@ -372,11 +381,16 @@ mod tests {
         handler.answer_call().await.unwrap();
 
         match handler.state() {
-            CallState::Active { caller, muted, speaker, .. } => {
+            CallState::Active {
+                caller,
+                muted,
+                speaker,
+                ..
+            } => {
                 assert_eq!(caller.as_deref(), Some("Alice"));
                 assert!(!muted);
                 assert!(!speaker);
-            }
+            },
             other => panic!("expected Active, got {other:?}"),
         }
     }
@@ -430,7 +444,13 @@ mod tests {
         handler.on_call_event(CallEvent::OutgoingCall {
             callee: Some("Charlie".into()),
         });
-        assert!(matches!(handler.state(), CallState::Ringing { incoming: false, .. }));
+        assert!(matches!(
+            handler.state(),
+            CallState::Ringing {
+                incoming: false,
+                ..
+            }
+        ));
 
         handler.on_call_event(CallEvent::CallConnected);
         assert!(matches!(handler.state(), CallState::Active { .. }));

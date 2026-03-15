@@ -5,18 +5,22 @@
 //! command channel, and delivers [`DaemonResponse`] text back to the
 //! voice engine's TTS for spoken output.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
-use crate::bridge::{BridgeError, BridgeResult, InputChannel};
-use crate::daemon_core::channels::{
-    DaemonResponseRx, InputSource, UserCommand, UserCommandTx, VoiceMetadata,
-};
-use crate::voice::{
-    ProcessedUtterance, SpeechContext, SpeechPriority, VoiceConfig, VoiceEngine, VoiceError,
+use crate::{
+    bridge::{BridgeError, BridgeResult, InputChannel},
+    daemon_core::channels::{
+        DaemonResponseRx, InputSource, UserCommand, UserCommandTx, VoiceMetadata,
+    },
+    voice::{
+        ProcessedUtterance, SpeechContext, SpeechPriority, VoiceConfig, VoiceEngine, VoiceError,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -60,22 +64,10 @@ impl VoiceBridge {
 
     /// Convert a [`ProcessedUtterance`] into a [`UserCommand::Chat`].
     fn utterance_to_command(utterance: &ProcessedUtterance) -> UserCommand {
-        let emotional_valence = utterance
-            .emotional_signal
-            .as_ref()
-            .map(|s| s.valence);
-        let emotional_arousal = utterance
-            .emotional_signal
-            .as_ref()
-            .map(|s| s.arousal);
-        let emotional_stress = utterance
-            .emotional_signal
-            .as_ref()
-            .map(|s| s.stress);
-        let emotional_fatigue = utterance
-            .emotional_signal
-            .as_ref()
-            .map(|s| s.fatigue);
+        let emotional_valence = utterance.emotional_signal.as_ref().map(|s| s.valence);
+        let emotional_arousal = utterance.emotional_signal.as_ref().map(|s| s.arousal);
+        let emotional_stress = utterance.emotional_signal.as_ref().map(|s| s.stress);
+        let emotional_fatigue = utterance.emotional_signal.as_ref().map(|s| s.fatigue);
 
         UserCommand::Chat {
             text: utterance.text.clone(),
@@ -134,16 +126,19 @@ impl InputChannel for VoiceBridge {
                 Ok(response) => {
                     if response.destination == InputSource::Voice {
                         debug!(len = response.text.len(), "speaking daemon response");
-                        if let Err(e) = self.speak_response(&response.text, response.mood_hint).await {
+                        if let Err(e) = self
+                            .speak_response(&response.text, response.mood_hint)
+                            .await
+                        {
                             warn!(error = %e, "TTS delivery failed");
                         }
                     }
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                },
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {},
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     info!("response channel closed — voice bridge exiting");
                     break;
-                }
+                },
             }
 
             // Process one audio frame.
@@ -166,17 +161,17 @@ impl InputChannel for VoiceBridge {
                         error!("command channel closed — voice bridge exiting");
                         break;
                     }
-                }
+                },
                 Ok(None) => {
                     // No complete utterance yet — continue listening.
-                }
+                },
                 Err(VoiceError::NotRunning) => {
                     warn!("voice engine stopped unexpectedly");
                     break;
-                }
+                },
                 Err(e) => {
                     warn!(error = %e, "voice frame processing error — continuing");
-                }
+                },
             }
         }
 
@@ -193,10 +188,10 @@ impl InputChannel for VoiceBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::daemon_core::channels::DaemonResponse;
-    use crate::voice::biomarkers::EmotionalSignal;
     use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::{daemon_core::channels::DaemonResponse, voice::biomarkers::EmotionalSignal};
 
     #[test]
     fn test_utterance_to_command_with_biomarkers() {
@@ -226,7 +221,7 @@ mod tests {
                 assert_eq!(meta.duration_ms, 1500);
                 assert!((meta.emotional_valence.unwrap() - 0.6).abs() < f32::EPSILON);
                 assert!((meta.emotional_arousal.unwrap() - 0.4).abs() < f32::EPSILON);
-            }
+            },
             _ => panic!("expected Chat variant"),
         }
     }
@@ -246,7 +241,7 @@ mod tests {
                 let meta = voice_meta.expect("should have voice metadata");
                 assert!(meta.emotional_valence.is_none());
                 assert!(meta.emotional_arousal.is_none());
-            }
+            },
             _ => panic!("expected Chat variant"),
         }
     }

@@ -368,10 +368,10 @@ impl std::fmt::Display for GrammarError {
             GrammarError::EmptyOutput => write!(f, "grammar error: output is empty"),
             GrammarError::MissingField { field } => {
                 write!(f, "grammar error: missing required field \"{field}\"")
-            }
+            },
             GrammarError::InvalidStructure { reason } => {
                 write!(f, "grammar error: invalid structure — {reason}")
-            }
+            },
         }
     }
 }
@@ -409,16 +409,16 @@ impl std::fmt::Display for ParseError {
         match self {
             ParseError::InvalidJson { detail } => {
                 write!(f, "parse error: invalid JSON — {detail}")
-            }
+            },
             ParseError::NotAnObject => {
                 write!(f, "parse error: expected a JSON object at the top level")
-            }
+            },
             ParseError::MissingField { field } => {
                 write!(f, "parse error: missing required field \"{field}\"")
-            }
+            },
             ParseError::InvalidField { field, detail } => {
                 write!(f, "parse error: field \"{field}\" — {detail}")
-            }
+            },
         }
     }
 }
@@ -450,13 +450,15 @@ pub fn validate_output(kind: GrammarKind, output: &str) -> Result<(), GrammarErr
                 });
             }
             if !trimmed.contains("\"goal_description\"") {
-                return Err(GrammarError::MissingField { field: "goal_description" });
+                return Err(GrammarError::MissingField {
+                    field: "goal_description",
+                });
             }
             if !trimmed.contains("\"steps\"") {
                 return Err(GrammarError::MissingField { field: "steps" });
             }
             Ok(())
-        }
+        },
         GrammarKind::DslSteps => {
             if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
                 return Err(GrammarError::InvalidStructure {
@@ -464,7 +466,7 @@ pub fn validate_output(kind: GrammarKind, output: &str) -> Result<(), GrammarErr
                 });
             }
             Ok(())
-        }
+        },
         GrammarKind::ChainOfThought => {
             if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
                 return Err(GrammarError::InvalidStructure {
@@ -478,7 +480,7 @@ pub fn validate_output(kind: GrammarKind, output: &str) -> Result<(), GrammarErr
                 return Err(GrammarError::MissingField { field: "action" });
             }
             Ok(())
-        }
+        },
         GrammarKind::ReflectionVerdict => {
             if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
                 return Err(GrammarError::InvalidStructure {
@@ -489,7 +491,7 @@ pub fn validate_output(kind: GrammarKind, output: &str) -> Result<(), GrammarErr
                 return Err(GrammarError::MissingField { field: "verdict" });
             }
             Ok(())
-        }
+        },
         GrammarKind::ConfidenceAssessment => {
             if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
                 return Err(GrammarError::InvalidStructure {
@@ -497,14 +499,16 @@ pub fn validate_output(kind: GrammarKind, output: &str) -> Result<(), GrammarErr
                 });
             }
             if !trimmed.contains("\"confidence\"") {
-                return Err(GrammarError::MissingField { field: "confidence" });
+                return Err(GrammarError::MissingField {
+                    field: "confidence",
+                });
             }
             Ok(())
-        }
+        },
         GrammarKind::FreeText => {
             // Any non-empty string is valid free text.
             Ok(())
-        }
+        },
     }
 }
 
@@ -605,7 +609,7 @@ impl ReflectionVerdict {
                     field: "verdict",
                     detail: format!("unknown value \"{other}\"; expected approve|flag|reject"),
                 })
-            }
+            },
         };
 
         // Optional confidence field — default to 1.0 if absent (grammar enforces
@@ -983,7 +987,9 @@ mod tests {
     #[test]
     fn parse_chain_of_thought_invalid_returns_err() {
         // Non-JSON input must return Err, not silently fall back.
-        assert!(ChainOfThoughtOutput::parse("just a plain response without CoT structure").is_err());
+        assert!(
+            ChainOfThoughtOutput::parse("just a plain response without CoT structure").is_err()
+        );
         // Valid JSON but not an object.
         assert!(ChainOfThoughtOutput::parse("[1, 2, 3]").is_err());
         // Object missing `thinking` field.

@@ -4,8 +4,10 @@
 //! This module defines the message types and a factory that creates all channels
 //! with correct capacities.
 
-use aura_types::events::{DaemonEvent, NotificationEvent, RawEvent};
-use aura_types::ipc::NeocortexToDaemon;
+use aura_types::{
+    events::{DaemonEvent, NotificationEvent, RawEvent},
+    ipc::NeocortexToDaemon,
+};
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
@@ -421,6 +423,9 @@ mod tests {
         let channels = DaemonChannels::new();
         let mut rx = channels.a11y_rx;
         drop(channels.a11y_tx);
-        assert!(rx.recv().await.is_none(), "closed channel should yield None");
+        assert!(
+            rx.recv().await.is_none(),
+            "closed channel should yield None"
+        );
     }
 }

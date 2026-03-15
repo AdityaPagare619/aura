@@ -11,9 +11,11 @@
 //! identical actions occur within `window_duration`, the action is
 //! automatically denied as suspicious (e.g., 10 taps in 1 second).
 
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    time::{Duration, Instant},
+};
 
 use aura_types::config::PolicyConfig;
 
@@ -73,8 +75,8 @@ impl RateLimiter {
         let key = action.to_ascii_lowercase();
 
         // Enforce capacity cap before inserting a new key.
-        if !self.history.contains_key(&key) {
-            if self.history.len() >= MAX_RATE_LIMITER_KEYS {
+        if !self.history.contains_key(&key)
+            && self.history.len() >= MAX_RATE_LIMITER_KEYS {
                 // At capacity: evict the oldest key (least-recently-used proxy:
                 // first key in iteration order) and warn.
                 if let Some(evict_key) = self.history.keys().next().cloned() {
@@ -86,7 +88,6 @@ impl RateLimiter {
                     );
                 }
             }
-        }
 
         let timestamps = self.history.entry(key).or_default();
 
@@ -438,8 +439,9 @@ impl PolicyGate {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::config::{PolicyConfig, PolicyRuleConfig};
+
+    use super::*;
 
     fn test_config() -> PolicyConfig {
         PolicyConfig {

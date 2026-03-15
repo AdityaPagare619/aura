@@ -5,20 +5,18 @@
 //!
 //! # Two-tier persistence
 //!
-//! - **Public tier** (`user_profile.json`): human-readable/editable preferences
-//!   (name, locale, timezone, behavior modifiers). Written atomically via
-//!   a temp-file rename so partial writes never corrupt the file.
-//! - **Private tier** (vault, AES-256-GCM): trust tier, relationship history,
-//!   personal revelations. Stored under the `user_profile_sensitive` vault key.
-//!   Gracefully skipped if the vault is unavailable.
+//! - **Public tier** (`user_profile.json`): human-readable/editable preferences (name, locale,
+//!   timezone, behavior modifiers). Written atomically via a temp-file rename so partial writes
+//!   never corrupt the file.
+//! - **Private tier** (vault, AES-256-GCM): trust tier, relationship history, personal revelations.
+//!   Stored under the `user_profile_sensitive` vault key. Gracefully skipped if the vault is
+//!   unavailable.
 
 use std::path::Path;
 
+use aura_types::{errors::OnboardingError, identity::OceanTraits};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-
-use aura_types::errors::OnboardingError;
-use aura_types::identity::OceanTraits;
 
 use crate::identity::proactive_consent::ProactiveSettings;
 
@@ -44,25 +42,24 @@ const PROFILE_SCHEMA_VERSION: u32 = 1;
 
 /// Privacy level controlling how much data AURA retains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum PrivacyLevel {
     /// Minimal data retention — only what's needed for core function.
     Minimal,
     /// Standard — retain interaction patterns, preferences, no raw messages.
+    #[default]
     Standard,
     /// Full — retain everything for maximum personalisation.
     Full,
 }
 
-impl Default for PrivacyLevel {
-    fn default() -> Self {
-        Self::Standard
-    }
-}
 
 /// Notification preference for proactive suggestions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum NotificationPreference {
     /// All proactive notifications enabled.
+    #[default]
     All,
     /// Only important notifications.
     ImportantOnly,
@@ -70,28 +67,20 @@ pub enum NotificationPreference {
     None,
 }
 
-impl Default for NotificationPreference {
-    fn default() -> Self {
-        Self::All
-    }
-}
 
 /// Communication style preference as expressed by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CommunicationStyle {
     /// Brief, to-the-point responses.
     Concise,
     /// Balanced responses.
+    #[default]
     Balanced,
     /// Detailed, thorough responses.
     Detailed,
 }
 
-impl Default for CommunicationStyle {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
 
 /// A recurring daily pattern detected or stated by the user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -350,8 +339,7 @@ impl UserProfile {
             openness: OceanTraits::DEFAULT.openness + self.ocean_adjustments.openness,
             conscientiousness: OceanTraits::DEFAULT.conscientiousness
                 + self.ocean_adjustments.conscientiousness,
-            extraversion: OceanTraits::DEFAULT.extraversion
-                + self.ocean_adjustments.extraversion,
+            extraversion: OceanTraits::DEFAULT.extraversion + self.ocean_adjustments.extraversion,
             agreeableness: OceanTraits::DEFAULT.agreeableness
                 + self.ocean_adjustments.agreeableness,
             neuroticism: OceanTraits::DEFAULT.neuroticism + self.ocean_adjustments.neuroticism,
@@ -459,7 +447,7 @@ impl UserProfile {
                 let profile = Self::from_json(&data)?;
                 debug!("user profile loaded from DB");
                 Ok(Some(profile))
-            }
+            },
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::PersistenceFailed(format!(
                 "load profile: {e}"
@@ -505,20 +493,17 @@ impl UserProfile {
 
         let mut profile = if profile_path.exists() {
             let raw = std::fs::read(&profile_path).map_err(|e| {
-                OnboardingError::PersistenceFailed(format!(
-                    "read user_profile.json: {e}"
-                ))
+                OnboardingError::PersistenceFailed(format!("read user_profile.json: {e}"))
             })?;
             let p: ProfilePreferences = serde_json::from_slice(&raw).map_err(|e| {
-                OnboardingError::PersistenceFailed(format!(
-                    "parse user_profile.json: {e}"
-                ))
+                OnboardingError::PersistenceFailed(format!("parse user_profile.json: {e}"))
             })?;
             debug!("user profile preferences loaded from file");
             let mut profile = UserProfile::default();
             profile.name = p.name;
             profile.preferences.locale = p.preferred_language;
-            profile.preferences.communication_style = match p.behavior_modifiers.verbosity.as_str() {
+            profile.preferences.communication_style = match p.behavior_modifiers.verbosity.as_str()
+            {
                 "concise" => CommunicationStyle::Concise,
                 "detailed" => CommunicationStyle::Detailed,
                 _ => CommunicationStyle::Balanced,
@@ -544,27 +529,23 @@ impl UserProfile {
 
         // Load sensitive tier from vault (non-fatal).
         if let Some(vault) = vault {
-            match vault.retrieve(
-                "user_profile_sensitive",
-                "user_profile",
-                true,
-            ) {
+            match vault.retrieve("user_profile_sensitive", "user_profile", true) {
                 Ok(bytes) => {
                     match serde_json::from_slice::<ProfileSensitive>(&bytes) {
                         Ok(sensitive) => {
                             // Merge sensitive fields back into profile.
                             profile.interests = sensitive.interests;
                             debug!("user profile sensitive data loaded from vault");
-                        }
+                        },
                         Err(e) => {
                             warn!("failed to parse sensitive profile from vault: {e}");
-                        }
+                        },
                     }
-                }
+                },
                 Err(e) => {
                     // Not found or vault not configured — not an error on first run.
                     debug!("sensitive profile not in vault (may be first run): {e:?}");
-                }
+                },
             }
         }
 
@@ -575,9 +556,8 @@ impl UserProfile {
     ///
     /// Uses an atomic temp-file rename to prevent partial writes.
     pub fn save_preferences(&self, config_dir: &Path) -> Result<(), OnboardingError> {
-        std::fs::create_dir_all(config_dir).map_err(|e| {
-            OnboardingError::PersistenceFailed(format!("create config dir: {e}"))
-        })?;
+        std::fs::create_dir_all(config_dir)
+            .map_err(|e| OnboardingError::PersistenceFailed(format!("create config dir: {e}")))?;
 
         let prefs = ProfilePreferences {
             version: PROFILE_SCHEMA_VERSION,
@@ -615,7 +595,10 @@ impl UserProfile {
             OnboardingError::PersistenceFailed(format!("rename preferences file: {e}"))
         })?;
 
-        debug!(size_bytes = json.len(), "user profile preferences saved to file");
+        debug!(
+            size_bytes = json.len(),
+            "user profile preferences saved to file"
+        );
         Ok(())
     }
 
@@ -632,7 +615,7 @@ impl UserProfile {
             None => {
                 warn!("vault not available — skipping sensitive profile save");
                 return Ok(());
-            }
+            },
         };
 
         let sensitive = ProfileSensitive {
@@ -649,7 +632,8 @@ impl UserProfile {
                 &bytes,
                 crate::persistence::vault::DataTier::Personal,
                 crate::persistence::vault::EntryMetadata {
-                    description: "User profile sensitive data (interests, personal context)".to_string(),
+                    description: "User profile sensitive data (interests, personal context)"
+                        .to_string(),
                     category: crate::persistence::vault::DataCategory::Personal,
                     auto_classified: false,
                     expiry_ms: None,
@@ -692,8 +676,8 @@ impl UserProfile {
                     std::path::PathBuf::from(up)
                 } else {
                     let drive = std::env::var("HOMEDRIVE").unwrap_or_else(|_| "C:".to_string());
-                    let homepath = std::env::var("HOMEPATH")
-                        .unwrap_or_else(|_| "\\Users\\user".to_string());
+                    let homepath =
+                        std::env::var("HOMEPATH").unwrap_or_else(|_| "\\Users\\user".to_string());
                     std::path::PathBuf::from(format!("{}{}", drive, homepath))
                 }
             }
@@ -710,9 +694,7 @@ impl UserProfile {
     /// fixed path returned by [`config_path`].
     pub fn save_preferences_default(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::config_path();
-        let config_dir = path
-            .parent()
-            .ok_or("config path has no parent directory")?;
+        let config_dir = path.parent().ok_or("config path has no parent directory")?;
         self.save_preferences(config_dir)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
@@ -724,9 +706,7 @@ impl UserProfile {
     /// fixed path returned by [`config_path`] and no vault.
     pub fn load_preferences_default() -> Result<Self, Box<dyn std::error::Error>> {
         let path = Self::config_path();
-        let config_dir = path
-            .parent()
-            .ok_or("config path has no parent directory")?;
+        let config_dir = path.parent().ok_or("config path has no parent directory")?;
         Self::load_or_create(config_dir, None)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }

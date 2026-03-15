@@ -1,3 +1,3 @@
 pub mod workflows;
 
-pub use workflows::{WorkflowObserver, WorkflowPattern, ExecutionTrace};
+pub use workflows::{ExecutionTrace, WorkflowObserver, WorkflowPattern};

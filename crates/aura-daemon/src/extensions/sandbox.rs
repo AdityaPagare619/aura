@@ -35,13 +35,17 @@
 //! - **Auditable**: Every check can be traced.
 //! - **No runtime code loading**: Extensions are compiled in (Rust traits).
 
-use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
-use aura_types::extensions::ExtensionError;
-use aura_types::manifest::{
-    CapabilityManifest, ExecutionTier, Permission, MAX_EXTENSION_CPU_PERCENT,
-    MAX_EXTENSION_EXECUTION_MS, MAX_EXTENSION_MEMORY_MB, MAX_MANIFEST_PERMISSIONS,
+use aura_types::{
+    extensions::ExtensionError,
+    manifest::{
+        CapabilityManifest, ExecutionTier, Permission, MAX_EXTENSION_CPU_PERCENT,
+        MAX_EXTENSION_EXECUTION_MS, MAX_EXTENSION_MEMORY_MB, MAX_MANIFEST_PERMISSIONS,
+    },
 };
 use tracing::{debug, info, warn};
 
@@ -276,6 +280,7 @@ pub struct SandboxStats {
 /// The sandbox never grants permissions not in the manifest.
 /// The sandbox never allows actions that PolicyGate denies.
 /// The sandbox never exceeds resource limits.
+#[derive(Debug)]
 pub struct ExtensionSandbox {
     /// The runtime context (permissions + limits).
     context: ExtensionContext,
@@ -418,8 +423,8 @@ impl ExtensionSandbox {
         }
 
         // PolicyGate integration: evaluate action against policy rules.
+        let action = self.policy_action_for(permission);
         if let Some(ref mut gate) = self.policy_gate {
-            let action = self.policy_action_for(permission);
             let decision = gate.evaluate(&action);
             if matches!(decision.effect, RuleEffect::Deny) {
                 self.stats.policy_violations += 1;
@@ -485,8 +490,10 @@ impl ExtensionSandbox {
     /// Record that an execution completed, tracking time for stats.
     pub fn record_execution(&mut self, duration_ms: u64) {
         self.stats.total_executions += 1;
-        self.stats.total_execution_time_ms =
-            self.stats.total_execution_time_ms.saturating_add(duration_ms);
+        self.stats.total_execution_time_ms = self
+            .stats
+            .total_execution_time_ms
+            .saturating_add(duration_ms);
     }
 
     // -----------------------------------------------------------------------
@@ -552,11 +559,9 @@ impl ExtensionSandbox {
                 // Functional extensions can only read specific domains.
                 match permission {
                     Permission::ReadMemoryDomain(_) | Permission::ObserveScreen => None,
-                    other => Some(format!(
-                        "Functional tier cannot use permission '{other}'"
-                    )),
+                    other => Some(format!("Functional tier cannot use permission '{other}'")),
                 }
-            }
+            },
             ExecutionTier::Observer => {
                 // Observer extensions cannot write, send, execute, or network.
                 match permission {
@@ -570,7 +575,7 @@ impl ExtensionSandbox {
                     )),
                     _ => None,
                 }
-            }
+            },
             ExecutionTier::Advisor | ExecutionTier::Autonomous => None,
         }
     }
@@ -585,9 +590,9 @@ impl ExtensionSandbox {
         }
 
         match permission {
-            Permission::WriteSemanticMemory => Some(
-                "third-party extensions cannot write to semantic memory".to_string(),
-            ),
+            Permission::WriteSemanticMemory => {
+                Some("third-party extensions cannot write to semantic memory".to_string())
+            },
             Permission::NetworkAccess => Some(
                 "third-party extensions cannot have unrestricted network access \
                  (use NetworkEgress with specific hosts instead)"
@@ -604,8 +609,9 @@ impl ExtensionSandbox {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::manifest::{CapabilityManifest, ExecutionTier, Permission};
+
+    use super::*;
 
     fn core_manifest() -> CapabilityManifest {
         CapabilityManifest {
@@ -745,8 +751,7 @@ mod tests {
         let r1 = sandbox.check_permission(&Permission::ObserveScreen);
         assert!(r1.allowed);
 
-        let r2 =
-            sandbox.check_permission(&Permission::ReadMemoryDomain("code".to_string()));
+        let r2 = sandbox.check_permission(&Permission::ReadMemoryDomain("code".to_string()));
         assert!(r2.allowed);
     }
 

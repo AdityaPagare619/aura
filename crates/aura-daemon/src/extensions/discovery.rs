@@ -2,19 +2,18 @@
 //!
 //! Two responsibilities:
 //!
-//! 1. **Gap/Routine Signals** — Observe user needs and emit structured signals
-//!    for the LLM to reason about (suggesting new extensions or automations).
+//! 1. **Gap/Routine Signals** — Observe user needs and emit structured signals for the LLM to
+//!    reason about (suggesting new extensions or automations).
 //!
-//! 2. **Capability Reporting** — Report what extensions are loaded, what
-//!    permissions they hold, and their sandbox status.
+//! 2. **Capability Reporting** — Report what extensions are loaded, what permissions they hold, and
+//!    their sandbox status.
 //!
 //! Rust NEVER generates suggestion text or makes content-based decisions.
 //! All signals are structured data for the LLM.
 
 use aura_types::manifest::ExecutionTier;
 
-use super::loader::ExtensionSummary;
-use super::sandbox::SandboxState;
+use super::{loader::ExtensionSummary, sandbox::SandboxState};
 
 /// Smart Extension Discovery (E5)
 ///
@@ -146,10 +145,7 @@ impl ExtensionDiscovery {
     ///
     /// Called by the daemon to provide the LLM and user with visibility
     /// into what extensions are loaded and their health status.
-    pub fn build_capability_report(
-        &self,
-        summaries: &[ExtensionSummary],
-    ) -> CapabilityReport {
+    pub fn build_capability_report(&self, summaries: &[ExtensionSummary]) -> CapabilityReport {
         let mut extensions = Vec::with_capacity(summaries.len());
         let mut active = 0;
         let mut degraded = 0;
@@ -164,7 +160,7 @@ impl ExtensionDiscovery {
             match summary.state {
                 SandboxState::Active => active += 1,
                 SandboxState::Suspended | SandboxState::Disabled => degraded += 1,
-                _ => {}
+                _ => {},
             }
 
             extensions.push(ExtensionCapability {

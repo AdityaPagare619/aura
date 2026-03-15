@@ -3,17 +3,19 @@
 //! The planner sits between the goals module and the executor. It uses a
 //! three-tier cascade:
 //!
-//! 1. **ETG lookup** — if the ETG has a known, high-confidence path from the
-//!    current screen state to the goal state, use it directly (fastest).
-//! 2. **Template match** — if a registered plan template matches the goal's
-//!    description, instantiate it.
-//! 3. **LLM request** — prepare a structured request for Neocortex to
-//!    generate a plan (slowest, most flexible).
+//! 1. **ETG lookup** — if the ETG has a known, high-confidence path from the current screen state
+//!    to the goal state, use it directly (fastest).
+//! 2. **Template match** — if a registered plan template matches the goal's description,
+//!    instantiate it.
+//! 3. **LLM request** — prepare a structured request for Neocortex to generate a plan (slowest,
+//!    most flexible).
 
-use aura_types::actions::ActionType;
-use aura_types::dsl::{DslStep, FailureStrategy};
-use aura_types::etg::{ActionPlan, PlanSource};
-use aura_types::goals::Goal;
+use aura_types::{
+    actions::ActionType,
+    dsl::{DslStep, FailureStrategy},
+    etg::{ActionPlan, PlanSource},
+    goals::Goal,
+};
 use tracing::{debug, instrument, warn};
 
 use super::etg::EtgStore;
@@ -100,13 +102,13 @@ impl std::fmt::Display for PlanError {
             PlanError::NoPlanFound(msg) => write!(f, "no plan found: {msg}"),
             PlanError::TooManySteps { actual, max } => {
                 write!(f, "plan has {actual} steps, max is {max}")
-            }
+            },
             PlanError::TemplateCapacityExceeded { max } => {
                 write!(f, "template capacity exceeded: max {max}")
-            }
+            },
             PlanError::ValidationFailed(errors) => {
                 write!(f, "plan validation failed: {} errors", errors.len())
-            }
+            },
         }
     }
 }
@@ -133,10 +135,10 @@ impl std::fmt::Display for PlanValidationError {
         match self {
             PlanValidationError::StepLimitExceeded { actual, max } => {
                 write!(f, "step limit exceeded: {actual} > {max}")
-            }
+            },
             PlanValidationError::DuplicateConsecutiveAction { step_index } => {
                 write!(f, "duplicate consecutive action at step {step_index}")
-            }
+            },
             PlanValidationError::DeadlineExceeded {
                 estimated_ms,
                 deadline_ms,
@@ -145,11 +147,11 @@ impl std::fmt::Display for PlanValidationError {
                     f,
                     "estimated {estimated_ms}ms exceeds deadline {deadline_ms}ms"
                 )
-            }
+            },
             PlanValidationError::EmptyPlan => write!(f, "plan has no steps"),
             PlanValidationError::ZeroTimeout { step_index } => {
                 write!(f, "step {step_index} has zero timeout")
-            }
+            },
         }
     }
 }
@@ -612,15 +614,17 @@ impl EnhancedPlanner {
 
     // ── Plan Caching ────────────────────────────────────────────────────
 
-    /// Look up a cached plan for the given goal description using exact hash or semantic similarity.
+    /// Look up a cached plan for the given goal description using exact hash or semantic
+    /// similarity.
     pub fn cache_lookup(&mut self, description: &str) -> Option<&ActionPlan> {
         let hash = Self::hash_description(description);
         let current_time = self.current_time_ms;
 
         // Phase 1: Exact Hash Match (O(N) iteration, O(1) cmp)
-        let exact_idx = self.cache.iter().position(|e| {
-            e.description_hash == hash && e.success_rate >= 0.5
-        });
+        let exact_idx = self
+            .cache
+            .iter()
+            .position(|e| e.description_hash == hash && e.success_rate >= 0.5);
         if let Some(idx) = exact_idx {
             self.cache[idx].hit_count += 1;
             self.cache[idx].last_used_ms = current_time;
@@ -760,7 +764,7 @@ impl EnhancedPlanner {
             Err(_) => {
                 debug!("score_plan: no Tokio runtime — returning neutral score 0.5");
                 return 0.5;
-            }
+            },
         };
 
         // TODO(ARCH-MED-2): `block_on()` inside a sync fn called from an async
@@ -769,37 +773,39 @@ impl EnhancedPlanner {
         // propagate the async boundary up to the caller.  See also: retry.rs
         // `classify_failure_via_llm()` which wraps with `block_in_place()` as
         // a safer interim pattern.
-        handle.block_on(async {
-                let mut client = match crate::ipc::NeocortexClient::connect().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(error = %e, "score_plan: IPC connect failed — defaulting to 0.5");
-                        return 0.5;
-                    }
-                };
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+            let mut client = match crate::ipc::NeocortexClient::connect().await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(error = %e, "score_plan: IPC connect failed — defaulting to 0.5");
+                    return 0.5;
+                },
+            };
 
-                match client
-                    .request(&DaemonToNeocortex::ScorePlan { plan: plan.clone() })
-                    .await
-                {
-                    Ok(NeocortexToDaemon::PlanScore { score }) => {
-                        // Clamp to [0.0, 1.0] defensively.
-                        let clamped = score.clamp(0.0, 1.0);
-                        debug!(score = clamped, "score_plan: received LLM score");
-                        clamped
-                    }
-                    Ok(other) => {
-                        warn!(
-                            resp = ?std::mem::discriminant(&other),
-                            "score_plan: unexpected IPC response — defaulting to 0.5"
-                        );
-                        0.5
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "score_plan: IPC request failed — defaulting to 0.5");
-                        0.5
-                    }
-                }
+            match client
+                .request(&DaemonToNeocortex::ScorePlan { plan: plan.clone() })
+                .await
+            {
+                Ok(NeocortexToDaemon::PlanScore { score }) => {
+                    // Clamp to [0.0, 1.0] defensively.
+                    let clamped = score.clamp(0.0, 1.0);
+                    debug!(score = clamped, "score_plan: received LLM score");
+                    clamped
+                },
+                Ok(other) => {
+                    warn!(
+                        resp = ?std::mem::discriminant(&other),
+                        "score_plan: unexpected IPC response — defaulting to 0.5"
+                    );
+                    0.5
+                },
+                Err(e) => {
+                    warn!(error = %e, "score_plan: IPC request failed — defaulting to 0.5");
+                    0.5
+                },
+            }
+        })
         })
     }
 
@@ -834,18 +840,15 @@ impl EnhancedPlanner {
         }
 
         // Candidate 2: Base planner (ETG → Template → LLM cascade).
-        match self.base.plan(goal, etg, current_screen, target_screen) {
-            Ok(plan) => {
-                let score = self.score_plan(&plan);
-                let resources = self.estimate_resources(&plan);
-                candidates.push(ScoredPlan {
-                    plan,
-                    score,
-                    resources,
-                    source_description: "base cascade (ETG/Template/LLM)".to_string(),
-                });
-            }
-            Err(_) => {}
+        if let Ok(plan) = self.base.plan(goal, etg, current_screen, target_screen) {
+            let score = self.score_plan(&plan);
+            let resources = self.estimate_resources(&plan);
+            candidates.push(ScoredPlan {
+                plan,
+                score,
+                resources,
+                source_description: "base cascade (ETG/Template/LLM)".to_string(),
+            });
         }
 
         // Candidate 3+: If we have templates, try variations with modified confidence.
@@ -1017,8 +1020,9 @@ fn actions_equal(a: &ActionType, b: &ActionType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::goals::{GoalPriority, GoalSource, GoalStatus};
+
+    use super::*;
 
     fn make_goal(description: &str) -> Goal {
         Goal {
@@ -1637,7 +1641,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_score_plan_returns_neutral_with_runtime_no_ipc() {
         // With a Tokio runtime present but no Neocortex IPC server,
         // score_plan should still fall back to 0.5 (IPC connect fails).
@@ -1656,12 +1660,36 @@ mod tests {
         //   - ETG plans should score higher than LLM plans
         //   - Shorter plans should score higher than longer ones
         //   - Higher confidence should score higher than lower
-        assert_eq!(ep.score_plan(&etg_plan), 0.5, "ETG plan: expected IPC-failure fallback");
-        assert_eq!(ep.score_plan(&llm_plan), 0.5, "LLM plan: expected IPC-failure fallback");
-        assert_eq!(ep.score_plan(&short_plan), 0.5, "short plan: expected IPC-failure fallback");
-        assert_eq!(ep.score_plan(&long_plan), 0.5, "long plan: expected IPC-failure fallback");
-        assert_eq!(ep.score_plan(&high_conf), 0.5, "high confidence: expected IPC-failure fallback");
-        assert_eq!(ep.score_plan(&low_conf), 0.5, "low confidence: expected IPC-failure fallback");
+        assert_eq!(
+            ep.score_plan(&etg_plan),
+            0.5,
+            "ETG plan: expected IPC-failure fallback"
+        );
+        assert_eq!(
+            ep.score_plan(&llm_plan),
+            0.5,
+            "LLM plan: expected IPC-failure fallback"
+        );
+        assert_eq!(
+            ep.score_plan(&short_plan),
+            0.5,
+            "short plan: expected IPC-failure fallback"
+        );
+        assert_eq!(
+            ep.score_plan(&long_plan),
+            0.5,
+            "long plan: expected IPC-failure fallback"
+        );
+        assert_eq!(
+            ep.score_plan(&high_conf),
+            0.5,
+            "high confidence: expected IPC-failure fallback"
+        );
+        assert_eq!(
+            ep.score_plan(&low_conf),
+            0.5,
+            "low confidence: expected IPC-failure fallback"
+        );
     }
 
     #[test]
@@ -1708,7 +1736,11 @@ mod tests {
 
         let result = ep.plan_best_of_n(&goal, &etg, None, None, 3);
         // Base planner always returns LLM fallback, so should succeed.
-        assert!(result.is_ok(), "plan_best_of_n should not fail even without templates: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "plan_best_of_n should not fail even without templates: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1840,7 +1872,7 @@ mod tests {
         assert_eq!(ep.cache_size(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_score_plan_all_sources_return_neutral_without_ipc() {
         // Verifies all PlanSource variants produce the same neutral fallback
         // when IPC is unavailable, confirming the fallback is source-agnostic.

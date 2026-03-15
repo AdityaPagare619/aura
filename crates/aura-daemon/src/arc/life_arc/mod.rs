@@ -23,7 +23,6 @@ pub use growth::{GrowthArc, GrowthEvent, GrowthGoal};
 pub use health_arc::{HealthArc, HealthEvent};
 pub use primitives::{ArcHealth, ArcType, ProactiveTrigger};
 pub use relationships::{RelationshipArc, TrackedRelationship};
-
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -167,7 +166,10 @@ mod tests {
         let ctx = mgr.full_llm_context(1_000_000);
         // Each arc key must be non-empty.
         assert!(!ctx.financial.is_empty(), "financial context missing");
-        assert!(!ctx.relationships.is_empty(), "relationships context missing");
+        assert!(
+            !ctx.relationships.is_empty(),
+            "relationships context missing"
+        );
         assert!(!ctx.health.is_empty(), "health context missing");
         assert!(!ctx.growth.is_empty(), "growth context missing");
     }

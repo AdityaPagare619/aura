@@ -152,8 +152,9 @@ fn collect_summary_stats(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::screen::Bounds;
+
+    use super::*;
 
     fn make_node(
         id: &str,

@@ -25,12 +25,13 @@
 //! It enters a gradual ramp-up phase: reduced action rate, elevated
 //! logging, and user confirmation for anything above L0.
 
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
-
-use serde::{Deserialize, Serialize};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use aura_types::errors::SecurityError;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // EmergencyState
@@ -105,13 +106,13 @@ impl std::fmt::Display for EmergencyReason {
             ),
             Self::UserRequested { trigger_phrase } => {
                 write!(f, "user requested: \"{trigger_phrase}\"")
-            }
+            },
             Self::ScreenFrozen { unchanged_actions } => {
                 write!(
                     f,
                     "screen frozen: {unchanged_actions} actions with no screen change"
                 )
-            }
+            },
             Self::WatchdogTimeout {
                 last_heartbeat_ms_ago,
             } => write!(

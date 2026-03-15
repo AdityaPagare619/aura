@@ -25,7 +25,7 @@ pub fn handle_pin(
                  Use /lock to lock the bot."
                     .to_string(),
             ))
-        }
+        },
         PinAction::Clear => {
             ctx.security.clear_pin();
             Ok(HandlerResponse::Html(
@@ -33,7 +33,7 @@ pub fn handle_pin(
                  until a new PIN is set."
                     .to_string(),
             ))
-        }
+        },
         PinAction::Status => {
             let status = if ctx.security.is_pin_set() {
                 "PIN is <b>set</b>"
@@ -48,7 +48,7 @@ pub fn handle_pin(
             Ok(HandlerResponse::Html(format!(
                 "<b>PIN Status</b>\n\n{status}\n{lock}"
             )))
-        }
+        },
     }
 }
 
@@ -81,14 +81,14 @@ pub fn handle_unlock(
             let msg = match e {
                 crate::telegram::security::SecurityError::InvalidPin => {
                     "Incorrect PIN. Try again.".to_string()
-                }
+                },
                 crate::telegram::security::SecurityError::PinNotConfigured => {
                     "No PIN configured. Use /pin set <value> first.".to_string()
-                }
+                },
                 other => format!("Unlock failed: {other}"),
             };
             Ok(HandlerResponse::text(msg))
-        }
+        },
     }
 }
 
@@ -130,11 +130,14 @@ pub fn handle_permissions(ctx: &HandlerContext<'_>) -> Result<HandlerResponse, A
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::telegram::audit::{AuditLog, AuditOutcome};
-    use crate::telegram::queue::MessageQueue;
-    use crate::telegram::security::SecurityGate;
     use rusqlite::Connection;
+
+    use super::*;
+    use crate::telegram::{
+        audit::{AuditLog, AuditOutcome},
+        queue::MessageQueue,
+        security::SecurityGate,
+    };
 
     fn make_ctx<'a>(
         sec: &'a mut SecurityGate,
@@ -173,7 +176,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("set"));
                 assert!(html.contains("unlocked"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -217,7 +220,7 @@ mod tests {
             HandlerResponse::Text(text) => {
                 assert!(text.contains("Cannot lock"));
                 assert!(text.contains("PIN"));
-            }
+            },
             other => panic!("expected Text, got {other:?}"),
         }
     }
@@ -238,7 +241,7 @@ mod tests {
                 assert!(html.contains("Audit Log"));
                 assert!(html.contains("/status"));
                 assert!(html.contains("2 total"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }

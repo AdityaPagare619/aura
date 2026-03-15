@@ -314,7 +314,7 @@ impl ESpeakTts {
             let mut samples = Vec::with_capacity(duration_samples);
             let period = (self.sample_rate as f32 / (150.0 * params.pitch)) as usize;
             for i in 0..duration_samples {
-                let val = if (i / period.max(1)) % 2 == 0 {
+                let val = if (i / period.max(1)).is_multiple_of(2) {
                     (4000.0 * params.volume) as i16
                 } else {
                     (-4000.0 * params.volume) as i16
@@ -390,10 +390,10 @@ impl TextToSpeech {
                         sample_rate: piper.sample_rate,
                         engine: TtsEngine::Piper,
                     });
-                }
+                },
                 Err(e) => {
                     log::tts_warn!("Piper TTS failed, falling back to eSpeak: {e}");
-                }
+                },
             }
         }
 

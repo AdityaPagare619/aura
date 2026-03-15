@@ -10,8 +10,10 @@
 //! - TTL 2 seconds (configurable)
 //! - LRU eviction when over capacity
 
-use aura_types::etg::{EtgEdge, EtgNode};
-use aura_types::screen::{ScreenNode, ScreenTree};
+use aura_types::{
+    etg::{EtgEdge, EtgNode},
+    screen::{ScreenNode, ScreenTree},
+};
 use tracing::{debug, trace};
 
 use super::verifier::hash_screen_state;
@@ -195,12 +197,12 @@ impl ScreenCache {
                 self.hits += 1;
                 trace!(state_hash, "cache hit");
                 Some(&self.entries[0].tree)
-            }
+            },
             None => {
                 self.misses += 1;
                 trace!(state_hash, "cache miss");
                 None
-            }
+            },
         }
     }
 
@@ -517,10 +519,14 @@ fn estimate_node_bytes(node: &ScreenNode) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
+
     use aura_types::screen::Bounds;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
+
+    use super::*;
 
     fn make_node(id: &str, text: Option<&str>, children: Vec<ScreenNode>) -> ScreenNode {
         ScreenNode {

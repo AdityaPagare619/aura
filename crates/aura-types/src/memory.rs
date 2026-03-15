@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::events::EventSource;
-use crate::ipc::MemoryTier;
+use crate::{events::EventSource, ipc::MemoryTier};
 
 /// A slot in working memory — short-lived, high-priority data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +33,8 @@ pub struct Episode {
     pub timestamp_ms: u64,
     pub access_count: u32,
     pub last_access_ms: u64,
-    /// Bounded at runtime to the model's fixed embedding dimension — enforced by the embedding engine.
+    /// Bounded at runtime to the model's fixed embedding dimension — enforced by the embedding
+    /// engine.
     pub embedding: Option<Vec<f32>>,
 }
 

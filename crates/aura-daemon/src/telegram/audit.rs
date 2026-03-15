@@ -5,8 +5,10 @@
 //! outcome. The log is backed by an in-memory ring buffer with optional
 //! SQLite persistence.
 
-use std::collections::VecDeque;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::VecDeque,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use serde::{Deserialize, Serialize};
 use tracing::instrument;

@@ -21,14 +21,14 @@ pub mod scheduler;
 pub mod tracker;
 
 // Re-export primary types for convenient access.
+use std::collections::HashMap;
+
 pub use conflicts::ConflictResolver;
 pub use decomposer::{GoalDecomposer, HtnDecomposer};
 pub use registry::GoalRegistry;
 pub use scheduler::{BdiScheduler, GoalScheduler};
-pub use tracker::GoalTracker;
-
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+pub use tracker::GoalTracker;
 
 // ---------------------------------------------------------------------------
 // Bounded collection primitives

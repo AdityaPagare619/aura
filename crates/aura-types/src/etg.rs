@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::actions::ActionType;
-use crate::dsl::DslStep;
+use crate::{actions::ActionType, dsl::DslStep};
 
 /// A node in the Element-Transition Graph — represents a unique screen state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +65,7 @@ impl EtgEdge {
     pub fn record_success(&mut self, duration_ms: u32, timestamp_ms: u64) {
         self.success_count += 1;
         self.last_used_ms = timestamp_ms;
-        
+
         let count = self.success_count as f32;
         let x = duration_ms as f32;
         let delta = x - self.avg_duration_ms;
@@ -244,18 +243,18 @@ mod tests {
             m2_duration_ms: 0.0,
             last_used_ms: 0,
         };
-        
+
         edge.record_success(100, 10);
         edge.record_success(120, 20);
         edge.record_success(80, 30);
-        
+
         // Mean should be exactly 100
         assert!((edge.avg_duration_ms - 100.0).abs() < f32::EPSILON);
-        
+
         // Variance computation: data=[100, 120, 80], mean=100
         // sum_sq_diff = 0^2 + 20^2 + (-20)^2 = 0 + 400 + 400 = 800
         assert!((edge.m2_duration_ms - 800.0).abs() < f32::EPSILON);
-        
+
         // std_dev = sqrt(800 / 2) = sqrt(400) = 20
         assert!((edge.duration_std_dev() - 20.0).abs() < f32::EPSILON);
     }

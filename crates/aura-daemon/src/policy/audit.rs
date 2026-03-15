@@ -32,13 +32,14 @@
 //! compatibility. This provides cryptographic preimage resistance for the
 //! audit chain — an attacker cannot forge entries without 2^64 work.
 
-use std::collections::VecDeque;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use std::{
+    collections::VecDeque,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use aura_types::errors::SecurityError;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::rules::RuleEffect;
 

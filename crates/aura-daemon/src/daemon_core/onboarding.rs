@@ -15,16 +15,17 @@
 //! Supports interruption/resumption at any phase boundary, skip option,
 //! and persistent state so onboarding can survive app restarts.
 
+use aura_types::{config::OnboardingConfig, errors::OnboardingError, identity::OceanTraits};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use aura_types::config::OnboardingConfig;
-use aura_types::errors::OnboardingError;
-use aura_types::identity::OceanTraits;
-
-use crate::daemon_core::calibration::{CalibrationEngine, CalibrationResult};
-use crate::daemon_core::tutorial::TutorialProgress;
-use crate::identity::user_profile::UserProfile;
+use crate::{
+    daemon_core::{
+        calibration::{CalibrationEngine, CalibrationResult},
+        tutorial::TutorialProgress,
+    },
+    identity::user_profile::UserProfile,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -318,10 +319,8 @@ impl OnboardingEngine {
     ) -> Result<PhaseResult, OnboardingError> {
         self.expect_phase(OnboardingPhase::PermissionSetup)?;
 
-        self.state.granted_permissions = granted
-            .into_iter()
-            .take(MAX_GRANTED_PERMISSIONS)
-            .collect();
+        self.state.granted_permissions =
+            granted.into_iter().take(MAX_GRANTED_PERMISSIONS).collect();
         let count = self.state.granted_permissions.len();
 
         let message = if count == 0 {
@@ -454,8 +453,7 @@ impl OnboardingEngine {
 
         self.state.calibration_answers = answers
             .iter()
-            .cloned()
-            .take(MAX_CALIBRATION_ANSWERS)
+            .take(MAX_CALIBRATION_ANSWERS).cloned()
             .collect();
 
         // Compute OCEAN adjustments — mechanical linear mapping of slider
@@ -702,7 +700,7 @@ impl OnboardingEngine {
                 let state: OnboardingState = serde_json::from_slice(&data)
                     .map_err(|e| OnboardingError::PersistenceFailed(format!("deserialize: {e}")))?;
                 Ok(Some(state))
-            }
+            },
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::PersistenceFailed(format!("load: {e}"))),
         }
@@ -813,8 +811,9 @@ impl OnboardingEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::config::OnboardingConfig;
+
+    use super::*;
 
     fn default_engine(now_ms: u64) -> OnboardingEngine {
         OnboardingEngine::new(OnboardingConfig::default(), now_ms)

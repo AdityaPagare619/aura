@@ -3,9 +3,13 @@
 //! Provides low-latency audio capture and playback through Android's Oboe library.
 //! On non-Android platforms, a mock implementation is provided for testing.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 // ---------------------------------------------------------------------------
 // Error type (voice-local, convertible to AuraError in mod.rs)
@@ -242,7 +246,7 @@ impl AudioIo {
         if self
             .input
             .as_ref()
-            .map_or(false, |i| i.running.load(Ordering::Relaxed))
+            .is_some_and(|i| i.running.load(Ordering::Relaxed))
         {
             return Err(AudioError::StreamAlreadyRunning);
         }
@@ -285,7 +289,7 @@ impl AudioIo {
     pub fn is_capturing(&self) -> bool {
         self.input
             .as_ref()
-            .map_or(false, |i| i.running.load(Ordering::Relaxed))
+            .is_some_and(|i| i.running.load(Ordering::Relaxed))
     }
 
     // -- Playback -------------------------------------------------------
@@ -295,7 +299,7 @@ impl AudioIo {
         if self
             .output
             .as_ref()
-            .map_or(false, |o| o.running.load(Ordering::Relaxed))
+            .is_some_and(|o| o.running.load(Ordering::Relaxed))
         {
             return Err(AudioError::StreamAlreadyRunning);
         }
@@ -332,7 +336,7 @@ impl AudioIo {
             Some(output) => {
                 output.enqueue(samples);
                 Ok(())
-            }
+            },
             None => Err(AudioError::StreamNotInitialized),
         }
     }
@@ -341,7 +345,7 @@ impl AudioIo {
     pub fn is_playing(&self) -> bool {
         self.output
             .as_ref()
-            .map_or(false, |o| o.running.load(Ordering::Relaxed))
+            .is_some_and(|o| o.running.load(Ordering::Relaxed))
     }
 
     /// Returns number of pending playback samples.

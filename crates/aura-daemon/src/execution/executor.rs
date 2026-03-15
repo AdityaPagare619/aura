@@ -19,26 +19,36 @@
 
 use std::time::Instant;
 
-use aura_types::actions::ActionType;
-use aura_types::dsl::{DslCondition, DslStep, FailureStrategy};
-use aura_types::errors::AuraError;
-use aura_types::etg::ActionPlan;
+use aura_types::{
+    actions::ActionType,
+    dsl::{DslCondition, DslStep, FailureStrategy},
+    errors::AuraError,
+    etg::ActionPlan,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 
-use crate::execution::cycle::{CycleDetector, CycleTier};
-use crate::execution::etg::EtgStore;
-use crate::execution::monitor::{EnhancedMonitor, ExecutionMonitor, InvariantViolation, MonitorDecision};
-use crate::execution::retry::{ErrorClass, IntelligentRetry, RetryStrategy};
-use crate::screen::actions::ScreenProvider;
-use crate::screen::selector::resolve_target;
-use crate::screen::verifier::{
-    hash_action, hash_screen_state, verify_action, ExpectedChange, VerificationResult,
+use crate::{
+    execution::{
+        cycle::{CycleDetector, CycleTier},
+        etg::EtgStore,
+        monitor::{EnhancedMonitor, ExecutionMonitor, InvariantViolation, MonitorDecision},
+        retry::{ErrorClass, IntelligentRetry, RetryStrategy},
+    },
+    policy::{
+        gate::PolicyGate,
+        sandbox::{ContainmentLevel, Sandbox},
+        wiring::production_policy_gate,
+    },
+    screen::{
+        actions::ScreenProvider,
+        anti_bot::AntiBot,
+        selector::resolve_target,
+        verifier::{
+            hash_action, hash_screen_state, verify_action, ExpectedChange, VerificationResult,
+        },
+    },
 };
-use crate::screen::anti_bot::AntiBot;
-use crate::policy::sandbox::{ContainmentLevel, Sandbox};
-use crate::policy::gate::PolicyGate;
-use crate::policy::wiring::production_policy_gate;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -69,15 +79,9 @@ pub enum ExecutionOutcome {
         elapsed_ms: u64,
     },
     /// Execution was cancelled (e.g., user interrupt).
-    Cancelled {
-        step: u32,
-        elapsed_ms: u64,
-    },
+    Cancelled { step: u32, elapsed_ms: u64 },
     /// Cycle detected — escalated to recovery.
-    CycleDetected {
-        step: u32,
-        tier: u8,
-    },
+    CycleDetected { step: u32, tier: u8 },
 }
 
 /// Result of a single step execution.
@@ -327,25 +331,25 @@ impl Executor {
                         reason,
                         elapsed_ms,
                     });
-                }
+                },
                 MonitorDecision::Replan { reason } => {
                     // Log replan suggestion; without Neocortex IPC we continue
                     // but record it so the monitor tracks the deviation.
                     warn!(step = step_num, reason = %reason, "enhanced monitor suggests replan");
                     self.enhanced_monitor.base.record_replan();
-                }
+                },
                 MonitorDecision::Throttle => {
-                    debug!(step = step_num, "enhanced monitor throttle — adding 500ms delay");
+                    debug!(
+                        step = step_num,
+                        "enhanced monitor throttle — adding 500ms delay"
+                    );
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                }
-                MonitorDecision::Continue => {}
+                },
+                MonitorDecision::Continue => {},
             }
 
             // Execute the step through the full pipeline
-            match self
-                .execute_step(step, step_num, screen, task_start)
-                .await
-            {
+            match self.execute_step(step, step_num, screen, task_start).await {
                 Ok(result) => {
                     steps_executed += 1;
 
@@ -372,7 +376,7 @@ impl Executor {
                         duration_ms = result.duration_ms,
                         "step completed"
                     );
-                }
+                },
                 Err(StepFailure::Abort(reason)) => {
                     let elapsed_ms = task_start.elapsed().as_millis() as u64;
                     // Record failure in enhanced monitor
@@ -387,18 +391,18 @@ impl Executor {
                         reason,
                         elapsed_ms,
                     });
-                }
+                },
                 Err(StepFailure::CycleEscalation(tier)) => {
                     warn!(step = step_num, ?tier, "cycle detected — escalating");
                     return Ok(ExecutionOutcome::CycleDetected {
                         step: step_num,
                         tier: tier as u8,
                     });
-                }
+                },
                 Err(StepFailure::Skipped) => {
                     debug!(step = step_num, "step skipped per failure strategy");
                     steps_executed += 1; // Count skipped steps as "executed"
-                }
+                },
                 Err(StepFailure::AskUser(msg)) => {
                     let elapsed_ms = task_start.elapsed().as_millis() as u64;
                     return Ok(ExecutionOutcome::Failed {
@@ -406,10 +410,10 @@ impl Executor {
                         reason: format!("user input needed: {}", msg),
                         elapsed_ms,
                     });
-                }
+                },
                 Err(StepFailure::ScreenError(e)) => {
                     return Err(AuraError::Screen(e));
-                }
+                },
             }
         }
 
@@ -446,139 +450,136 @@ impl Executor {
         step_num: u32,
         screen: &'a dyn ScreenProvider,
         task_start: Instant,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StepResult, StepFailure>> + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StepResult, StepFailure>> + 'a>>
+    {
         Box::pin(async move {
-        self.enhanced_monitor.base.start_step();
-        let step_start = Instant::now();
+            self.enhanced_monitor.base.start_step();
+            let step_start = Instant::now();
 
-        // Step key for intelligent retry tracking
-        let step_key = step
-            .label
-            .as_deref()
-            .unwrap_or("unnamed")
-            .to_owned();
+            // Step key for intelligent retry tracking
+            let step_key = step.label.as_deref().unwrap_or("unnamed").to_owned();
 
-        // Determine max retries from failure strategy
-        let max_retries = match &step.on_failure {
-            FailureStrategy::Retry { max } => *max,
-            FailureStrategy::Fallback(_) => 1, // Try once, then fallback
-            _ => 0, // Skip, Abort, AskUser: no retries
-        };
+            // Determine max retries from failure strategy
+            let max_retries = match &step.on_failure {
+                FailureStrategy::Retry { max } => *max,
+                FailureStrategy::Fallback(_) => 1, // Try once, then fallback
+                _ => 0,                            // Skip, Abort, AskUser: no retries
+            };
 
-        let mut last_error: Option<String> = None;
+            let mut last_error: Option<String> = None;
 
-        for attempt in 0..=max_retries {
-            // Circuit breaker check via intelligent retry
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            if !self.intelligent_retry.should_attempt(&step_key, now_ms) {
-                return Err(StepFailure::Abort(format!(
-                    "circuit breaker open for step '{}'",
-                    step_key
-                )));
-            }
-
-            if attempt > 0 {
-                self.enhanced_monitor.base.record_retry();
-                debug!(step = step_num, attempt, "retrying step");
-            }
-
-            // Check step-level invariants (fast check each attempt)
-            if let Some(violation) = self.enhanced_monitor.base.check_step_invariants() {
-                let elapsed_ms = task_start.elapsed().as_millis() as u64;
-                let _outcome = self.handle_invariant_violation(violation, step_num, elapsed_ms);
-                return Err(StepFailure::Abort(format!(
-                    "invariant violated: {:?}",
-                    violation
-                )));
-            }
-
-            match self.execute_step_attempt(step, step_num, screen).await {
-                Ok(result) if result.success => {
-                    let duration_ms = step_start.elapsed().as_millis() as u64;
-                    // Record success in intelligent retry
-                    self.intelligent_retry.handle_success(&step_key);
-                    return Ok(StepResult {
-                        success: true,
-                        verification: result.verification,
-                        retries_used: attempt,
-                        duration_ms,
-                    });
-                }
-                Ok(result) => {
-                    // Action executed but verification failed
-                    last_error = Some(format!(
-                        "verification failed (confidence: {:.2})",
-                        result
-                            .verification
-                            .as_ref()
-                            .map(|v| v.confidence)
-                            .unwrap_or(0.0)
-                    ));
-                }
-                Err(AttemptError::TargetNotFound(selector_desc)) => {
-                    last_error = Some(format!("target not found: {}", selector_desc));
-                }
-                Err(AttemptError::ActionFailed(reason)) => {
-                    last_error = Some(format!("action failed: {}", reason));
-                }
-                Err(AttemptError::ScreenUnavailable(e)) => {
-                    return Err(StepFailure::ScreenError(e));
-                }
-                Err(AttemptError::RateLimited(wait_ms)) => {
-                    // Rate limited — sleep and retry (don't count as a retry)
-                    debug!(wait_ms, "rate limited, waiting");
-                    tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
-                    last_error = Some(format!("rate limited for {}ms", wait_ms));
-                }
-                Err(AttemptError::SandboxDenied(reason)) => {
-                    // Sandbox denial is non-retryable — abort immediately.
-                    // Fail-secure: never retry a denied action.
-                    return Err(StepFailure::Abort(format!(
-                        "sandbox containment denied action: {reason}"
-                    )));
-                }
-            }
-
-            // Consult intelligent retry for failure classification and strategy
-            if let Some(ref error_msg) = last_error {
+            for attempt in 0..=max_retries {
+                // Circuit breaker check via intelligent retry
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                let strategy = self.intelligent_retry.handle_failure(
-                    &step_key,
-                    error_msg,
-                    |e: &String| classify_step_error(e),
-                    now_ms,
-                    attempt as u32,
-                );
-                match strategy {
-                    RetryStrategy::Abort { reason } => {
-                        return Err(StepFailure::Abort(reason));
-                    }
-                    RetryStrategy::UseAlternative { alternative } => {
-                        // Log the suggestion; runtime step-switching is not yet
-                        // supported, so we fall through to the normal failure strategy.
-                        warn!(
-                            step = step_num,
-                            alt = %alternative,
-                            "intelligent retry suggests alternative path"
-                        );
-                    }
-                    RetryStrategy::RetryWithBackoff => {
-                        // Continue with next attempt in the loop
+                if !self.intelligent_retry.should_attempt(&step_key, now_ms) {
+                    return Err(StepFailure::Abort(format!(
+                        "circuit breaker open for step '{}'",
+                        step_key
+                    )));
+                }
+
+                if attempt > 0 {
+                    self.enhanced_monitor.base.record_retry();
+                    debug!(step = step_num, attempt, "retrying step");
+                }
+
+                // Check step-level invariants (fast check each attempt)
+                if let Some(violation) = self.enhanced_monitor.base.check_step_invariants() {
+                    let elapsed_ms = task_start.elapsed().as_millis() as u64;
+                    let _outcome = self.handle_invariant_violation(violation, step_num, elapsed_ms);
+                    return Err(StepFailure::Abort(format!(
+                        "invariant violated: {:?}",
+                        violation
+                    )));
+                }
+
+                match self.execute_step_attempt(step, step_num, screen).await {
+                    Ok(result) if result.success => {
+                        let duration_ms = step_start.elapsed().as_millis() as u64;
+                        // Record success in intelligent retry
+                        self.intelligent_retry.handle_success(&step_key);
+                        return Ok(StepResult {
+                            success: true,
+                            verification: result.verification,
+                            retries_used: attempt,
+                            duration_ms,
+                        });
+                    },
+                    Ok(result) => {
+                        // Action executed but verification failed
+                        last_error = Some(format!(
+                            "verification failed (confidence: {:.2})",
+                            result
+                                .verification
+                                .as_ref()
+                                .map(|v| v.confidence)
+                                .unwrap_or(0.0)
+                        ));
+                    },
+                    Err(AttemptError::TargetNotFound(selector_desc)) => {
+                        last_error = Some(format!("target not found: {}", selector_desc));
+                    },
+                    Err(AttemptError::ActionFailed(reason)) => {
+                        last_error = Some(format!("action failed: {}", reason));
+                    },
+                    Err(AttemptError::ScreenUnavailable(e)) => {
+                        return Err(StepFailure::ScreenError(e));
+                    },
+                    Err(AttemptError::RateLimited(wait_ms)) => {
+                        // Rate limited — sleep and retry (don't count as a retry)
+                        debug!(wait_ms, "rate limited, waiting");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+                        last_error = Some(format!("rate limited for {}ms", wait_ms));
+                    },
+                    Err(AttemptError::SandboxDenied(reason)) => {
+                        // Sandbox denial is non-retryable — abort immediately.
+                        // Fail-secure: never retry a denied action.
+                        return Err(StepFailure::Abort(format!(
+                            "sandbox containment denied action: {reason}"
+                        )));
+                    },
+                }
+
+                // Consult intelligent retry for failure classification and strategy
+                if let Some(ref error_msg) = last_error {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let strategy = self.intelligent_retry.handle_failure(
+                        &step_key,
+                        error_msg,
+                        |e: &String| classify_step_error(e),
+                        now_ms,
+                        attempt as u32,
+                    );
+                    match strategy {
+                        RetryStrategy::Abort { reason } => {
+                            return Err(StepFailure::Abort(reason));
+                        },
+                        RetryStrategy::UseAlternative { alternative } => {
+                            // Log the suggestion; runtime step-switching is not yet
+                            // supported, so we fall through to the normal failure strategy.
+                            warn!(
+                                step = step_num,
+                                alt = %alternative,
+                                "intelligent retry suggests alternative path"
+                            );
+                        },
+                        RetryStrategy::RetryWithBackoff => {
+                            // Continue with next attempt in the loop
+                        },
                     }
                 }
             }
-        }
 
-        // All retries exhausted — apply failure strategy
-        let reason = last_error.unwrap_or_else(|| "unknown failure".to_string());
-        self.apply_failure_strategy(step, step_num, screen, &reason, task_start)
-            .await
+            // All retries exhausted — apply failure strategy
+            let reason = last_error.unwrap_or_else(|| "unknown failure".to_string());
+            self.apply_failure_strategy(step, step_num, screen, &reason, task_start)
+                .await
         }) // Box::pin
     }
 
@@ -635,7 +636,7 @@ impl Executor {
                 return Err(AttemptError::SandboxDenied(format!(
                     "action classified as {containment} at step {step_num}"
                 )));
-            }
+            },
             ContainmentLevel::Restricted => {
                 // L2: Preview + confirm — the executor cannot await user
                 // input, so we DENY here (fail-secure).  Task-level L2
@@ -655,7 +656,7 @@ impl Executor {
                     "action classified as {containment} at step {step_num} — \
                      confirmation not available at execution level (fail-secure)"
                 )));
-            }
+            },
             ContainmentLevel::Monitored => {
                 // L1: Execute + log — audit trail for monitored actions.
                 tracing::debug!(
@@ -665,10 +666,10 @@ impl Executor {
                     step = step_num,
                     "sandbox: action monitored at L1"
                 );
-            }
+            },
             ContainmentLevel::Direct => {
                 // L0: Auto-approve — trusted action, no special handling.
-            }
+            },
         }
 
         // ── Stage 3: Anti-bot rate limiting ──
@@ -680,10 +681,10 @@ impl Executor {
                     tokio::time::sleep(tokio::time::Duration::from_millis(recommended_delay_ms))
                         .await;
                 }
-            }
+            },
             Err(must_wait_ms) => {
                 return Err(AttemptError::RateLimited(must_wait_ms));
-            }
+            },
         }
 
         // ── Stage 5: Execute action ──
@@ -742,30 +743,34 @@ impl Executor {
             );
             // Handle cycle tiers
             match cycle_result.tier {
-                CycleTier::None => {} // unreachable here
+                CycleTier::None => {}, // unreachable here
                 CycleTier::Micro => {
                     // Micro: acknowledge and let retry handle it
                     let _can_retry = self.cycle_detector.acknowledge_recovery();
                     // Fall through — the step retry logic will handle re-attempt
-                }
+                },
                 CycleTier::Strategic => {
                     // Strategic: would need replan from Neocortex
                     self.enhanced_monitor.base.record_replan();
                     // For now, we don't have IPC to Neocortex, so we continue
                     // and let the monitor's replan limit catch runaway replans
-                }
+                },
                 CycleTier::GracefulAbort | CycleTier::Emergency => {
                     // Tiers 3-4: abort execution
                     // (Recording partial progress is done at the plan level)
                     // Don't return error here — let the step result propagate
                     // The caller will see the cycle tier in the result
-                }
+                },
             }
         }
 
         // ── Stage 9: Check invariants ──
         if let Some(violation) = self.enhanced_monitor.base.check_invariants() {
-            warn!(?violation, step = step_num, "invariant violation during step");
+            warn!(
+                ?violation,
+                step = step_num,
+                "invariant violation during step"
+            );
             // Don't abort here — return the step result and let the main loop handle it
         }
 
@@ -798,7 +803,9 @@ impl Executor {
         if let Some(ref target) = step.target {
             if let Some(resolved) = resolve_target(&after_tree, target, DEFAULT_MAX_FALLBACK_DEPTH)
             {
-                self.enhanced_monitor.base.record_fallback_depth(resolved.level as u32);
+                self.enhanced_monitor
+                    .base
+                    .record_fallback_depth(resolved.level as u32);
             }
         }
 
@@ -829,7 +836,10 @@ impl Executor {
         };
 
         // Only resolve targets for coordinate-based actions
-        let needs_coordinates = matches!(action, ActionType::Tap { .. } | ActionType::LongPress { .. });
+        let needs_coordinates = matches!(
+            action,
+            ActionType::Tap { .. } | ActionType::LongPress { .. }
+        );
 
         if !needs_coordinates {
             return Ok(action.clone());
@@ -877,62 +887,61 @@ impl Executor {
         screen: &'a dyn ScreenProvider,
         reason: &'a str,
         task_start: Instant,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StepResult, StepFailure>> + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StepResult, StepFailure>> + 'a>>
+    {
         Box::pin(async move {
-        match &step.on_failure {
-            FailureStrategy::Retry { .. } => {
-                // Retries already exhausted in the caller
-                Err(StepFailure::Abort(format!(
-                    "step {} failed after retries: {}",
+            match &step.on_failure {
+                FailureStrategy::Retry { .. } => {
+                    // Retries already exhausted in the caller
+                    Err(StepFailure::Abort(format!(
+                        "step {} failed after retries: {}",
+                        step_num, reason
+                    )))
+                },
+                FailureStrategy::Skip => {
+                    debug!(step = step_num, reason, "skipping failed step");
+                    Err(StepFailure::Skipped)
+                },
+                FailureStrategy::Abort => Err(StepFailure::Abort(format!(
+                    "step {} aborted: {}",
                     step_num, reason
-                )))
-            }
-            FailureStrategy::Skip => {
-                debug!(step = step_num, reason, "skipping failed step");
-                Err(StepFailure::Skipped)
-            }
-            FailureStrategy::Abort => Err(StepFailure::Abort(format!(
-                "step {} aborted: {}",
-                step_num, reason
-            ))),
-            FailureStrategy::Fallback(fallback_steps) => {
-                debug!(
-                    step = step_num,
-                    fallback_count = fallback_steps.len(),
-                    "executing fallback steps"
-                );
+                ))),
+                FailureStrategy::Fallback(fallback_steps) => {
+                    debug!(
+                        step = step_num,
+                        fallback_count = fallback_steps.len(),
+                        "executing fallback steps"
+                    );
 
-                // Execute each fallback step. If any fails, abort.
-                for (fb_idx, fb_step) in fallback_steps.iter().enumerate() {
-                    match self
-                        .execute_step(fb_step, step_num, screen, task_start)
-                        .await
-                    {
-                        Ok(result) if result.success => {
-                            debug!(step = step_num, fb_idx, "fallback step succeeded");
+                    // Execute each fallback step. If any fails, abort.
+                    for (fb_idx, fb_step) in fallback_steps.iter().enumerate() {
+                        match self
+                            .execute_step(fb_step, step_num, screen, task_start)
+                            .await
+                        {
+                            Ok(result) if result.success => {
+                                debug!(step = step_num, fb_idx, "fallback step succeeded");
+                            },
+                            Ok(_) => {
+                                return Err(StepFailure::Abort(format!(
+                                    "fallback step {} for step {} failed verification",
+                                    fb_idx, step_num
+                                )));
+                            },
+                            Err(e) => return Err(e),
                         }
-                        Ok(_) => {
-                            return Err(StepFailure::Abort(format!(
-                                "fallback step {} for step {} failed verification",
-                                fb_idx, step_num
-                            )));
-                        }
-                        Err(e) => return Err(e),
                     }
-                }
 
-                // All fallback steps succeeded
-                Ok(StepResult {
-                    success: true,
-                    verification: None,
-                    retries_used: 0,
-                    duration_ms: 0,
-                })
+                    // All fallback steps succeeded
+                    Ok(StepResult {
+                        success: true,
+                        verification: None,
+                        retries_used: 0,
+                        duration_ms: 0,
+                    })
+                },
+                FailureStrategy::AskUser(prompt) => Err(StepFailure::AskUser(prompt.clone())),
             }
-            FailureStrategy::AskUser(prompt) => {
-                Err(StepFailure::AskUser(prompt.clone()))
-            }
-        }
         }) // Box::pin
     }
 
@@ -947,9 +956,7 @@ impl Executor {
     ) -> ExecutionOutcome {
         let reason = match violation {
             InvariantViolation::ActionRetries => "action retry limit exceeded".to_string(),
-            InvariantViolation::StepFallbackDepth => {
-                "selector fallback depth exceeded".to_string()
-            }
+            InvariantViolation::StepFallbackDepth => "selector fallback depth exceeded".to_string(),
             InvariantViolation::StepElapsed => "step timeout exceeded".to_string(),
             InvariantViolation::TaskSteps => "task step limit exceeded".to_string(),
             InvariantViolation::TaskElapsed => "task time limit exceeded".to_string(),
@@ -1053,26 +1060,22 @@ fn postcondition_to_expected_change(condition: Option<&DslCondition>) -> Option<
     match cond {
         DslCondition::ElementExists(selector) => {
             Some(ExpectedChange::ElementAppears(format!("{:?}", selector)))
-        }
+        },
         DslCondition::ElementNotExists(_) => Some(ExpectedChange::ScreenChange),
         DslCondition::TextEquals { expected, .. } => {
             Some(ExpectedChange::TextAppears(expected.clone()))
-        }
+        },
         DslCondition::AppInForeground(_) => Some(ExpectedChange::AppChange),
-        DslCondition::ScreenContainsText(text) => {
-            Some(ExpectedChange::TextAppears(text.clone()))
-        }
+        DslCondition::ScreenContainsText(text) => Some(ExpectedChange::TextAppears(text.clone())),
         DslCondition::And(conditions) => {
             // Use the first condition's expected change
             conditions
                 .first()
                 .and_then(|c| postcondition_to_expected_change(Some(c)))
-        }
-        DslCondition::Or(conditions) => {
-            conditions
-                .first()
-                .and_then(|c| postcondition_to_expected_change(Some(c)))
-        }
+        },
+        DslCondition::Or(conditions) => conditions
+            .first()
+            .and_then(|c| postcondition_to_expected_change(Some(c))),
         DslCondition::Not(_) => Some(ExpectedChange::ScreenChange),
     }
 }
@@ -1090,15 +1093,13 @@ fn is_action_verified(action: &ActionType, verification: &VerificationResult) ->
         // Navigation actions: expect screen to change
         ActionType::Back | ActionType::Home | ActionType::Recents | ActionType::OpenApp { .. } => {
             verification.screen_changed || verification.app_changed || verification.activity_changed
-        }
+        },
         // NoChange for type into same field is expected
         ActionType::Type { .. } => {
             verification.confidence >= MIN_VERIFICATION_CONFIDENCE || verification.text_changes > 0
-        }
+        },
         // General: use confidence threshold
-        _ => {
-            verification.confidence >= MIN_VERIFICATION_CONFIDENCE || verification.screen_changed
-        }
+        _ => verification.confidence >= MIN_VERIFICATION_CONFIDENCE || verification.screen_changed,
     }
 }
 
@@ -1109,10 +1110,7 @@ fn collect_interactive_ids(node: &aura_types::screen::ScreenNode) -> Vec<String>
     ids
 }
 
-fn collect_interactive_ids_recursive(
-    node: &aura_types::screen::ScreenNode,
-    ids: &mut Vec<String>,
-) {
+fn collect_interactive_ids_recursive(node: &aura_types::screen::ScreenNode, ids: &mut Vec<String>) {
     if node.is_clickable || node.is_editable || node.is_scrollable || node.is_checkable {
         ids.push(node.id.clone());
     }
@@ -1127,13 +1125,18 @@ fn collect_interactive_ids_recursive(
 
 #[cfg(test)]
 mod tests {
+    use aura_types::{
+        actions::ActionType,
+        dsl::{DslStep, FailureStrategy},
+        etg::{ActionPlan, PlanSource},
+        screen::{Bounds, ScreenNode, ScreenTree},
+    };
+
     use super::*;
-    use aura_types::actions::ActionType;
-    use aura_types::dsl::{DslStep, FailureStrategy};
-    use aura_types::etg::{ActionPlan, PlanSource};
-    use aura_types::screen::{Bounds, ScreenNode, ScreenTree};
-    use crate::screen::actions::MockScreenProvider;
-    use crate::policy::rules::{PolicyRule, RuleEffect};
+    use crate::{
+        policy::rules::{PolicyRule, RuleEffect},
+        screen::actions::MockScreenProvider,
+    };
 
     /// Helper: create a minimal screen tree with the given nodes.
     fn make_tree(package: &str, activity: &str, nodes: Vec<ScreenNode>) -> ScreenTree {
@@ -1229,7 +1232,10 @@ mod tests {
         let plan = make_plan("empty test", vec![]);
         let screen = MockScreenProvider::single(make_tree("com.test", "Main", vec![]));
 
-        let outcome = executor.execute(&plan, &screen).await.expect("should succeed");
+        let outcome = executor
+            .execute(&plan, &screen)
+            .await
+            .expect("should succeed");
         match outcome {
             ExecutionOutcome::Success {
                 steps_executed,
@@ -1237,7 +1243,7 @@ mod tests {
             } => {
                 assert_eq!(steps_executed, 0);
                 assert_eq!(elapsed_ms, 0);
-            }
+            },
             other => panic!("expected Success, got {:?}", other),
         }
     }
@@ -1258,12 +1264,15 @@ mod tests {
         let plan = make_plan("too many steps", steps);
         let screen = MockScreenProvider::single(make_tree("com.test", "Main", vec![]));
 
-        let outcome = executor.execute(&plan, &screen).await.expect("should succeed");
+        let outcome = executor
+            .execute(&plan, &screen)
+            .await
+            .expect("should succeed");
         match outcome {
             ExecutionOutcome::Failed { step, reason, .. } => {
                 assert_eq!(step, 0);
                 assert!(reason.contains("exceeds max"));
-            }
+            },
             other => panic!("expected Failed, got {:?}", other),
         }
     }
@@ -1288,12 +1297,15 @@ mod tests {
         let mut executor = Executor::for_testing();
 
         let plan = make_plan("tap OK button", vec![tap_step(540, 960)]);
-        let outcome = executor.execute(&plan, &screen).await.expect("should succeed");
+        let outcome = executor
+            .execute(&plan, &screen)
+            .await
+            .expect("should succeed");
 
         match outcome {
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 1);
-            }
+            },
             other => panic!("expected Success, got {:?}", other),
         }
 
@@ -1340,12 +1352,15 @@ mod tests {
         ];
 
         let plan = make_plan("navigate and return", steps);
-        let outcome = executor.execute(&plan, &screen).await.expect("should succeed");
+        let outcome = executor
+            .execute(&plan, &screen)
+            .await
+            .expect("should succeed");
 
         match outcome {
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 2);
-            }
+            },
             other => panic!("expected Success, got {:?}", other),
         }
     }
@@ -1397,10 +1412,10 @@ mod tests {
         match outcome {
             ExecutionOutcome::Failed { reason, .. } => {
                 assert!(reason.contains("action failed"));
-            }
+            },
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 2);
-            }
+            },
             other => panic!("unexpected: {:?}", other),
         }
     }
@@ -1457,7 +1472,7 @@ mod tests {
             ExecutionOutcome::Failed { step, reason, .. } => {
                 assert_eq!(step, 0);
                 assert!(reason.contains("action failed"));
-            }
+            },
             other => panic!("expected Failed, got {:?}", other),
         }
     }
@@ -1578,7 +1593,10 @@ mod tests {
         let screen = MockScreenProvider::new(vec![tree, tree2]);
 
         let plan = make_plan("tap OK button", vec![tap_step(540, 960)]);
-        let outcome = executor.execute(&plan, &screen).await.expect("should return outcome");
+        let outcome = executor
+            .execute(&plan, &screen)
+            .await
+            .expect("should return outcome");
 
         match outcome {
             ExecutionOutcome::Failed { step, reason, .. } => {
@@ -1587,7 +1605,7 @@ mod tests {
                     reason.contains("PolicyGate denied"),
                     "reason should mention PolicyGate denial, got: {reason}"
                 );
-            }
+            },
             other => panic!(
                 "expected ExecutionOutcome::Failed from PolicyGate denial, got: {:?}",
                 other
@@ -1631,12 +1649,15 @@ mod tests {
         let screen = MockScreenProvider::new(vec![tree1, tree2]);
 
         let plan = make_plan("tap OK button", vec![tap_step(540, 960)]);
-        let outcome = executor.execute(&plan, &screen).await.expect("should return outcome");
+        let outcome = executor
+            .execute(&plan, &screen)
+            .await
+            .expect("should return outcome");
 
         match outcome {
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 1, "one tap step should have executed");
-            }
+            },
             other => panic!(
                 "expected ExecutionOutcome::Success with allow rule, got: {:?}",
                 other
@@ -1645,6 +1666,10 @@ mod tests {
 
         // Verify the tap action was dispatched.
         let log = screen.action_log().unwrap();
-        assert_eq!(log.len(), 1, "exactly one action should have been dispatched");
+        assert_eq!(
+            log.len(),
+            1,
+            "exactly one action should have been dispatched"
+        );
     }
 }

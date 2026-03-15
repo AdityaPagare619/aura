@@ -3,7 +3,8 @@
 //! Replaces the v3 keyword-matching parser with a multi-stage NLU pipeline:
 //!
 //! 1. **Tokenization** — normalize input (lowercase, strip whitespace)
-//! 2. **Negation Detection** — SAFETY-CRITICAL: detect "don't", "never", contractions, double negation
+//! 2. **Negation Detection** — SAFETY-CRITICAL: detect "don't", "never", contractions, double
+//!    negation
 //! 3. **Multi-Command Decomposition** — split compound commands ("X and Y", "first X then Y")
 //! 4. **Pattern Matching (fast path)** — regex-free patterns for ~30 common commands
 //! 5. **Entity Extraction** — extract times, contacts, apps, numbers, durations
@@ -17,14 +18,15 @@
 // Cap on dialogue turns retained in recent_turns ring buffer.
 const MAX_DIALOGUE_TURNS: usize = 10;
 
-use tracing::{debug, instrument, trace, warn};
-
 use aura_types::events::{
     EventSource, Intent, NotificationCategory, NotificationEvent, ParsedEvent, RawEvent,
 };
+use tracing::{debug, instrument, trace, warn};
 
-use super::entity::{Entity, EntityExtractor, EntityType};
-use super::slots::{ConversationContext, SlotFiller, SlotFillingResult};
+use super::{
+    entity::{Entity, EntityExtractor, EntityType},
+    slots::{ConversationContext, SlotFiller, SlotFillingResult},
+};
 
 // ---------------------------------------------------------------------------
 // NLU output types
@@ -91,8 +93,10 @@ impl NegationResult {
 }
 
 /// Stateless negation detector. Handles:
-/// - Explicit negators: "don't", "do not", "never", "not", "no", "stop", "cancel", "quit", "abort", "halt"
-/// - Contracted forms: "wouldn't", "shouldn't", "can't", "won't", "couldn't", "mustn't", "isn't", "aren't"
+/// - Explicit negators: "don't", "do not", "never", "not", "no", "stop", "cancel", "quit", "abort",
+///   "halt"
+/// - Contracted forms: "wouldn't", "shouldn't", "can't", "won't", "couldn't", "mustn't", "isn't",
+///   "aren't"
 /// - Implicit negation: "avoid", "skip", "forget about", "refrain from", "prevent"
 /// - Double negation: "don't NOT call" → positive (cancel out)
 /// - Scoped negation: "don't call but DO text" → negation only on first clause
@@ -591,7 +595,7 @@ impl DialogueState {
 
         // Store the intent (skip Negated/Unknown/Conversation for "do that again").
         match intent {
-            NluIntent::Unknown { .. } | NluIntent::Conversation { .. } => {}
+            NluIntent::Unknown { .. } | NluIntent::Conversation { .. } => {},
             _ => self.last_intent = Some(intent.clone()),
         }
 
@@ -726,9 +730,9 @@ fn intent_risk_weight(intent: &NluIntent) -> f32 {
 /// Pattern matching is deterministic and highly reliable; LLM parsing is noisy.
 fn method_reliability_bonus(method: ParseMethod) -> f32 {
     match method {
-        ParseMethod::Pattern => 0.20,      // High reliability, lower threshold needed
-        ParseMethod::Hybrid => 0.10,       // Mixed reliability
-        ParseMethod::Llm => 0.0,           // No bonus — need full confidence
+        ParseMethod::Pattern => 0.20, // High reliability, lower threshold needed
+        ParseMethod::Hybrid => 0.10,  // Mixed reliability
+        ParseMethod::Llm => 0.0,      // No bonus — need full confidence
         ParseMethod::KeywordFallback => -0.05, // Penalty — degraded mode
     }
 }
@@ -737,12 +741,12 @@ fn method_reliability_bonus(method: ParseMethod) -> f32 {
 ///
 /// Instead of two flat global thresholds, the required confidence adapts to:
 ///
-/// 1. **Action risk**: Irreversible actions (calls, messages) need higher
-///    confidence than reversible ones (opening an app, scrolling).
-/// 2. **Parse method reliability**: Pattern-matched intents have a built-in
-///    reliability bonus; LLM-parsed intents do not.
-/// 3. **Negation state**: Negated intents require elevated confidence because
-///    a misdetected negation executes the opposite of user intent.
+/// 1. **Action risk**: Irreversible actions (calls, messages) need higher confidence than
+///    reversible ones (opening an app, scrolling).
+/// 2. **Parse method reliability**: Pattern-matched intents have a built-in reliability bonus;
+///    LLM-parsed intents do not.
+/// 3. **Negation state**: Negated intents require elevated confidence because a misdetected
+///    negation executes the opposite of user intent.
 ///
 /// The required confidence formula:
 /// ```text
@@ -783,16 +787,16 @@ fn intent_description(intent: &NluIntent) -> String {
                 .map(|a| format!(" via {}", a))
                 .unwrap_or_default();
             format!("send a message to {}{}", to, via)
-        }
+        },
         NluIntent::AppOpen { app } => format!("open {}", app),
         NluIntent::AlarmSet { time, .. } => {
             let t = time.as_deref().unwrap_or("unspecified time");
             format!("set an alarm for {}", t)
-        }
+        },
         NluIntent::TimerSet { duration, .. } => {
             let d = duration.as_deref().unwrap_or("unspecified duration");
             format!("set a timer for {}", d)
-        }
+        },
         NluIntent::SettingsToggle { setting, state } => {
             let action = match state {
                 Some(true) => "turn on",
@@ -800,7 +804,7 @@ fn intent_description(intent: &NluIntent) -> String {
                 None => "toggle",
             };
             format!("{} {}", action, setting)
-        }
+        },
         NluIntent::FileShare { file, app } => {
             let f = file.as_deref().unwrap_or("a file");
             let via = app
@@ -808,7 +812,7 @@ fn intent_description(intent: &NluIntent) -> String {
                 .map(|a| format!(" via {}", a))
                 .unwrap_or_default();
             format!("share {}{}", f, via)
-        }
+        },
         NluIntent::Negated { original, .. } => format!("NOT {}", intent_description(original)),
         _ => format!("{:?}", intent),
     }
@@ -1146,7 +1150,8 @@ impl CommandParser {
         self.context.update(&entities);
 
         // Bug C fix: compute de-negated forms so try_pattern_match sees the inner command.
-        // e.g. "don't call Alice" → inner = "call Alice" for pattern matching; Stage 9 wraps result.
+        // e.g. "don't call Alice" → inner = "call Alice" for pattern matching; Stage 9 wraps
+        // result.
         let (match_normalized, match_original) = if negation.is_negated {
             let (dn, do_) = strip_negation_prefix_pair(&resolved_normalized, &resolved_input);
             (dn.to_string(), do_.to_string())
@@ -1205,7 +1210,8 @@ impl CommandParser {
         // metrics and records them for tracing. The LLM context builder includes these
         // metrics so the LLM can decide if it needs to ask the user for confirmation.
         {
-            let (risk, method_bonus, conf) = ambiguity_metrics(&result.intent, result.confidence, result.parse_method);
+            let (risk, method_bonus, conf) =
+                ambiguity_metrics(&result.intent, result.confidence, result.parse_method);
             debug!(
                 risk,
                 method_bonus,
@@ -1859,7 +1865,7 @@ impl CommandParser {
         // "copy {text}", "copy to clipboard"
         if normalized.starts_with("copy ") {
             let text =
-                extract_after_keyword(original, &["copy "]).unwrap_or_else(|| "".to_string());
+                extract_after_keyword(original, &["copy "]).unwrap_or_default();
             if !text.is_empty() {
                 return Some(make_result(NluIntent::ClipboardCopy { text }, &[], 0.85));
             }
@@ -2110,9 +2116,21 @@ fn strip_polite_prefix_pair<'a>(normalized: &'a str, original: &'a str) -> (&'a 
 fn strip_negation_prefix_pair<'a>(normalized: &'a str, original: &'a str) -> (&'a str, &'a str) {
     // Longest patterns first to avoid partial matches.
     const NEGATION_PREFIXES: &[&str] = &[
-        "please don't ", "please do not ", "don't ", "dont ", "do not ",
-        "won't ", "wont ", "wouldn't ", "wouldnt ", "shouldn't ", "shouldnt ",
-        "never ", "stop ", "cancel ", "abort ",
+        "please don't ",
+        "please do not ",
+        "don't ",
+        "dont ",
+        "do not ",
+        "won't ",
+        "wont ",
+        "wouldn't ",
+        "wouldnt ",
+        "shouldn't ",
+        "shouldnt ",
+        "never ",
+        "stop ",
+        "cancel ",
+        "abort ",
     ];
     for prefix in NEGATION_PREFIXES {
         if normalized.starts_with(prefix) {
@@ -2135,11 +2153,16 @@ fn extract_to_field(original: &str) -> Option<String> {
     let lower = original.to_ascii_lowercase();
     let to_pos = lower.find(" to ")?;
     let after_to = &original[to_pos + 4..];
-    let end = after_to.to_ascii_lowercase()
+    let end = after_to
+        .to_ascii_lowercase()
         .find(" on ")
         .unwrap_or(after_to.len());
     let contact = after_to[..end].trim();
-    if contact.is_empty() { None } else { Some(contact.to_string()) }
+    if contact.is_empty() {
+        None
+    } else {
+        Some(contact.to_string())
+    }
 }
 
 /// Bug D fix: structurally extract the app after " on " in "send X to Alice on WhatsApp".
@@ -2148,7 +2171,11 @@ fn extract_on_field(original: &str) -> Option<String> {
     let lower = original.to_ascii_lowercase();
     let on_pos = lower.find(" on ")?;
     let after_on = &original[on_pos + 4..].trim();
-    if after_on.is_empty() { None } else { Some(after_on.to_string()) }
+    if after_on.is_empty() {
+        None
+    } else {
+        Some(after_on.to_string())
+    }
 }
 
 /// Create a ParseResult from an intent with default fields.
@@ -2398,7 +2425,10 @@ mod tests {
         let prompt = CommandParser::llm_parse_prompt("open spotify");
         // Architecture note: llm_parse_prompt() is stubbed (Theater AGI guard).
         // Prompt construction belongs in the LLM orchestration layer.
-        assert!(prompt.is_empty(), "llm_parse_prompt should return empty string (stubbed)");
+        assert!(
+            prompt.is_empty(),
+            "llm_parse_prompt should return empty string (stubbed)"
+        );
     }
 
     #[test]
@@ -2423,7 +2453,8 @@ mod tests {
 
     #[test]
     fn test_event_intent_action_request() {
-        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI guard).
+        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI
+        // guard).
         let ep = EventParser::new();
         let event = ep.parse_raw(&make_raw("open the weather app"));
         assert_eq!(event.intent, Intent::RoutineEvent);
@@ -2431,7 +2462,8 @@ mod tests {
 
     #[test]
     fn test_event_intent_system_alert() {
-        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI guard).
+        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI
+        // guard).
         let ep = EventParser::new();
         let event = ep.parse_raw(&make_raw("critical battery low warning"));
         assert_eq!(event.intent, Intent::RoutineEvent);
@@ -2439,7 +2471,8 @@ mod tests {
 
     #[test]
     fn test_event_intent_conversation_continue() {
-        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI guard).
+        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI
+        // guard).
         let ep = EventParser::new();
         let event = ep.parse_raw(&make_raw("okay"));
         assert_eq!(event.intent, Intent::RoutineEvent);
@@ -2447,7 +2480,8 @@ mod tests {
 
     #[test]
     fn test_event_notification_parsing() {
-        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI guard).
+        // Architecture note: classify_intent() is stubbed to return RoutineEvent (Theater AGI
+        // guard).
         let ep = EventParser::new();
         let notif = NotificationEvent {
             package: "com.uber".to_string(),
@@ -2794,7 +2828,11 @@ mod tests {
                 &[],
             );
         }
-        assert_eq!(state.recent_turns.len(), MAX_DIALOGUE_TURNS, "ring buffer should cap at MAX_DIALOGUE_TURNS");
+        assert_eq!(
+            state.recent_turns.len(),
+            MAX_DIALOGUE_TURNS,
+            "ring buffer should cap at MAX_DIALOGUE_TURNS"
+        );
         assert_eq!(state.turn_count, 12, "turn counter should be 12");
     }
 }

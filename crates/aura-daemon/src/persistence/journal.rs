@@ -16,9 +16,11 @@
 //! - `fsync` after every write.  No buffered I/O.
 //! - No external crate dependencies — uses `std::fs` only.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::{
+    fs::{File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -160,13 +162,17 @@ impl std::fmt::Display for JournalError {
         match self {
             Self::Io(e) => write!(f, "journal I/O error: {e}"),
             Self::Full => write!(f, "journal full (>{MAX_JOURNAL_BYTES} bytes)"),
-            Self::CorruptEntry { offset, expected_crc, actual_crc } => {
+            Self::CorruptEntry {
+                offset,
+                expected_crc,
+                actual_crc,
+            } => {
                 write!(f, "corrupt entry at offset {offset}: expected CRC {expected_crc:#010X}, got {actual_crc:#010X}")
-            }
+            },
             Self::Truncated { offset } => write!(f, "truncated entry at offset {offset}"),
             Self::PayloadTooLarge { size } => {
                 write!(f, "payload too large: {size} bytes (max 65536)")
-            }
+            },
         }
     }
 }
@@ -269,7 +275,9 @@ impl WriteAheadJournal {
         payload: &[u8],
     ) -> Result<(), JournalError> {
         if payload.len() > 65536 {
-            return Err(JournalError::PayloadTooLarge { size: payload.len() });
+            return Err(JournalError::PayloadTooLarge {
+                size: payload.len(),
+            });
         }
 
         let timestamp_ms = now_ms();
@@ -370,24 +378,22 @@ impl WriteAheadJournal {
             // Try to read entry header: length(4) + checksum(4).
             let mut header_buf = [0u8; ENTRY_HEADER_SIZE];
             match read_exact_or_eof(&mut self.file, &mut header_buf) {
-                Ok(true) => {} // got full header
+                Ok(true) => {}, // got full header
                 Ok(false) => {
                     // Clean EOF — no more entries.
                     break;
-                }
+                },
                 Err(e) => return Err(JournalError::Io(e)),
             }
 
-            let length = u32::from_le_bytes([
-                header_buf[0], header_buf[1], header_buf[2], header_buf[3],
-            ]);
-            let stored_checksum = u32::from_le_bytes([
-                header_buf[4], header_buf[5], header_buf[6], header_buf[7],
-            ]);
+            let length =
+                u32::from_le_bytes([header_buf[0], header_buf[1], header_buf[2], header_buf[3]]);
+            let stored_checksum =
+                u32::from_le_bytes([header_buf[4], header_buf[5], header_buf[6], header_buf[7]]);
 
             // Sanity: length must be at least ENTRY_MIN_BODY and at most 65536 + 9.
             let body_len = length as usize;
-            if body_len < ENTRY_MIN_BODY || body_len > 65536 + ENTRY_MIN_BODY {
+            if !(ENTRY_MIN_BODY..=65536 + ENTRY_MIN_BODY).contains(&body_len) {
                 tracing::warn!(
                     offset,
                     length,
@@ -401,14 +407,14 @@ impl WriteAheadJournal {
             // Read body.
             let mut body = vec![0u8; body_len];
             match read_exact_or_eof(&mut self.file, &mut body) {
-                Ok(true) => {}
+                Ok(true) => {},
                 Ok(false) => {
                     // Truncated entry — treat as incomplete write.
                     tracing::warn!(offset, "journal: truncated entry body");
                     corruption_detected = true;
                     corruption_offset = offset;
                     break;
-                }
+                },
                 Err(e) => return Err(JournalError::Io(e)),
             }
 
@@ -428,8 +434,7 @@ impl WriteAheadJournal {
 
             // Parse body: [timestamp: 8][category: 1][payload: rest]
             let timestamp_ms = u64::from_le_bytes([
-                body[0], body[1], body[2], body[3],
-                body[4], body[5], body[6], body[7],
+                body[0], body[1], body[2], body[3], body[4], body[5], body[6], body[7],
             ]);
             let cat_byte = body[8];
 
@@ -555,10 +560,7 @@ impl WriteAheadJournal {
         std::fs::rename(&tmp_path, &self.path)?;
 
         // Reopen the file.
-        self.file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.path)?;
+        self.file = OpenOptions::new().read(true).write(true).open(&self.path)?;
         self.file_size = self.file.metadata()?.len();
         self.pending_count = 0;
 
@@ -606,7 +608,7 @@ fn read_exact_or_eof(file: &mut File, buf: &mut [u8]) -> std::io::Result<bool> {
                     std::io::ErrorKind::UnexpectedEof,
                     format!("read {total}/{} bytes before EOF", buf.len()),
                 ));
-            }
+            },
             Ok(n) => total += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),

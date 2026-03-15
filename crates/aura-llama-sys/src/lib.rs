@@ -6,12 +6,12 @@
 //!
 //! # Architecture
 //!
-//! - **Android (ARM64)**: Runtime dynamic loading of `libllama.so` via `libloading`.
-//!   The shared library is expected at a path supplied by the caller (typically
-//!   extracted from the APK's native libs directory).
-//! - **Desktop (host builds)**: A smart stub that generates plausible English text
-//!   using a simple bigram model. This lets the full 6-layer teacher stack
-//!   exercise real code paths during development and testing.
+//! - **Android (ARM64)**: Runtime dynamic loading of `libllama.so` via `libloading`. The shared
+//!   library is expected at a path supplied by the caller (typically extracted from the APK's
+//!   native libs directory).
+//! - **Desktop (host builds)**: A smart stub that generates plausible English text using a simple
+//!   bigram model. This lets the full 6-layer teacher stack exercise real code paths during
+//!   development and testing.
 //!
 //! # Safety
 //!
@@ -20,11 +20,10 @@
 //! `StubBackend` implementation uses safe Rust only.
 
 pub mod gguf_meta;
-pub use gguf_meta::{parse_from_reader, parse_gguf_meta, GgufError, GgufMeta};
+use std::{collections::HashMap, sync::Mutex};
 
+pub use gguf_meta::{parse_from_reader, parse_gguf_meta, GgufError, GgufMeta};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Mutex;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, trace, warn};
 
@@ -881,7 +880,7 @@ impl StubBackend {
                 // Fallback: pick a random content word (skip special tokens)
                 let idx = ((self.next_random() * (self.vocab.len() - 3) as f64) as usize) + 3;
                 return idx as LlamaToken;
-            }
+            },
         };
 
         // Apply temperature to probabilities
@@ -1110,8 +1109,14 @@ pub struct LlamaBatch {
 
 #[cfg(target_os = "android")]
 extern "C" {
-    fn llama_load_model_from_file(path: *const std::ffi::c_char, params: LlamaModelParams) -> *mut LlamaModel;
-    fn llama_new_context_with_model(model: *mut LlamaModel, params: LlamaContextParams) -> *mut LlamaContext;
+    fn llama_load_model_from_file(
+        path: *const std::ffi::c_char,
+        params: LlamaModelParams,
+    ) -> *mut LlamaModel;
+    fn llama_new_context_with_model(
+        model: *mut LlamaModel,
+        params: LlamaContextParams,
+    ) -> *mut LlamaContext;
     fn llama_free_model(model: *mut LlamaModel);
     fn llama_free(ctx: *mut LlamaContext);
     fn llama_tokenize(
@@ -1250,9 +1255,8 @@ impl FfiBackend {
         let root_cstr = std::ffi::CString::new("root")
             .map_err(|e| BackendError::Generation(format!("root rule CString failed: {}", e)))?;
 
-        let sampler = unsafe {
-            llama_sampler_init_grammar(model, grammar_cstr.as_ptr(), root_cstr.as_ptr())
-        };
+        let sampler =
+            unsafe { llama_sampler_init_grammar(model, grammar_cstr.as_ptr(), root_cstr.as_ptr()) };
 
         if sampler.is_null() {
             return Err(BackendError::Generation(
@@ -1260,7 +1264,10 @@ impl FfiBackend {
             ));
         }
 
-        let mut grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+        let mut grammar_guard = self
+            .grammar_sampler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Free any existing grammar sampler before replacing
         if let Some(old) = grammar_guard.take() {
             unsafe { llama_sampler_free(old) };
@@ -1276,7 +1283,10 @@ impl FfiBackend {
     /// Called after generation completes (success or failure) to avoid
     /// leaking the grammar state.
     pub fn clear_grammar(&self) {
-        let mut grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+        let mut grammar_guard = self
+            .grammar_sampler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(sampler) = grammar_guard.take() {
             unsafe { llama_sampler_free(sampler) };
             debug!("GBNF grammar sampler cleared");
@@ -1382,9 +1392,8 @@ impl LlamaBackend for FfiBackend {
         }
 
         let mut tokens = vec![0i32; n_tokens as usize];
-        let result = unsafe {
-            llama_tokenize(ctx, c_text.as_ptr(), tokens.as_mut_ptr(), n_tokens, true)
-        };
+        let result =
+            unsafe { llama_tokenize(ctx, c_text.as_ptr(), tokens.as_mut_ptr(), n_tokens, true) };
         if result < 0 {
             return Err(BackendError::Tokenization(format!(
                 "llama_tokenize failed: {}",
@@ -1447,7 +1456,10 @@ impl LlamaBackend for FfiBackend {
         // that would violate the grammar, ensuring structural correctness
         // at the token level — not post-hoc validation.
         {
-            let grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+            let grammar_guard = self
+                .grammar_sampler
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(grammar) = *grammar_guard {
                 let logits_slice = unsafe { std::slice::from_raw_parts_mut(logits_ptr, n_vocab) };
                 let mut candidates: Vec<LlamaTokenData> = logits_slice
@@ -1553,11 +1565,10 @@ impl LlamaBackend for FfiBackend {
 
         // Sample from distribution (simple linear scan).
         // Use a proper CSPRNG-seeded PRNG via the `rand` crate so that:
-        //   1. Rapid sequential calls don't produce identical tokens
-        //      (the old SystemTime::subsec_nanos() was deterministic within
-        //       the same nanosecond, which is common under batch decode).
-        //   2. The distribution is uniform in [0, 1), not biased by clock
-        //      quantization artifacts.
+        //   1. Rapid sequential calls don't produce identical tokens (the old
+        //      SystemTime::subsec_nanos() was deterministic within the same nanosecond, which is
+        //      common under batch decode).
+        //   2. The distribution is uniform in [0, 1), not biased by clock quantization artifacts.
         let r: f64 = {
             use rand::Rng;
             rand::thread_rng().gen()
@@ -1630,7 +1641,11 @@ impl LlamaBackend for FfiBackend {
         }
 
         *n_past_guard += tokens.len() as i32;
-        trace!(token_count = tokens.len(), n_past = *n_past_guard, "eval via FFI");
+        trace!(
+            token_count = tokens.len(),
+            n_past = *n_past_guard,
+            "eval via FFI"
+        );
         Ok(())
     }
 
@@ -1665,10 +1680,7 @@ impl LlamaBackend for FfiBackend {
             return None;
         }
 
-        let sum_exp: f64 = logits
-            .iter()
-            .map(|&l| ((l - max_logit) as f64).exp())
-            .sum();
+        let sum_exp: f64 = logits.iter().map(|&l| ((l - max_logit) as f64).exp()).sum();
 
         if sum_exp <= 0.0 {
             return None;
@@ -1689,7 +1701,10 @@ impl LlamaBackend for FfiBackend {
     }
 
     fn accept_grammar_token(&self, token: LlamaToken) {
-        let grammar_guard = self.grammar_sampler.lock().unwrap_or_else(|e| e.into_inner());
+        let grammar_guard = self
+            .grammar_sampler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(grammar) = *grammar_guard {
             unsafe { llama_sampler_accept(grammar, token) };
         }
@@ -1769,7 +1784,7 @@ pub mod stubs {
             Err(e) => {
                 error!(error = %e, "stub model load failed");
                 std::ptr::null_mut()
-            }
+            },
         }
     }
 

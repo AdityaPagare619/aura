@@ -22,10 +22,7 @@ use super::{HandlerContext, HandlerResponse};
 /// This handler only runs if the daemon channel is closed or absent.
 /// It must NOT claim the memory was stored — that would be a lie.
 #[instrument(skip(ctx))]
-pub fn handle_remember(
-    ctx: &HandlerContext<'_>,
-    text: &str,
-) -> Result<HandlerResponse, AuraError> {
+pub fn handle_remember(ctx: &HandlerContext<'_>, text: &str) -> Result<HandlerResponse, AuraError> {
     if text.is_empty() {
         return Ok(HandlerResponse::text("Usage: /remember <text>"));
     }
@@ -198,12 +195,12 @@ fn escape_html(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::telegram::audit::AuditLog;
-    use crate::telegram::handlers::HandlerContext;
-    use crate::telegram::queue::MessageQueue;
-    use crate::telegram::security::SecurityGate;
     use rusqlite::Connection;
+
+    use super::*;
+    use crate::telegram::{
+        audit::AuditLog, handlers::HandlerContext, queue::MessageQueue, security::SecurityGate,
+    };
 
     fn make_ctx<'a>(
         sec: &'a mut SecurityGate,
@@ -251,7 +248,7 @@ mod tests {
                 // Must NOT claim memory was stored.
                 assert!(!html.contains("Memory Stored"));
                 assert!(!html.contains("Saved to episodic"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -269,7 +266,7 @@ mod tests {
                 assert!(html.contains("Memory Service Unavailable"));
                 assert!(html.contains("meetings"));
                 assert!(html.contains("No search was performed"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -287,7 +284,7 @@ mod tests {
                 assert!(html.contains("Memory Service Unavailable"));
                 assert!(html.contains("No memories were deleted"));
                 assert!(html.contains("PolicyGate"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -305,7 +302,7 @@ mod tests {
                 assert!(html.contains("Memory Statistics"));
                 assert!(html.contains("disconnected")); // no channel in test
                 assert!(html.contains("0 pending"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -322,7 +319,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Memories"));
                 assert!(html.contains("recent"));
-            }
+            },
             other => panic!("expected Html, got {other:?}"),
         }
     }

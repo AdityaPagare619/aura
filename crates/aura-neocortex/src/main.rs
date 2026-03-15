@@ -18,17 +18,20 @@ mod model_capabilities;
 mod prompts;
 mod tool_format;
 
-use std::net::TcpListener;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
-use tracing::{error, info, warn};
+use std::{
+    net::TcpListener,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use aura_config::NeocortexRuntimeConfig;
 use ipc_handler::IpcHandler;
 use model::ModelManager;
 use model_capabilities::ModelCapabilities;
+use tracing::{error, info, warn};
 
 // ─── CLI argument parsing (no clap dependency — keep it minimal) ────────────
 
@@ -58,23 +61,24 @@ impl Args {
                 "--socket" | "-s" => {
                     i += 1;
                     socket = args.get(i).ok_or("--socket requires a value")?.clone();
-                }
+                },
                 "--model-dir" | "-m" => {
                     i += 1;
                     model_dir = PathBuf::from(args.get(i).ok_or("--model-dir requires a value")?);
-                }
+                },
                 "--config" | "-c" => {
                     i += 1;
-                    config_path =
-                        Some(PathBuf::from(args.get(i).ok_or("--config requires a value")?));
-                }
+                    config_path = Some(PathBuf::from(
+                        args.get(i).ok_or("--config requires a value")?,
+                    ));
+                },
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
-                }
+                },
                 other => {
                     return Err(format!("unknown argument: {other}"));
-                }
+                },
             }
             i += 1;
         }
@@ -133,7 +137,7 @@ fn main() {
             error!(error = %e, "failed to parse arguments");
             print_usage();
             std::process::exit(1);
-        }
+        },
     };
 
     info!(socket = %args.socket, model_dir = %args.model_dir.display(), "cli configuration");
@@ -160,7 +164,7 @@ fn main() {
                 "runtime config loaded"
             );
             cfg
-        }
+        },
         Err(e) => {
             // ParseError on a malformed TOML — log warning and use defaults.
             warn!(
@@ -168,7 +172,7 @@ fn main() {
                 "failed to parse aura.config.toml — falling back to defaults"
             );
             NeocortexRuntimeConfig::default_fallback()
-        }
+        },
     };
 
     // Resolve the effective model directory:
@@ -246,7 +250,11 @@ fn build_startup_capabilities(
     use aura_types::ipc::ModelTier;
 
     // Walk tiers from smallest to largest; use the first one that has metadata.
-    for tier in [ModelTier::Brainstem1_5B, ModelTier::Standard4B, ModelTier::Full8B] {
+    for tier in [
+        ModelTier::Brainstem1_5B,
+        ModelTier::Standard4B,
+        ModelTier::Full8B,
+    ] {
         if let Some((_, meta)) = manager.scanner().models.get(&tier) {
             return ModelCapabilities::from_gguf(meta, config.user_override_embedding_dim);
         }
@@ -338,7 +346,8 @@ fn run_server(
                 // Switch stream to blocking mode for the handler.
                 stream.set_nonblocking(false)?;
 
-                let mut handler = IpcHandler::new(stream, mgr, cancel_token.clone(), current_caps.clone())?;
+                let mut handler =
+                    IpcHandler::new(stream, mgr, cancel_token.clone(), current_caps.clone())?;
 
                 match handler.run_loop() {
                     Ok(()) => info!("connection closed cleanly"),
@@ -362,7 +371,7 @@ fn run_server(
                     "model capabilities after reconnect"
                 );
                 current_caps = Some(reconnect_caps);
-            }
+            },
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // No pending connection — poll again after a short sleep.
                 //
@@ -382,11 +391,11 @@ fn run_server(
                 // set, eliminating the separate shutdown-listener thread.
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
-            }
+            },
             Err(e) => {
                 error!(error = %e, "accept failed");
                 return Err(e.into());
-            }
+            },
         }
     }
 
@@ -404,9 +413,9 @@ fn run_server(
 ///
 /// **Behaviour on stdin events:**
 /// - Line containing "SHUTDOWN" (case-insensitive) → trigger graceful shutdown.
-/// - EOF (stdin closed / pipe broken) → log warning, do NOT shutdown.
-///   On Android the daemon may close stdin without intending to kill neocortex
-///   (e.g., process manager recycling file descriptors).
+/// - EOF (stdin closed / pipe broken) → log warning, do NOT shutdown. On Android the daemon may
+///   close stdin without intending to kill neocortex (e.g., process manager recycling file
+///   descriptors).
 /// - I/O error → log error, stop listening (do NOT trigger shutdown).
 /// - Any other line → ignored (allows future command extension).
 ///

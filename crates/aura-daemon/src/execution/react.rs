@@ -90,12 +90,18 @@ impl SemanticReact {
         }
 
         if ctx.battery_level < self.critical_battery_threshold && ctx.amygdala_arousal < 0.8 {
-            warn!("Low battery (<{}%) and non-critical task: FORCING System 1.", self.critical_battery_threshold * 100.0);
+            warn!(
+                "Low battery (<{}%) and non-critical task: FORCING System 1.",
+                self.critical_battery_threshold * 100.0
+            );
             return CognitiveState::System1;
         }
 
         if ctx.consecutive_failures >= self.consecutive_failure_threshold {
-            info!("Consecutive failure threshold reached ({}): ESCALATING to System 2.", self.consecutive_failure_threshold);
+            info!(
+                "Consecutive failure threshold reached ({}): ESCALATING to System 2.",
+                self.consecutive_failure_threshold
+            );
             return CognitiveState::System2;
         }
 
@@ -134,7 +140,7 @@ mod tests {
             battery_level: 0.5,
             is_thermal_throttling: true, // BUT device is burning
         };
-        
+
         // Exact boundary check: MUST protect device over task success.
         assert_eq!(react.evaluate_escalation(&ctx), CognitiveState::System1);
     }

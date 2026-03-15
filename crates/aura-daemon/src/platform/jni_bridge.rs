@@ -4,10 +4,10 @@
 //!
 //! 1. **`JNI_OnLoad`** — caches the `JavaVM` pointer for later use.
 //! 2. **`jni_env()`** — returns a `JNIEnv` handle on any thread.
-//! 3. **Exported `Java_dev_aura_v4_AuraDaemonBridge_native*` functions** —
-//!    called by Kotlin via `external fun` declarations.
-//! 4. **Helper functions** (`jni_perform_tap`, `jni_get_screen_tree`, etc.)
-//!    called by other Rust modules to invoke Kotlin-side methods.
+//! 3. **Exported `Java_dev_aura_v4_AuraDaemonBridge_native*` functions** — called by Kotlin via
+//!    `external fun` declarations.
+//! 4. **Helper functions** (`jni_perform_tap`, `jni_get_screen_tree`, etc.) called by other Rust
+//!    modules to invoke Kotlin-side methods.
 //!
 //! # Safety
 //!
@@ -32,13 +32,15 @@ use aura_types::errors::PlatformError;
 
 #[cfg(target_os = "android")]
 mod inner {
-    use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-    use jni::sys::{jboolean, jfloat, jint, jlong, JNI_VERSION_1_6};
-    use jni::{JNIEnv, JavaVM};
     use std::sync::OnceLock;
-    use tracing::{error, info, warn};
 
     use aura_types::errors::PlatformError;
+    use jni::{
+        objects::{GlobalRef, JClass, JObject, JString, JValue},
+        sys::{jboolean, jfloat, jint, jlong, JNI_VERSION_1_6},
+        JNIEnv, JavaVM,
+    };
+    use tracing::{error, info, warn};
 
     /// Cached `JavaVM` pointer — set once in `JNI_OnLoad`.
     static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
@@ -69,7 +71,7 @@ mod inner {
             Err(e) => {
                 eprintln!("AURA JNI_OnLoad: failed to wrap JavaVM: {e}");
                 return -1;
-            }
+            },
         };
 
         // Cache the VM for later `jni_env()` calls.
@@ -84,8 +86,11 @@ mod inner {
             Ok(mut env) => {
                 match env.find_class(BRIDGE_CLASS_PATH) {
                     Ok(_) => {
-                        info!("AURA JNI_OnLoad: verified bridge class '{}'", BRIDGE_CLASS_PATH);
-                    }
+                        info!(
+                            "AURA JNI_OnLoad: verified bridge class '{}'",
+                            BRIDGE_CLASS_PATH
+                        );
+                    },
                     Err(e) => {
                         error!(
                             "AURA JNI_OnLoad: bridge class '{}' not found — \
@@ -95,12 +100,12 @@ mod inner {
                         // Return -1 to abort library load; the JVM will throw
                         // UnsatisfiedLinkError, making the misconfiguration obvious.
                         return -1;
-                    }
+                    },
                 }
-            }
+            },
             Err(e) => {
                 error!("AURA JNI_OnLoad: could not obtain JNIEnv for class verification: {e}");
-            }
+            },
         }
 
         info!("AURA JNI_OnLoad: native library loaded");
@@ -154,9 +159,12 @@ mod inner {
         let config_str: String = match env.get_string(&config_json) {
             Ok(s) => s.into(),
             Err(e) => {
-                let _ = env.throw_new("java/lang/RuntimeException", format!("bad config string: {e}"));
+                let _ = env.throw_new(
+                    "java/lang/RuntimeException",
+                    format!("bad config string: {e}"),
+                );
                 return 0;
-            }
+            },
         };
 
         let config: aura_types::config::AuraConfig = match serde_json::from_str(&config_str) {
@@ -165,22 +173,19 @@ mod inner {
                 // Fall back to default config if JSON parsing fails.
                 warn!("config JSON parse failed ({e}), using defaults");
                 aura_types::config::AuraConfig::default()
-            }
+            },
         };
 
         match crate::startup(config) {
             Ok((state, report)) => {
-                info!(
-                    channels = report.channels_created,
-                    "daemon started via JNI"
-                );
+                info!(channels = report.channels_created, "daemon started via JNI");
                 Box::into_raw(Box::new(state)) as jlong
-            }
+            },
             Err(e) => {
                 error!("daemon startup failed: {e}");
                 let _ = env.throw_new("java/lang/RuntimeException", format!("startup: {e}"));
                 0
-            }
+            },
         }
     }
 
@@ -209,7 +214,7 @@ mod inner {
             Err(e) => {
                 error!("nativeRun: failed to build tokio runtime: {e}");
                 return;
-            }
+            },
         };
 
         rt.block_on(async {
@@ -318,7 +323,8 @@ mod inner {
         let byte_array = obj.into_raw() as jni::sys::jbyteArray;
         let len = env
             .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
-            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
+            as usize;
 
         let mut buf = vec![0i8; len];
         env.get_byte_array_region(byte_array, 0, &mut buf)
@@ -471,9 +477,7 @@ mod inner {
             "(Ljava/lang/String;Ljava/lang/String;I)V",
             &[(&j_id).into(), (&j_name).into(), JValue::Int(importance)],
         )
-        .map_err(|e| {
-            PlatformError::JniFailed(format!("registerNotificationChannel: {e}"))
-        })?;
+        .map_err(|e| PlatformError::JniFailed(format!("registerNotificationChannel: {e}")))?;
         check_jni_exception(&mut env, "registerNotificationChannel")?;
         Ok(())
     }
@@ -628,12 +632,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
-                cls.as_ref(),
-                "getNetworkType",
-                "()Ljava/lang/String;",
-                &[],
-            )
+            .call_static_method(cls.as_ref(), "getNetworkType", "()Ljava/lang/String;", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getNetworkType: {e}")))?;
         let jstr: JString = result
             .l()
@@ -776,7 +775,8 @@ mod inner {
         let byte_array = obj.into_raw() as jni::sys::jbyteArray;
         let len = env
             .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
-            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
+            as usize;
         let mut buf = vec![0i8; len];
         env.get_byte_array_region(byte_array, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
@@ -806,7 +806,8 @@ mod inner {
         let byte_array = obj.into_raw() as jni::sys::jbyteArray;
         let len = env
             .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
-            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
+            as usize;
         let mut buf = vec![0i8; len];
         env.get_byte_array_region(byte_array, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
@@ -828,7 +829,8 @@ mod inner {
         let byte_array = obj.into_raw() as jni::sys::jbyteArray;
         let len = env
             .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
-            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))? as usize;
+            .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
+            as usize;
         let mut buf = vec![0i8; len];
         env.get_byte_array_region(byte_array, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
@@ -858,8 +860,8 @@ mod inner {
     ///
     /// Kotlin impl:
     /// - Android < 10: `WifiManager.setWifiEnabled(enable)`.
-    /// - Android ≥ 10: `Intent(Settings.ACTION_WIFI_SETTINGS)` via startActivity
-    ///   (API restriction — direct toggle not available without root/DeviceAdmin).
+    /// - Android ≥ 10: `Intent(Settings.ACTION_WIFI_SETTINGS)` via startActivity (API restriction —
+    ///   direct toggle not available without root/DeviceAdmin).
     /// Returns `true` if the intent/call was dispatched; the caller must verify
     /// the Wi-Fi state via `jni_get_network_type()` to confirm the change.
     pub fn jni_toggle_wifi(enable: bool) -> Result<bool, PlatformError> {

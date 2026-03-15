@@ -311,14 +311,14 @@ fn simplify_error_pattern(message: &str) -> String {
         if ch.is_ascii_digit() {
             // Replace runs of digits with '*'.
             result.push('*');
-            while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
+            while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
                 chars.next();
             }
         } else if ch == '\'' || ch == '"' {
             // Replace quoted strings with '*'.
             result.push('*');
             let quote = ch;
-            while let Some(inner) = chars.next() {
+            for inner in chars.by_ref() {
                 if inner == quote {
                     break;
                 }

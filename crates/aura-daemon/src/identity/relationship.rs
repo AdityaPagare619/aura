@@ -137,11 +137,8 @@ impl RelationshipTracker {
         //   - longevity: compute from (now - first_interaction_ms) normalized
         // This is NOT Theater AGI — the formula itself is valid math owned by the
         // identity engine. Only the INPUT signals need enrichment.
-        let cohesion = (rel.trust * 0.4
-            + rel.trust * 0.3
-            + 0.0_f32 * 0.2
-            + 0.5_f32 * 0.1)
-            .clamp(0.0, 1.0);
+        let cohesion =
+            (rel.trust * 0.4 + rel.trust * 0.3 + 0.0_f32 * 0.2 + 0.5_f32 * 0.1).clamp(0.0, 1.0);
         rel.stage = classify_relationship_stage(cohesion, Some(rel.stage));
 
         tracing::debug!(
@@ -289,7 +286,10 @@ fn stage_ordinal(stage: RelationshipStage) -> u8 {
 
 /// Determine relationship stage from a cohesion value, applying hysteresis
 /// (0.05 gap required) when downgrading to prevent oscillation.
-fn classify_relationship_stage(cohesion: f32, current: Option<RelationshipStage>) -> RelationshipStage {
+fn classify_relationship_stage(
+    cohesion: f32,
+    current: Option<RelationshipStage>,
+) -> RelationshipStage {
     match current {
         None => classify_stage_raw(cohesion),
         Some(current_stage) => {
@@ -308,7 +308,7 @@ fn classify_relationship_stage(cohesion: f32, current: Option<RelationshipStage>
             } else {
                 current_stage
             }
-        }
+        },
     }
 }
 
@@ -327,7 +327,10 @@ mod tests {
         let rel = rt.get_relationship("alice").unwrap();
         // First interaction: attenuation = 1/√(1 + 0/10) = 1.0, so delta = 0.01
         assert!(rel.trust > 0.0, "trust should increase from 0");
-        assert!(rel.trust <= 0.01 + f32::EPSILON, "first delta should be ~0.01");
+        assert!(
+            rel.trust <= 0.01 + f32::EPSILON,
+            "first delta should be ~0.01"
+        );
         assert_eq!(rel.stage, RelationshipStage::Stranger);
     }
 
@@ -345,7 +348,10 @@ mod tests {
         let trust_after = rt.get_relationship("bob").unwrap().trust;
 
         // With diminishing returns, the negative delta is attenuated but still negative.
-        assert!(trust_after < trust_before, "trust should decrease on negative");
+        assert!(
+            trust_after < trust_before,
+            "trust should decrease on negative"
+        );
     }
 
     #[test]
@@ -368,7 +374,11 @@ mod tests {
             rt.record_interaction("dave", InteractionType::Positive, 1000 + i);
         }
         let rel = rt.get_relationship("dave").unwrap();
-        assert!(rel.trust >= 0.15, "trust {} should be >= 0.15 after 25 positives", rel.trust);
+        assert!(
+            rel.trust >= 0.15,
+            "trust {} should be >= 0.15 after 25 positives",
+            rel.trust
+        );
         assert_eq!(rel.stage, RelationshipStage::Acquaintance);
     }
 
@@ -408,7 +418,12 @@ mod tests {
         let trust = rt.get_relationship("frank").unwrap().trust;
         let expected_directness = 0.30 + trust * 0.62;
         let d = rt.directness_for_user("frank");
-        assert!((d - expected_directness).abs() < 0.01, "directness={} expected ~{}", d, expected_directness);
+        assert!(
+            (d - expected_directness).abs() < 0.01,
+            "directness={} expected ~{}",
+            d,
+            expected_directness
+        );
     }
 
     #[test]
@@ -489,7 +504,15 @@ mod tests {
         }
         let trust = rt.get_relationship("test").unwrap().trust;
         // Trust should be substantial but not maxed out
-        assert!(trust > 0.3, "100 positives should build significant trust: {}", trust);
-        assert!(trust < 1.0, "trust should not reach 1.0 with only 100 interactions: {}", trust);
+        assert!(
+            trust > 0.3,
+            "100 positives should build significant trust: {}",
+            trust
+        );
+        assert!(
+            trust < 1.0,
+            "trust should not reach 1.0 with only 100 interactions: {}",
+            trust
+        );
     }
 }

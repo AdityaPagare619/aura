@@ -21,6 +21,7 @@
 //! - **Post-execution analysis**: generates a report with metrics and recommendations
 
 use std::time::Instant;
+
 use tracing::warn;
 
 /// Maximum number of violation entries retained per task.

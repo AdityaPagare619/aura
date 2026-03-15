@@ -415,13 +415,13 @@ impl SuggestionEngine {
                 stats.accepted = stats.accepted.saturating_add(1);
                 stats.time_bin_accepted[time_bin] =
                     stats.time_bin_accepted[time_bin].saturating_add(1);
-            }
+            },
             FeedbackOutcome::Rejected => {
                 stats.rejected = stats.rejected.saturating_add(1);
-            }
+            },
             FeedbackOutcome::Ignored => {
                 stats.ignored = stats.ignored.saturating_add(1);
-            }
+            },
         }
         stats.time_bin_total[time_bin] = stats.time_bin_total[time_bin].saturating_add(1);
 

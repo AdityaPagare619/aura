@@ -7,9 +7,7 @@
 
 use tracing::instrument;
 
-use super::audit::AuditLog;
-use super::queue::MessageQueue;
-use super::security::SecurityGate;
+use super::{audit::AuditLog, queue::MessageQueue, security::SecurityGate};
 
 // ─── Dashboard data ─────────────────────────────────────────────────────────
 

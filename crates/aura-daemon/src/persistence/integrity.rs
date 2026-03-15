@@ -5,8 +5,10 @@
 //! corruption, drift anomalies, or missing state before the daemon enters its
 //! main event loop.
 
-use crate::identity::personality::{ConsistencyReport, Personality};
-use crate::identity::RelationshipTracker;
+use crate::identity::{
+    personality::{ConsistencyReport, Personality},
+    RelationshipTracker,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,26 +142,33 @@ impl IntegrityVerifier {
     }
 
     /// Check that OCEAN traits are within valid bounds and consistent.
-    pub fn verify_personality(
-        personality: &Personality,
-        issues: &mut Vec<VerificationIssue>,
-    ) {
+    pub fn verify_personality(personality: &Personality, issues: &mut Vec<VerificationIssue>) {
         let traits = &personality.traits;
 
         // Check bounds: all traits must be in [0.1, 0.9].
         let check_bound = |name: &str, val: f32, issues: &mut Vec<VerificationIssue>| {
-            if val < 0.0 || val > 1.0 {
-                push_issue(issues, VerificationIssue {
-                    severity: VerificationSeverity::Critical,
-                    subsystem: "personality",
-                    message: format!("{name} out of valid range: {val:.4} (expected [0.0, 1.0])"),
-                });
-            } else if val < 0.1 || val > 0.9 {
-                push_issue(issues, VerificationIssue {
-                    severity: VerificationSeverity::Warning,
-                    subsystem: "personality",
-                    message: format!("{name} outside safe range: {val:.4} (expected [0.1, 0.9])"),
-                });
+            if !(0.0..=1.0).contains(&val) {
+                push_issue(
+                    issues,
+                    VerificationIssue {
+                        severity: VerificationSeverity::Critical,
+                        subsystem: "personality",
+                        message: format!(
+                            "{name} out of valid range: {val:.4} (expected [0.0, 1.0])"
+                        ),
+                    },
+                );
+            } else if !(0.1..=0.9).contains(&val) {
+                push_issue(
+                    issues,
+                    VerificationIssue {
+                        severity: VerificationSeverity::Warning,
+                        subsystem: "personality",
+                        message: format!(
+                            "{name} outside safe range: {val:.4} (expected [0.1, 0.9])"
+                        ),
+                    },
+                );
             }
         };
 
@@ -172,11 +181,14 @@ impl IntegrityVerifier {
         // Check NaN/Inf — critical data corruption indicator.
         let check_finite = |name: &str, val: f32, issues: &mut Vec<VerificationIssue>| {
             if !val.is_finite() {
-                push_issue(issues, VerificationIssue {
-                    severity: VerificationSeverity::Critical,
-                    subsystem: "personality",
-                    message: format!("{name} is not finite: {val}"),
-                });
+                push_issue(
+                    issues,
+                    VerificationIssue {
+                        severity: VerificationSeverity::Critical,
+                        subsystem: "personality",
+                        message: format!("{name} is not finite: {val}"),
+                    },
+                );
             }
         };
 
@@ -196,69 +208,81 @@ impl IntegrityVerifier {
             };
 
             for issue_msg in &report.issues {
-                push_issue(issues, VerificationIssue {
-                    severity,
-                    subsystem: "personality",
-                    message: issue_msg.clone(),
-                });
+                push_issue(
+                    issues,
+                    VerificationIssue {
+                        severity,
+                        subsystem: "personality",
+                        message: issue_msg.clone(),
+                    },
+                );
             }
         }
     }
 
     /// Check that trust values are within valid bounds.
-    pub fn verify_trust(
-        relationships: &RelationshipTracker,
-        issues: &mut Vec<VerificationIssue>,
-    ) {
+    pub fn verify_trust(relationships: &RelationshipTracker, issues: &mut Vec<VerificationIssue>) {
         let all_users = relationships.all_user_ids();
 
         for user_id in &all_users {
             if let Some(rel) = relationships.get_relationship(user_id) {
                 // Trust must be in [0.0, 1.0].
                 if !rel.trust.is_finite() {
-                    push_issue(issues, VerificationIssue {
-                        severity: VerificationSeverity::Critical,
-                        subsystem: "trust",
-                        message: format!("user '{user_id}' has non-finite trust: {}", rel.trust),
-                    });
+                    push_issue(
+                        issues,
+                        VerificationIssue {
+                            severity: VerificationSeverity::Critical,
+                            subsystem: "trust",
+                            message: format!(
+                                "user '{user_id}' has non-finite trust: {}",
+                                rel.trust
+                            ),
+                        },
+                    );
                 } else if rel.trust < 0.0 || rel.trust > 1.0 {
-                    push_issue(issues, VerificationIssue {
-                        severity: VerificationSeverity::Warning,
-                        subsystem: "trust",
-                        message: format!(
-                            "user '{user_id}' trust out of range: {:.4}",
-                            rel.trust
-                        ),
-                    });
+                    push_issue(
+                        issues,
+                        VerificationIssue {
+                            severity: VerificationSeverity::Warning,
+                            subsystem: "trust",
+                            message: format!(
+                                "user '{user_id}' trust out of range: {:.4}",
+                                rel.trust
+                            ),
+                        },
+                    );
                 }
             }
         }
 
         if all_users.len() > 500 {
-            push_issue(issues, VerificationIssue {
-                severity: VerificationSeverity::Warning,
-                subsystem: "trust",
-                message: format!(
-                    "tracking {} users exceeds recommended max of 500",
-                    all_users.len()
-                ),
-            });
+            push_issue(
+                issues,
+                VerificationIssue {
+                    severity: VerificationSeverity::Warning,
+                    subsystem: "trust",
+                    message: format!(
+                        "tracking {} users exceeds recommended max of 500",
+                        all_users.len()
+                    ),
+                },
+            );
         }
     }
 
     /// Check that goal count is within bounds.
-    pub fn verify_goals(
-        goal_count: usize,
-        issues: &mut Vec<VerificationIssue>,
-    ) {
+    pub fn verify_goals(goal_count: usize, issues: &mut Vec<VerificationIssue>) {
         if goal_count > 64 {
-            push_issue(issues, VerificationIssue {
-                severity: VerificationSeverity::Warning,
-                subsystem: "goals",
-                message: format!(
-                    "active goal count ({goal_count}) exceeds max 64 — possible state leak"
-                ),
-            });
+            push_issue(
+                issues,
+                VerificationIssue {
+                    severity: VerificationSeverity::Warning,
+                    subsystem: "goals",
+                    message: format!(
+                        "active goal count ({goal_count}) exceeds max 64 — possible state leak"
+                    ),
+                },
+            );
         }
     }
 
@@ -269,21 +293,27 @@ impl IntegrityVerifier {
         issues: &mut Vec<VerificationIssue>,
     ) {
         if journal_corruption {
-            push_issue(issues, VerificationIssue {
-                severity: VerificationSeverity::Critical,
-                subsystem: "journal",
-                message: "journal corruption detected during recovery — \
+            push_issue(
+                issues,
+                VerificationIssue {
+                    severity: VerificationSeverity::Critical,
+                    subsystem: "journal",
+                    message: "journal corruption detected during recovery — \
                           some state may have been lost"
-                    .to_string(),
-            });
+                        .to_string(),
+                },
+            );
         }
 
         if !journal_recovered {
-            push_issue(issues, VerificationIssue {
-                severity: VerificationSeverity::Info,
-                subsystem: "journal",
-                message: "no journal found — starting with defaults".to_string(),
-            });
+            push_issue(
+                issues,
+                VerificationIssue {
+                    severity: VerificationSeverity::Info,
+                    subsystem: "journal",
+                    message: "no journal found — starting with defaults".to_string(),
+                },
+            );
         }
     }
 
@@ -291,10 +321,7 @@ impl IntegrityVerifier {
     ///
     /// Returns `true` if any repairs were applied.  Currently supports:
     /// - Re-clamping personality traits to [0.1, 0.9] range.
-    pub fn repair_if_needed(
-        personality: &mut Personality,
-        report: &VerificationReport,
-    ) -> bool {
+    pub fn repair_if_needed(personality: &mut Personality, report: &VerificationReport) -> bool {
         let mut repaired = false;
 
         for issue in &report.issues {
@@ -330,8 +357,9 @@ impl IntegrityVerifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::identity::OceanTraits;
+
+    use super::*;
 
     fn default_personality() -> Personality {
         Personality::new()
@@ -401,13 +429,8 @@ mod tests {
         p.traits.openness = 0.05; // below 0.1
         p.traits.neuroticism = 0.95; // above 0.9
 
-        let report = IntegrityVerifier::full_verification(
-            &p,
-            &default_relationships(),
-            0,
-            true,
-            false,
-        );
+        let report =
+            IntegrityVerifier::full_verification(&p, &default_relationships(), 0, true, false);
 
         let repaired = IntegrityVerifier::repair_if_needed(&mut p, &report);
         assert!(repaired);

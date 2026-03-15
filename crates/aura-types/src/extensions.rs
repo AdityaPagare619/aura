@@ -1,7 +1,9 @@
-use crate::manifest::{CapabilityManifest, Permission};
+use std::fmt;
+
 use async_trait::async_trait;
 use serde_json::Value;
-use std::fmt;
+
+use crate::manifest::{CapabilityManifest, Permission};
 
 // ---------------------------------------------------------------------------
 // Extension Error
@@ -33,11 +35,11 @@ impl fmt::Display for ExtensionError {
             Self::InitializationFailed(msg) => write!(f, "init failed: {msg}"),
             Self::PermissionDenied { permission, reason } => {
                 write!(f, "permission denied ({permission}): {reason}")
-            }
+            },
             Self::ResourceLimitExceeded(msg) => write!(f, "resource limit: {msg}"),
             Self::ExecutionTimeout { limit_ms } => {
                 write!(f, "execution timeout ({limit_ms}ms)")
-            }
+            },
             Self::RuntimeError(msg) => write!(f, "runtime error: {msg}"),
             Self::InvalidState(msg) => write!(f, "invalid state: {msg}"),
         }

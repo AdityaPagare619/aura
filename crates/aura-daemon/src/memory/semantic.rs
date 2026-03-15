@@ -10,29 +10,32 @@
 //!
 //! Also implements:
 //! - Knowledge reinforcement: repeated encounters boost confidence
-//! - Generalization: when 3+ episodes share a theme, create a semantic entry
-//!   with confidence = min(0.95, 0.5 + num_episodes * 0.1)
+//! - Generalization: when 3+ episodes share a theme, create a semantic entry with confidence =
+//!   min(0.95, 0.5 + num_episodes * 0.1)
 //!
 //! Embedding similarity search uses an HNSW approximate nearest neighbor index
 //! instead of O(n) linear scan, providing sub-linear query time.
 
-use std::collections::{HashMap, VecDeque};
-use std::path::Path;
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, VecDeque},
+    path::Path,
+    sync::Arc,
+};
 
+use aura_types::{
+    errors::MemError,
+    ipc::MemoryTier,
+    memory::{MemoryResult, SemanticEntry},
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use aura_types::errors::MemError;
-use aura_types::ipc::MemoryTier;
-use aura_types::memory::{MemoryResult, SemanticEntry};
-
-use crate::memory::embeddings::{
-    cosine_similarity, embed, embedding_from_bytes, embedding_to_bytes, EMBED_DIM,
+use crate::memory::{
+    embeddings::{cosine_similarity, embed, embedding_from_bytes, embedding_to_bytes, EMBED_DIM},
+    hnsw::HnswIndex,
+    importance,
 };
-use crate::memory::hnsw::HnswIndex;
-use crate::memory::importance;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -78,6 +81,12 @@ pub struct RetrievalEvent {
 #[derive(Debug)]
 pub struct RetrievalFeedbackBuffer {
     events: VecDeque<RetrievalEvent>,
+}
+
+impl Default for RetrievalFeedbackBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RetrievalFeedbackBuffer {
@@ -237,7 +246,15 @@ impl SemanticMemory {
 
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            store_semantic_sync(&conn, &hnsw, &concept, &knowledge, confidence, &source_episodes, now_ms)
+            store_semantic_sync(
+                &conn,
+                &hnsw,
+                &concept,
+                &knowledge,
+                confidence,
+                &source_episodes,
+                now_ms,
+            )
         })
         .await
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
@@ -276,7 +293,9 @@ impl SemanticMemory {
                     });
                 }
             } else {
-                tracing::warn!("semantic feedback buffer lock poisoned — skipping feedback recording");
+                tracing::warn!(
+                    "semantic feedback buffer lock poisoned — skipping feedback recording"
+                );
             }
         }
 
@@ -313,8 +332,8 @@ impl SemanticMemory {
         // 2. Apply Hebbian boost.
         if !recently_retrieved.is_empty() {
             for result in &mut results {
-                let boost = pattern_engine
-                    .get_association_boost(result.source_id, recently_retrieved);
+                let boost =
+                    pattern_engine.get_association_boost(result.source_id, recently_retrieved);
                 if boost > 0.0 {
                     result.relevance = (result.relevance + boost * 0.2).clamp(0.0, 1.0);
                 }
@@ -440,7 +459,9 @@ impl SemanticMemory {
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM semantic_entries", [], |row| row.get(0))
+                .query_row("SELECT COUNT(*) FROM semantic_entries", [], |row| {
+                    row.get(0)
+                })
                 .map_err(|e| MemError::DatabaseError(format!("count failed: {}", e)))?;
             Ok(count as u64)
         })
@@ -480,7 +501,9 @@ impl SemanticMemory {
                     });
                 }
             } else {
-                tracing::warn!("semantic feedback buffer lock poisoned — skipping find_by_concept feedback");
+                tracing::warn!(
+                    "semantic feedback buffer lock poisoned — skipping find_by_concept feedback"
+                );
             }
         }
 
@@ -836,7 +859,12 @@ fn reinforce_sync(
 
     let entry = match entry {
         Some(e) => e,
-        None => return Err(MemError::NotFound(format!("semantic entry {} not found", entry_id))),
+        None => {
+            return Err(MemError::NotFound(format!(
+                "semantic entry {} not found",
+                entry_id
+            )))
+        },
     };
 
     // Boost confidence: min(0.99, current + 0.05)
@@ -856,7 +884,12 @@ fn reinforce_sync(
          SET confidence = ?1, last_reinforced_ms = ?2, source_episodes = ?3,
              access_count = access_count + 1
          WHERE id = ?4",
-        params![new_confidence, now_ms as i64, episodes_json, entry_id as i64],
+        params![
+            new_confidence,
+            now_ms as i64,
+            episodes_json,
+            entry_id as i64
+        ],
     )
     .map_err(|e| MemError::DatabaseError(format!("reinforce update failed: {}", e)))?;
 
@@ -917,7 +950,7 @@ pub(crate) async fn try_generalize_via_llm(
                 "LLM generalization succeeded"
             );
             text
-        }
+        },
         Ok(other) => {
             warn!(
                 ?other,
@@ -925,7 +958,7 @@ pub(crate) async fn try_generalize_via_llm(
                 "unexpected neocortex response during generalization — falling back to sync"
             );
             return try_generalize_sync(conn, hnsw, episodes, concept_hint, now_ms);
-        }
+        },
         Err(e) => {
             warn!(
                 error = %e,
@@ -933,7 +966,7 @@ pub(crate) async fn try_generalize_via_llm(
                 "neocortex IPC failed during generalization — falling back to sync"
             );
             return try_generalize_sync(conn, hnsw, episodes, concept_hint, now_ms);
-        }
+        },
     };
 
     let confidence = importance::generalization_confidence(episodes.len());
@@ -1077,7 +1110,7 @@ fn find_by_concept_sync(
 
     // Use HNSW to find candidates (request more than limit to allow filtering)
     let candidates = {
-        let state = hnsw
+        let mut state = hnsw
             .lock()
             .map_err(|_| MemError::QueryFailed("HNSW lock poisoned".into()))?;
 
@@ -1126,8 +1159,7 @@ fn row_to_semantic_entry(row: &rusqlite::Row) -> rusqlite::Result<SemanticEntry>
     let last_reinforced_ms: i64 = row.get(6)?;
     let access_count: i64 = row.get(7)?;
 
-    let source_episodes: Vec<u64> =
-        serde_json::from_str(&episodes_json).unwrap_or_default();
+    let source_episodes: Vec<u64> = serde_json::from_str(&episodes_json).unwrap_or_default();
 
     Ok(SemanticEntry {
         id: id as u64,
@@ -1300,8 +1332,10 @@ mod tests {
             .unwrap();
 
         // Reinforce twice
-        rt.block_on(store.reinforce(id, Some(2), now() + 1000)).unwrap();
-        rt.block_on(store.reinforce(id, Some(3), now() + 2000)).unwrap();
+        rt.block_on(store.reinforce(id, Some(2), now() + 1000))
+            .unwrap();
+        rt.block_on(store.reinforce(id, Some(3), now() + 2000))
+            .unwrap();
 
         let entry = rt.block_on(store.get(id)).unwrap().unwrap();
         assert!((entry.confidence - 0.6).abs() < 0.01); // 0.5 + 0.05 + 0.05
@@ -1324,7 +1358,8 @@ mod tests {
             ))
             .unwrap();
 
-        rt.block_on(store.reinforce(id, None, now() + 1000)).unwrap();
+        rt.block_on(store.reinforce(id, None, now() + 1000))
+            .unwrap();
 
         let entry = rt.block_on(store.get(id)).unwrap().unwrap();
         assert!(entry.confidence <= 0.99);
@@ -1376,7 +1411,10 @@ mod tests {
             .block_on(store.try_generalize(&episodes, "dark mode", now()))
             .unwrap();
 
-        assert!(result.is_none(), "should not generalize from only 2 episodes");
+        assert!(
+            result.is_none(),
+            "should not generalize from only 2 episodes"
+        );
     }
 
     #[test]
@@ -1416,13 +1454,7 @@ mod tests {
         let rt = rt();
 
         let id = rt
-            .block_on(store.store(
-                "test".into(),
-                "test knowledge".into(),
-                0.5,
-                vec![],
-                now(),
-            ))
+            .block_on(store.store("test".into(), "test knowledge".into(), 0.5, vec![], now()))
             .unwrap();
 
         rt.block_on(store.record_access(id)).unwrap();
@@ -1513,7 +1545,7 @@ mod tests {
         .unwrap();
 
         // HNSW search for programming-related content
-        let state = store.hnsw.lock().unwrap();
+        let mut state = store.hnsw.lock().unwrap();
         let query_emb = embed("programming code software");
         let results = state.search(&query_emb, 3, HNSW_EF_SEARCH).unwrap();
 
@@ -1521,7 +1553,10 @@ mod tests {
         assert!(!results.is_empty());
         // Results should be ordered by similarity descending
         for w in results.windows(2) {
-            assert!(w[0].1 >= w[1].1, "results should be sorted by similarity desc");
+            assert!(
+                w[0].1 >= w[1].1,
+                "results should be sorted by similarity desc"
+            );
         }
     }
 }

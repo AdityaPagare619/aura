@@ -12,8 +12,8 @@
 //! - `ErrorClass` — Transient / Structural / Fatal classification
 //! - `FailureLedger` — per-operation failure history for learning
 //! - `CircuitBreaker` — circuit breaker pattern (Closed → Open → HalfOpen)
-//! - `IntelligentRetry` — orchestrator combining classification, ledger,
-//!   circuit breaker, and strategy selection
+//! - `IntelligentRetry` — orchestrator combining classification, ledger, circuit breaker, and
+//!   strategy selection
 //!
 //! Constants from architecture spec:
 //! - Base delay: 200ms
@@ -21,8 +21,7 @@
 //! - Max delay: 10,000ms
 //! - Factor: 2x per retry
 
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -157,13 +156,9 @@ impl<T, E> RetryOutcome<T, E> {
 /// retries, the function sleeps for the computed backoff duration.
 ///
 /// This is a synchronous version. For async, use `retry_with_backoff_async`.
-pub fn retry_with_backoff<T, E, F>(
-    policy: &RetryPolicy,
-    mut operation: F,
-) -> RetryOutcome<T, E>
+pub fn retry_with_backoff<T, E, F>(policy: &RetryPolicy, mut operation: F) -> RetryOutcome<T, E>
 where
-    F: FnMut(u32) -> Result<T, E>,
-{
+    F: FnMut(u32) -> Result<T, E>, {
     let total_attempts = 1 + policy.max_retries;
 
     // Run the first attempt separately so `last_error` is non-optional,
@@ -175,11 +170,8 @@ where
 
     let mut last_error = match operation(0) {
         Ok(value) => {
-            return RetryOutcome::Success {
-                value,
-                attempt: 1,
-            };
-        }
+            return RetryOutcome::Success { value, attempt: 1 };
+        },
         Err(e) => e,
     };
 
@@ -195,10 +187,10 @@ where
                     value,
                     attempt: attempt + 1,
                 };
-            }
+            },
             Err(e) => {
                 last_error = e;
-            }
+            },
         }
     }
 
@@ -215,8 +207,7 @@ pub async fn retry_with_backoff_async<T, E, F, Fut>(
 ) -> RetryOutcome<T, E>
 where
     F: FnMut(u32) -> Fut,
-    Fut: std::future::Future<Output = Result<T, E>>,
-{
+    Fut: std::future::Future<Output = Result<T, E>>, {
     let total_attempts = 1 + policy.max_retries;
 
     // Run the first attempt separately so `last_error` is non-optional,
@@ -228,11 +219,8 @@ where
 
     let mut last_error = match operation(0).await {
         Ok(value) => {
-            return RetryOutcome::Success {
-                value,
-                attempt: 1,
-            };
-        }
+            return RetryOutcome::Success { value, attempt: 1 };
+        },
         Err(e) => e,
     };
 
@@ -248,10 +236,10 @@ where
                     value,
                     attempt: attempt + 1,
                 };
-            }
+            },
             Err(e) => {
                 last_error = e;
-            }
+            },
         }
     }
 
@@ -416,7 +404,7 @@ impl FailureLedger {
             Some(entries) => {
                 let unrecovered = entries.iter().filter(|r| !r.recovered).count();
                 unrecovered as f32 / entries.len() as f32
-            }
+            },
         }
     }
 
@@ -450,10 +438,7 @@ impl FailureLedger {
     pub fn recent_failures(&self, operation: &str, window_ms: u64, now_ms: u64) -> usize {
         let cutoff = now_ms.saturating_sub(window_ms);
         self.operations.get(operation).map_or(0, |entries| {
-            entries
-                .iter()
-                .filter(|r| r.timestamp_ms >= cutoff)
-                .count()
+            entries.iter().filter(|r| r.timestamp_ms >= cutoff).count()
         })
     }
 
@@ -601,7 +586,7 @@ impl CircuitBreaker {
                 } else {
                     false
                 }
-            }
+            },
             CircuitState::HalfOpen => true,
         }
     }
@@ -611,7 +596,7 @@ impl CircuitBreaker {
         match self.state {
             CircuitState::Closed => {
                 self.failure_count = 0;
-            }
+            },
             CircuitState::HalfOpen => {
                 self.half_open_successes += 1;
                 if self.half_open_successes >= self.half_open_threshold {
@@ -619,10 +604,10 @@ impl CircuitBreaker {
                     self.failure_count = 0;
                     info!("circuit breaker: HalfOpen → Closed (recovered)");
                 }
-            }
+            },
             CircuitState::Open => {
                 // Should not happen, but handle gracefully
-            }
+            },
         }
     }
 
@@ -645,18 +630,18 @@ impl CircuitBreaker {
                         "circuit breaker: Closed → Open"
                     );
                 }
-            }
+            },
             CircuitState::HalfOpen => {
                 // Any failure in HalfOpen → back to Open
                 self.state = CircuitState::Open;
                 self.opened_at_ms = now_ms;
                 self.half_open_successes = 0;
                 warn!("circuit breaker: HalfOpen → Open (failed during recovery)");
-            }
+            },
             CircuitState::Open => {
                 // Already open, update timestamp
                 self.opened_at_ms = now_ms;
-            }
+            },
         }
     }
 
@@ -732,11 +717,7 @@ impl IntelligentRetry {
     ///
     /// When the primary operation fails structurally, the system can
     /// recommend switching to one of these alternatives.
-    pub fn register_alternatives(
-        &mut self,
-        operation: &str,
-        alts: Vec<String>,
-    ) {
+    pub fn register_alternatives(&mut self, operation: &str, alts: Vec<String>) {
         let bounded: Vec<String> = alts.into_iter().take(MAX_ALTERNATIVES).collect();
         self.alternatives.insert(operation.to_owned(), bounded);
     }
@@ -748,7 +729,7 @@ impl IntelligentRetry {
         let breaker = self
             .breakers
             .entry(operation.to_owned())
-            .or_insert_with(CircuitBreaker::new);
+            .or_default();
         breaker.allow_request(now_ms)
     }
 
@@ -775,8 +756,7 @@ impl IntelligentRetry {
     ) -> RetryStrategy
     where
         E: std::fmt::Display,
-        C: FnOnce(&E) -> ErrorClass,
-    {
+        C: FnOnce(&E) -> ErrorClass, {
         let error_class = classify(error);
         let description = format!("{}", error);
 
@@ -794,7 +774,7 @@ impl IntelligentRetry {
         let breaker = self
             .breakers
             .entry(operation.to_owned())
-            .or_insert_with(CircuitBreaker::new);
+            .or_default();
         breaker.record_failure(now_ms);
 
         // Determine strategy
@@ -814,7 +794,7 @@ impl IntelligentRetry {
                 RetryStrategy::Abort {
                     reason: format!("structural error, no alternatives: {error}"),
                 }
-            }
+            },
             ErrorClass::Transient => {
                 // Check if circuit is now open
                 if breaker.state() == CircuitState::Open {
@@ -823,7 +803,7 @@ impl IntelligentRetry {
                     };
                 }
                 RetryStrategy::RetryWithBackoff
-            }
+            },
         }
     }
 
@@ -1036,9 +1016,7 @@ impl FailureCategory {
     pub fn requires_user_notification(self) -> bool {
         matches!(
             self,
-            FailureCategory::Environmental
-                | FailureCategory::Capability
-                | FailureCategory::Safety
+            FailureCategory::Environmental | FailureCategory::Capability | FailureCategory::Safety
         )
     }
 }
@@ -1136,31 +1114,31 @@ impl RecoveryAction {
         match self {
             RecoveryAction::RetryWithBackoff { policy } => {
                 format!("retry(max={})", policy.max_retries)
-            }
+            },
             RecoveryAction::Replan { reason, .. } => {
                 format!("replan: {reason}")
-            }
+            },
             RecoveryAction::RestartEnvironment { target, wait_ms } => {
                 format!("restart({target}, wait={wait_ms}ms)")
-            }
+            },
             RecoveryAction::NotifyUser { severity, message } => {
                 format!("notify[{severity}]: {message}")
-            }
+            },
             RecoveryAction::HaltAndLog { category, reason } => {
                 format!("HALT[{category}]: {reason}")
-            }
+            },
             RecoveryAction::EscalateToStrategic {
                 from_category,
                 context,
             } => {
                 format!("escalate({from_category} → Strategic): {context}")
-            }
+            },
             RecoveryAction::TryAlternative {
                 alternative,
                 reason,
             } => {
                 format!("alternative({alternative}): {reason}")
-            }
+            },
         }
     }
 }
@@ -1311,16 +1289,15 @@ impl StrategicRecovery {
     ///
     /// ## Classification tiers (highest priority first)
     ///
-    /// 1. **Environment overrides** — battery, screen, network+transient,
-    ///    neocortex+LLM (preserved exactly as before).
-    /// 2. **Structural fast-path** — mechanical, non-semantic patterns:
-    ///    timeout → Transient; network socket/DNS → Transient; permission/
-    ///    access → Capability; OOM/resource-exhausted → Environmental.
-    ///    These are structural identifiers, NOT intent reasoning — the Iron
-    ///    Law is not violated.
+    /// 1. **Environment overrides** — battery, screen, network+transient, neocortex+LLM (preserved
+    ///    exactly as before).
+    /// 2. **Structural fast-path** — mechanical, non-semantic patterns: timeout → Transient;
+    ///    network socket/DNS → Transient; permission/ access → Capability; OOM/resource-exhausted →
+    ///    Environmental. These are structural identifiers, NOT intent reasoning — the Iron Law is
+    ///    not violated.
     /// 3. **LLM path** — ambiguous failures are sent to the neocortex via
-    ///    [`DaemonToNeocortex::ClassifyFailure`].  Defaults to `Strategic`
-    ///    on timeout or IPC error (unchanged from previous behaviour).
+    ///    [`DaemonToNeocortex::ClassifyFailure`].  Defaults to `Strategic` on timeout or IPC error
+    ///    (unchanged from previous behaviour).
     #[must_use]
     pub fn classify_failure(error: &str, env: &EnvironmentSnapshot) -> FailureCategory {
         let lower = error.to_lowercase();
@@ -1422,10 +1399,7 @@ impl StrategicRecovery {
     ///
     /// Returns `None` if the IPC call times out, errors, or returns an
     /// unrecognised label (caller falls back to `Strategic`).
-    fn classify_failure_via_llm(
-        error: &str,
-        env: &EnvironmentSnapshot,
-    ) -> Option<FailureCategory> {
+    fn classify_failure_via_llm(error: &str, env: &EnvironmentSnapshot) -> Option<FailureCategory> {
         use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
 
         // No runtime → cannot do async IPC; caller will use default.
@@ -1446,7 +1420,7 @@ impl StrategicRecovery {
                     Err(e) => {
                         warn!(error = %e, "classify_failure_via_llm: connect failed");
                         return None;
-                    }
+                    },
                 };
 
                 // Provide a compact env summary as context for the LLM.
@@ -1478,26 +1452,26 @@ impl StrategicRecovery {
                             other => {
                                 warn!(label = other, "classify_failure_via_llm: unknown label");
                                 return None;
-                            }
+                            },
                         };
                         debug!(category = ?fc, "classify_failure_via_llm: LLM classified failure");
                         Some(fc)
-                    }
+                    },
                     Ok(Ok(other)) => {
                         warn!(
                             resp = ?std::mem::discriminant(&other),
                             "classify_failure_via_llm: unexpected IPC response"
                         );
                         None
-                    }
+                    },
                     Ok(Err(e)) => {
                         warn!(error = %e, "classify_failure_via_llm: request error");
                         None
-                    }
+                    },
                     Err(_elapsed) => {
                         warn!("classify_failure_via_llm: 5-second timeout");
                         None
-                    }
+                    },
                 }
             })
         })
@@ -1545,7 +1519,7 @@ impl StrategicRecovery {
                         ),
                     }
                 }
-            }
+            },
 
             FailureCategory::Strategic => {
                 if self.should_escalate(&ctx.operation) {
@@ -1583,7 +1557,7 @@ impl StrategicRecovery {
                         ),
                     }
                 }
-            }
+            },
 
             FailureCategory::Environmental => {
                 let env = &ctx.environment_state;
@@ -1633,7 +1607,7 @@ impl StrategicRecovery {
                     ),
                     severity: RecoverySeverity::Warning,
                 }
-            }
+            },
 
             FailureCategory::Capability => {
                 info!(
@@ -1643,13 +1617,11 @@ impl StrategicRecovery {
                 RecoveryAction::NotifyUser {
                     message: format!(
                         "I can't complete '{}' because: {}. {}",
-                        ctx.operation,
-                        ctx.last_error,
-                        ctx.goal_description
+                        ctx.operation, ctx.last_error, ctx.goal_description
                     ),
                     severity: RecoverySeverity::Error,
                 }
-            }
+            },
 
             FailureCategory::Safety => {
                 warn!(
@@ -1658,13 +1630,10 @@ impl StrategicRecovery {
                     "recovery: Safety → HaltAndLog (NEVER retry)"
                 );
                 RecoveryAction::HaltAndLog {
-                    reason: format!(
-                        "safety halt for '{}': {}",
-                        ctx.operation, ctx.last_error
-                    ),
+                    reason: format!("safety halt for '{}': {}", ctx.operation, ctx.last_error),
                     category: FailureCategory::Safety,
                 }
-            }
+            },
         }
     }
 
@@ -1759,8 +1728,7 @@ impl StrategicRecovery {
             }
 
             let cat_key = entry.category.to_string();
-            let (cat_total, cat_success) =
-                by_category.entry(cat_key).or_insert((0, 0));
+            let (cat_total, cat_success) = by_category.entry(cat_key).or_insert((0, 0));
             *cat_total = cat_total.saturating_add(1);
             if entry.success {
                 *cat_success = cat_success.saturating_add(1);
@@ -1857,7 +1825,7 @@ mod tests {
             RetryOutcome::Success { value, attempt } => {
                 assert_eq!(value, 42);
                 assert_eq!(attempt, 1);
-            }
+            },
             _ => panic!("expected success"),
         }
     }
@@ -1885,7 +1853,7 @@ mod tests {
             RetryOutcome::Success { value, attempt } => {
                 assert_eq!(value, 99);
                 assert_eq!(attempt, 2);
-            }
+            },
             _ => panic!("expected success"),
         }
     }
@@ -1905,7 +1873,7 @@ mod tests {
             RetryOutcome::Exhausted { error, attempts } => {
                 assert_eq!(error, "always fails");
                 assert_eq!(attempts, 3); // 1 initial + 2 retries
-            }
+            },
             _ => panic!("expected exhausted"),
         }
     }
@@ -1916,9 +1884,7 @@ mod tests {
         let outcome = retry_with_backoff(&policy, |_| Ok::<_, &str>(42));
         assert_eq!(outcome.into_result(), Ok(42));
 
-        let outcome2 = retry_with_backoff(&RetryPolicy::no_retry(), |_| {
-            Err::<(), _>("fail")
-        });
+        let outcome2 = retry_with_backoff(&RetryPolicy::no_retry(), |_| Err::<(), _>("fail"));
         assert_eq!(outcome2.into_result(), Err("fail"));
     }
 
@@ -2018,10 +1984,7 @@ mod tests {
 
         let rate = ledger.failure_rate("fetch");
         // 2 unrecovered out of 3 = ~0.667
-        assert!(
-            (rate - 0.667).abs() < 0.01,
-            "expected ~0.667, got {rate}"
-        );
+        assert!((rate - 0.667).abs() < 0.01, "expected ~0.667, got {rate}");
     }
 
     #[test]
@@ -2215,13 +2178,7 @@ mod tests {
     fn test_intelligent_retry_handle_transient() {
         let mut ir = IntelligentRetry::new();
 
-        let strategy = ir.handle_failure(
-            "fetch",
-            &"timeout",
-            |_| ErrorClass::Transient,
-            1000,
-            0,
-        );
+        let strategy = ir.handle_failure("fetch", &"timeout", |_| ErrorClass::Transient, 1000, 0);
 
         assert_eq!(strategy, RetryStrategy::RetryWithBackoff);
         assert_eq!(ir.tracked_operations(), 1);
@@ -2263,7 +2220,7 @@ mod tests {
         match strategy {
             RetryStrategy::Abort { reason } => {
                 assert!(reason.contains("no alternatives"));
-            }
+            },
             _ => panic!("expected abort, got {strategy:?}"),
         }
     }
@@ -2283,7 +2240,7 @@ mod tests {
         match strategy {
             RetryStrategy::Abort { reason } => {
                 assert!(reason.contains("fatal"));
-            }
+            },
             _ => panic!("expected abort"),
         }
     }
@@ -2632,9 +2589,15 @@ mod tests {
     #[test]
     fn test_recovery_transient_low_attempt_retries() {
         let sr = StrategicRecovery::new();
-        let ctx = make_ctx("fetch", FailureCategory::Transient, 1, "timeout", default_env());
+        let ctx = make_ctx(
+            "fetch",
+            FailureCategory::Transient,
+            1,
+            "timeout",
+            default_env(),
+        );
         match sr.determine_recovery(&ctx) {
-            RecoveryAction::RetryWithBackoff { .. } => {}
+            RecoveryAction::RetryWithBackoff { .. } => {},
             other => panic!("expected RetryWithBackoff, got {}", other.summary()),
         }
     }
@@ -2642,11 +2605,17 @@ mod tests {
     #[test]
     fn test_recovery_transient_high_attempt_escalates() {
         let sr = StrategicRecovery::new();
-        let ctx = make_ctx("fetch", FailureCategory::Transient, 5, "timeout", default_env());
+        let ctx = make_ctx(
+            "fetch",
+            FailureCategory::Transient,
+            5,
+            "timeout",
+            default_env(),
+        );
         match sr.determine_recovery(&ctx) {
             RecoveryAction::EscalateToStrategic { from_category, .. } => {
                 assert_eq!(from_category, FailureCategory::Transient);
-            }
+            },
             other => panic!("expected EscalateToStrategic, got {}", other.summary()),
         }
     }
@@ -2665,7 +2634,7 @@ mod tests {
             RecoveryAction::Replan { reason, context } => {
                 assert!(reason.contains("click_button"));
                 assert!(context.contains("element missing"));
-            }
+            },
             other => panic!("expected Replan, got {}", other.summary()),
         }
     }
@@ -2693,7 +2662,7 @@ mod tests {
         match sr.determine_recovery(&ctx) {
             RecoveryAction::NotifyUser { severity, .. } => {
                 assert_eq!(severity, RecoverySeverity::Error);
-            }
+            },
             other => panic!("expected NotifyUser, got {}", other.summary()),
         }
     }
@@ -2705,12 +2674,18 @@ mod tests {
             battery_level: 0.02,
             ..default_env()
         };
-        let ctx = make_ctx("task", FailureCategory::Environmental, 1, "low battery", env);
+        let ctx = make_ctx(
+            "task",
+            FailureCategory::Environmental,
+            1,
+            "low battery",
+            env,
+        );
         match sr.determine_recovery(&ctx) {
             RecoveryAction::NotifyUser { severity, message } => {
                 assert_eq!(severity, RecoverySeverity::Critical);
                 assert!(message.contains("Battery"));
-            }
+            },
             other => panic!("expected NotifyUser(Critical), got {}", other.summary()),
         }
     }
@@ -2722,12 +2697,18 @@ mod tests {
             network_available: false,
             ..default_env()
         };
-        let ctx = make_ctx("fetch", FailureCategory::Environmental, 1, "no internet", env);
+        let ctx = make_ctx(
+            "fetch",
+            FailureCategory::Environmental,
+            1,
+            "no internet",
+            env,
+        );
         match sr.determine_recovery(&ctx) {
             RecoveryAction::NotifyUser { severity, message } => {
                 assert_eq!(severity, RecoverySeverity::Warning);
                 assert!(message.contains("internet"));
-            }
+            },
             other => panic!("expected NotifyUser(Warning), got {}", other.summary()),
         }
     }
@@ -2739,11 +2720,17 @@ mod tests {
             target_app_running: false,
             ..default_env()
         };
-        let ctx = make_ctx("click", FailureCategory::Environmental, 1, "app crashed", env);
+        let ctx = make_ctx(
+            "click",
+            FailureCategory::Environmental,
+            1,
+            "app crashed",
+            env,
+        );
         match sr.determine_recovery(&ctx) {
             RecoveryAction::RestartEnvironment { wait_ms, .. } => {
                 assert_eq!(wait_ms, DEFAULT_RESTART_WAIT_MS);
-            }
+            },
             other => panic!("expected RestartEnvironment, got {}", other.summary()),
         }
     }
@@ -2763,7 +2750,7 @@ mod tests {
                 assert_eq!(severity, RecoverySeverity::Error);
                 assert!(message.contains("use_camera"));
                 assert!(message.contains("hardware not available"));
-            }
+            },
             other => panic!("expected NotifyUser, got {}", other.summary()),
         }
     }
@@ -2782,7 +2769,7 @@ mod tests {
             RecoveryAction::HaltAndLog { category, reason } => {
                 assert_eq!(category, FailureCategory::Safety);
                 assert!(reason.contains("send_message"));
-            }
+            },
             other => panic!("expected HaltAndLog, got {}", other.summary()),
         }
     }
@@ -2933,7 +2920,12 @@ mod tests {
     fn test_classify_safety_keywords() {
         let env = default_env();
         // classify_failure() always returns Strategic (stub — LLM classifies failures).
-        for keyword in &["policy violation", "action blocked", "safety concern", "ethical issue"] {
+        for keyword in &[
+            "policy violation",
+            "action blocked",
+            "safety concern",
+            "ethical issue",
+        ] {
             assert_eq!(
                 StrategicRecovery::classify_failure(keyword, &env),
                 FailureCategory::Strategic,
@@ -2962,28 +2954,46 @@ mod tests {
 
         // 3 transient retries
         for attempt in 0..MAX_TRANSIENT_ATTEMPTS {
-            let ctx = make_ctx("fetch_data", FailureCategory::Transient, attempt, "timeout", env.clone());
+            let ctx = make_ctx(
+                "fetch_data",
+                FailureCategory::Transient,
+                attempt,
+                "timeout",
+                env.clone(),
+            );
             let action = sr.determine_recovery(&ctx);
             match &action {
-                RecoveryAction::RetryWithBackoff { .. } => {}
+                RecoveryAction::RetryWithBackoff { .. } => {},
                 other => panic!("attempt {attempt}: expected retry, got {}", other.summary()),
             }
             sr.record_recovery_outcome("fetch_data", &action, false, attempt as u64 * 1000);
         }
 
         // 4th attempt → escalates
-        let ctx = make_ctx("fetch_data", FailureCategory::Transient, MAX_TRANSIENT_ATTEMPTS, "timeout", env.clone());
+        let ctx = make_ctx(
+            "fetch_data",
+            FailureCategory::Transient,
+            MAX_TRANSIENT_ATTEMPTS,
+            "timeout",
+            env.clone(),
+        );
         let action = sr.determine_recovery(&ctx);
         match &action {
-            RecoveryAction::EscalateToStrategic { .. } => {}
+            RecoveryAction::EscalateToStrategic { .. } => {},
             other => panic!("expected escalation, got {}", other.summary()),
         }
 
         // Now handle as strategic — should replan
-        let ctx = make_ctx("fetch_data", FailureCategory::Strategic, 4, "wrong approach", env.clone());
+        let ctx = make_ctx(
+            "fetch_data",
+            FailureCategory::Strategic,
+            4,
+            "wrong approach",
+            env.clone(),
+        );
         let action = sr.determine_recovery(&ctx);
         match &action {
-            RecoveryAction::Replan { .. } => {}
+            RecoveryAction::Replan { .. } => {},
             other => panic!("expected replan, got {}", other.summary()),
         }
 

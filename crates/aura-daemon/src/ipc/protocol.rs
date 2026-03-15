@@ -9,8 +9,7 @@
 
 use std::time::Duration;
 
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::debug;
 
@@ -65,12 +64,10 @@ pub const FRAME_HEADER_SIZE: usize = 4;
 /// # Errors
 ///
 /// - [`IpcError::Encoding`] if bincode serialization fails.
-/// - [`IpcError::MessageTooLarge`] if the serialized body exceeds
-///   [`MAX_MESSAGE_SIZE`].
+/// - [`IpcError::MessageTooLarge`] if the serialized body exceeds [`MAX_MESSAGE_SIZE`].
 pub fn encode_frame<T: Serialize>(msg: &T) -> Result<Vec<u8>, IpcError> {
-    let body = bincode::serde::encode_to_vec(msg, bincode::config::standard()).map_err(|e| {
-        IpcError::Encoding(format!("bincode serialize failed: {e}"))
-    })?;
+    let body = bincode::serde::encode_to_vec(msg, bincode::config::standard())
+        .map_err(|e| IpcError::Encoding(format!("bincode serialize failed: {e}")))?;
 
     if body.len() > MAX_MESSAGE_SIZE {
         return Err(IpcError::MessageTooLarge {
@@ -84,7 +81,11 @@ pub fn encode_frame<T: Serialize>(msg: &T) -> Result<Vec<u8>, IpcError> {
     frame.extend_from_slice(&len.to_le_bytes());
     frame.extend_from_slice(&body);
 
-    debug!(payload_len = body.len(), frame_len = frame.len(), "encoded frame");
+    debug!(
+        payload_len = body.len(),
+        frame_len = frame.len(),
+        "encoded frame"
+    );
     Ok(frame)
 }
 
@@ -93,23 +94,19 @@ pub fn encode_frame<T: Serialize>(msg: &T) -> Result<Vec<u8>, IpcError> {
 /// # Errors
 ///
 /// - [`IpcError::Io`] on read failure or unexpected EOF.
-/// - [`IpcError::MessageTooLarge`] if the declared length exceeds
-///   [`MAX_MESSAGE_SIZE`].
+/// - [`IpcError::MessageTooLarge`] if the declared length exceeds [`MAX_MESSAGE_SIZE`].
 /// - [`IpcError::Encoding`] if bincode deserialization fails.
-/// - [`IpcError::ConnectionLost`] if the stream yields zero bytes (clean
-///   disconnect).
-pub async fn decode_frame<T: DeserializeOwned>(
-    stream: &mut IpcStream,
-) -> Result<T, IpcError> {
+/// - [`IpcError::ConnectionLost`] if the stream yields zero bytes (clean disconnect).
+pub async fn decode_frame<T: DeserializeOwned>(stream: &mut IpcStream) -> Result<T, IpcError> {
     // Read the 4-byte length prefix.
     let mut len_buf = [0u8; FRAME_HEADER_SIZE];
     match stream.read_exact(&mut len_buf).await {
-        Ok(_) => {}
+        Ok(_) => {},
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             return Err(IpcError::ConnectionLost {
                 reason: "peer closed connection (EOF during header read)".into(),
             });
-        }
+        },
         Err(e) => return Err(IpcError::Io(e)),
     }
 
@@ -129,22 +126,20 @@ pub async fn decode_frame<T: DeserializeOwned>(
     // Read the payload body.
     let mut body = vec![0u8; msg_len];
     match stream.read_exact(&mut body).await {
-        Ok(_) => {}
+        Ok(_) => {},
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             return Err(IpcError::ConnectionLost {
                 reason: format!(
                     "peer closed connection (EOF during body read, expected {msg_len} bytes)"
                 ),
             });
-        }
+        },
         Err(e) => return Err(IpcError::Io(e)),
     }
 
     // Deserialize.
-    let (msg, _) =
-        bincode::serde::decode_from_slice(&body, bincode::config::standard()).map_err(|e| {
-            IpcError::Encoding(format!("bincode deserialize failed: {e}"))
-        })?;
+    let (msg, _) = bincode::serde::decode_from_slice(&body, bincode::config::standard())
+        .map_err(|e| IpcError::Encoding(format!("bincode deserialize failed: {e}")))?;
 
     debug!(payload_len = msg_len, "decoded frame");
     Ok(msg)
@@ -158,7 +153,7 @@ pub async fn decode_frame<T: DeserializeOwned>(
 /// - [`IpcError::ConnectionLost`] on broken-pipe / reset errors.
 pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), IpcError> {
     match stream.write_all(frame).await {
-        Ok(()) => {}
+        Ok(()) => {},
         Err(e)
             if e.kind() == std::io::ErrorKind::BrokenPipe
                 || e.kind() == std::io::ErrorKind::ConnectionReset =>
@@ -166,7 +161,7 @@ pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), Ipc
             return Err(IpcError::ConnectionLost {
                 reason: format!("write failed: {e}"),
             });
-        }
+        },
         Err(e) => return Err(IpcError::Io(e)),
     }
     stream.flush().await.map_err(|e| {
@@ -193,14 +188,14 @@ pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), Ipc
 ///
 /// # Errors
 ///
-/// - [`IpcError::Timeout`] if the connection is not established within
-///   [`CONNECT_TIMEOUT`].
+/// - [`IpcError::Timeout`] if the connection is not established within [`CONNECT_TIMEOUT`].
 /// - [`IpcError::Io`] for other connection failures.
 pub async fn connect_stream() -> Result<IpcStream, IpcError> {
     // Android: abstract Unix domain socket
     #[cfg(target_os = "android")]
     {
         use std::os::unix::net::SocketAddr as StdSocketAddr;
+
         use tokio::net::UnixStream;
 
         let addr = StdSocketAddr::from_abstract_name(b"aura_ipc_v4").map_err(|e| {
@@ -220,18 +215,34 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
         Ok(stream)
     }
 
-    // Non-Android Unix or Windows: TCP fallback
-    #[cfg(not(target_os = "android"))]
+    // Non-Android Unix: file-path Unix domain socket
+    #[cfg(all(unix, not(target_os = "android")))]
+    {
+        use tokio::net::UnixStream;
+
+        let path = "/tmp/aura_ipc_v4.sock".to_string();
+
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&path))
+            .await
+            .map_err(|_| IpcError::Timeout {
+                context: format!("connect to {path} timed out after {CONNECT_TIMEOUT:?}"),
+            })?
+            .map_err(IpcError::Io)?;
+
+        Ok(stream)
+    }
+
+    // Windows: TCP fallback
+    #[cfg(not(unix))]
     {
         let addr = format!("{TCP_FALLBACK_ADDR}:{TCP_FALLBACK_PORT}");
 
-        let stream =
-            tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&addr))
-                .await
-                .map_err(|_| IpcError::Timeout {
-                    context: format!("connect to {addr} timed out after {CONNECT_TIMEOUT:?}"),
-                })?
-                .map_err(IpcError::Io)?;
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&addr))
+            .await
+            .map_err(|_| IpcError::Timeout {
+                context: format!("connect to {addr} timed out after {CONNECT_TIMEOUT:?}"),
+            })?
+            .map_err(IpcError::Io)?;
 
         // Disable Nagle's algorithm for low-latency IPC.
         stream.set_nodelay(true).map_err(IpcError::Io)?;
@@ -244,8 +255,9 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::ipc::{DaemonToNeocortex, ModelParams, ModelTier, NeocortexToDaemon};
+
+    use super::*;
 
     #[test]
     fn encode_ping_frame() {
@@ -262,8 +274,7 @@ mod tests {
         let frame = encode_frame(&original).expect("encode");
         let body = &frame[FRAME_HEADER_SIZE..];
         let (decoded, _): (DaemonToNeocortex, _) =
-            bincode::serde::decode_from_slice(body, bincode::config::standard())
-                .expect("decode");
+            bincode::serde::decode_from_slice(body, bincode::config::standard()).expect("decode");
         assert!(matches!(decoded, DaemonToNeocortex::Ping));
     }
 
@@ -280,15 +291,14 @@ mod tests {
         let frame = encode_frame(&original).expect("encode");
         let body = &frame[FRAME_HEADER_SIZE..];
         let (decoded, _): (DaemonToNeocortex, _) =
-            bincode::serde::decode_from_slice(body, bincode::config::standard())
-                .expect("decode");
+            bincode::serde::decode_from_slice(body, bincode::config::standard()).expect("decode");
         match decoded {
             DaemonToNeocortex::Load { model_path, params } => {
                 assert_eq!(model_path, "/data/models/qwen-4b.gguf");
                 assert_eq!(params.n_ctx, 4096);
                 assert_eq!(params.n_threads, 8);
                 assert!(matches!(params.model_tier, ModelTier::Full8B));
-            }
+            },
             other => panic!("expected Load, got {other:?}"),
         }
     }
@@ -299,8 +309,7 @@ mod tests {
         let frame = encode_frame(&original).expect("encode");
         let body = &frame[FRAME_HEADER_SIZE..];
         let (decoded, _): (NeocortexToDaemon, _) =
-            bincode::serde::decode_from_slice(body, bincode::config::standard())
-                .expect("decode");
+            bincode::serde::decode_from_slice(body, bincode::config::standard()).expect("decode");
         match decoded {
             NeocortexToDaemon::Pong { uptime_ms } => assert_eq!(uptime_ms, 42_000),
             other => panic!("expected Pong, got {other:?}"),
@@ -371,8 +380,7 @@ mod tests {
         client.read_exact(&mut body).await.expect("read body");
 
         let (decoded, _): (DaemonToNeocortex, _) =
-            bincode::serde::decode_from_slice(&body, bincode::config::standard())
-                .expect("decode");
+            bincode::serde::decode_from_slice(&body, bincode::config::standard()).expect("decode");
         assert!(matches!(decoded, DaemonToNeocortex::Ping));
 
         write_handle.await.expect("writer task");

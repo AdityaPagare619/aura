@@ -19,11 +19,10 @@ pub mod vitals;
 
 pub use fitness::FitnessTracker;
 pub use medication::MedicationManager;
-pub use sleep::SleepTracker;
-pub use vitals::VitalsMonitor;
-
 use serde::{Deserialize, Serialize};
+pub use sleep::SleepTracker;
 use tracing::{debug, instrument, warn};
+pub use vitals::VitalsMonitor;
 
 use super::{ArcError, DomainLifecycle};
 

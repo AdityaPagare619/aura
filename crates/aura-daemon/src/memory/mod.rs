@@ -30,29 +30,34 @@ pub mod hnsw;
 pub mod importance;
 pub mod patterns;
 pub mod semantic;
-pub mod working;
 pub mod workflows;
+pub mod working;
 
 // Re-export key types for ergonomic use by the rest of the daemon.
+use std::path::Path;
+
 pub use archive::{ArchiveMemory, ARCHIVE_AGE_THRESHOLD_MS, ARCHIVE_IMPORTANCE_THRESHOLD};
+use aura_types::{
+    errors::MemError,
+    ipc::MemoryTier,
+    memory::{MemoryQuery, MemoryResult},
+};
 pub use compaction::ContextCompactor;
-pub use consolidation::{consolidate, ConsolidationLevel, ConsolidationReport, ConsolidationWeights};
-pub use embeddings::{cosine_similarity, embed, embed_with_quality, EmbeddingQuality, jaccard_trigram_similarity, EMBED_DIM};
+pub use consolidation::{
+    consolidate, ConsolidationLevel, ConsolidationReport, ConsolidationWeights,
+};
+pub use embeddings::{
+    cosine_similarity, embed, embed_with_quality, jaccard_trigram_similarity, EmbeddingQuality,
+    EMBED_DIM,
+};
 pub use episodic::EpisodicMemory;
 pub use feedback::FeedbackLoop;
 pub use importance::{calculate_importance, HebbianTrace};
 pub use patterns::PatternEngine;
 pub use semantic::SemanticMemory;
-pub use working::{WorkingMemory, WorkingResult, MAX_SLOTS};
-pub use workflows::WorkflowMemory;
-
-use std::path::Path;
-
 use tracing::{debug, info, warn};
-
-use aura_types::errors::MemError;
-use aura_types::ipc::MemoryTier;
-use aura_types::memory::{MemoryQuery, MemoryResult};
+pub use workflows::WorkflowMemory;
+pub use working::{WorkingMemory, WorkingResult, MAX_SLOTS};
 
 // ---------------------------------------------------------------------------
 // MemoryUsageReport
@@ -116,7 +121,7 @@ pub struct PredictionResult {
     /// Confidence score [0.0, 1.0].
     pub confidence: f32,
     /// The intelligence tier that made the prediction.
-    pub source_tier: String, 
+    pub source_tier: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,9 +165,8 @@ impl AuraMemory {
     /// Working memory is always RAM-only.
     pub fn new(data_dir: &Path) -> Result<Self, MemError> {
         // Ensure the data directory exists
-        std::fs::create_dir_all(data_dir).map_err(|e| {
-            MemError::DatabaseError(format!("failed to create data dir: {}", e))
-        })?;
+        std::fs::create_dir_all(data_dir)
+            .map_err(|e| MemError::DatabaseError(format!("failed to create data dir: {}", e)))?;
 
         let episodic = EpisodicMemory::open(&data_dir.join("episodic.db"))?;
         let semantic = SemanticMemory::open(&data_dir.join("semantic.db"))?;
@@ -243,7 +247,13 @@ impl AuraMemory {
         now_ms: u64,
     ) -> Result<u64, MemError> {
         self.episodic
-            .store(content, emotional_valence, base_importance, context_tags, now_ms)
+            .store(
+                content,
+                emotional_valence,
+                base_importance,
+                context_tags,
+                now_ms,
+            )
             .await
     }
 
@@ -281,11 +291,9 @@ impl AuraMemory {
         for tier in &query.tiers {
             match tier {
                 MemoryTier::Working => {
-                    let working_results = self.working.query(
-                        &query.query_text,
-                        query.max_results,
-                        now_ms,
-                    );
+                    let working_results =
+                        self.working
+                            .query(&query.query_text, query.max_results, now_ms);
                     for wr in working_results {
                         if wr.score >= query.min_relevance {
                             all_results.push(MemoryResult {
@@ -298,7 +306,7 @@ impl AuraMemory {
                             });
                         }
                     }
-                }
+                },
                 MemoryTier::Episodic => {
                     match self
                         .episodic
@@ -313,9 +321,9 @@ impl AuraMemory {
                         Ok(results) => all_results.extend(results),
                         Err(e) => {
                             warn!("episodic query failed: {}", e);
-                        }
+                        },
                     }
-                }
+                },
                 MemoryTier::Semantic => {
                     match self
                         .semantic
@@ -330,25 +338,21 @@ impl AuraMemory {
                         Ok(results) => all_results.extend(results),
                         Err(e) => {
                             warn!("semantic query failed: {}", e);
-                        }
+                        },
                     }
-                }
+                },
                 MemoryTier::Archive => {
                     match self
                         .archive
-                        .query(
-                            &query.query_text,
-                            query.max_results,
-                            query.min_relevance,
-                        )
+                        .query(&query.query_text, query.max_results, query.min_relevance)
                         .await
                     {
                         Ok(results) => all_results.extend(results),
                         Err(e) => {
                             warn!("archive query failed: {}", e);
-                        }
+                        },
                     }
-                }
+                },
             }
         }
 
@@ -402,14 +406,18 @@ impl AuraMemory {
         // 1. Workflow predictions (long sequences)
         if let Ok(workflows) = self.workflows.get_all().await {
             for (_id, wf) in workflows {
-                let seq_strings: Vec<String> = wf.sequence.iter().map(|a| format!("{:?}", a)).collect();
-                
+                let seq_strings: Vec<String> =
+                    wf.sequence.iter().map(|a| format!("{:?}", a)).collect();
+
                 // Simplistic prefix match for prediction matching
                 if !recent_events.is_empty() && seq_strings.len() > recent_events.len() {
                     let mut is_prefix = true;
                     for (i, ev) in recent_events.iter().enumerate() {
                         // Very rough comparison, usually we'd want more semantically aware matching
-                        if i < seq_strings.len() && !seq_strings[i].contains(ev) && !ev.contains(&seq_strings[i]) {
+                        if i < seq_strings.len()
+                            && !seq_strings[i].contains(ev)
+                            && !ev.contains(&seq_strings[i])
+                        {
                             is_prefix = false;
                             break;
                         }
@@ -440,17 +448,25 @@ impl AuraMemory {
         }
 
         // Sort by confidence descending
-        predictions.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
-        
+        predictions.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         // Deduplicate by predicted_action
         let mut unique: Vec<PredictionResult> = Vec::new();
         for p in predictions {
-            if !unique.iter().any(|u| u.predicted_action == p.predicted_action) {
+            if !unique
+                .iter()
+                .any(|u| u.predicted_action == p.predicted_action)
+            {
                 unique.push(p);
             }
         }
-        
-        // Contextual boost (if current_context contains clues, could boost related predictions - stub for M10)
+
+        // Contextual boost (if current_context contains clues, could boost related predictions -
+        // stub for M10)
         let _ = current_context;
 
         unique.truncate(5); // Return top 5 predictions
@@ -552,11 +568,11 @@ impl AuraMemory {
                     ));
                 }
                 sections.push(sec);
-            }
-            Ok(_) => {} // No results
+            },
+            Ok(_) => {}, // No results
             Err(e) => {
                 warn!("episodic query for LLM context failed: {}", e);
-            }
+            },
         }
 
         // ----- Semantic memory -----
@@ -576,11 +592,11 @@ impl AuraMemory {
                     ));
                 }
                 sections.push(sec);
-            }
-            Ok(_) => {}
+            },
+            Ok(_) => {},
             Err(e) => {
                 warn!("semantic query for LLM context failed: {}", e);
-            }
+            },
         }
 
         let context = sections.join("\n");
@@ -678,9 +694,9 @@ impl<'a> MemoryIntelligence<'a> {
         success: bool,
         now_ms: u64,
     ) -> Result<(), aura_types::errors::AuraError> {
-        self.mem.pattern_engine.record_outcome(
-            action, context, outcome, success, now_ms,
-        )?;
+        self.mem
+            .pattern_engine
+            .record_outcome(action, context, outcome, success, now_ms)?;
         self.mem
             .pattern_engine
             .hebbian_update(action, context, success);
@@ -699,10 +715,7 @@ impl<'a> MemoryIntelligence<'a> {
     }
 
     /// Get the top N strongest patterns the engine has discovered.
-    pub fn strongest_patterns(
-        &self,
-        n: usize,
-    ) -> Vec<&patterns::ActionPattern> {
+    pub fn strongest_patterns(&self, n: usize) -> Vec<&patterns::ActionPattern> {
         self.mem.pattern_engine.strongest_patterns(n)
     }
 
@@ -719,12 +732,10 @@ impl<'a> MemoryIntelligence<'a> {
         context: &str,
         now_ms: u64,
     ) -> u64 {
-        let error_id = self.mem.feedback_loop.record_error(
-            error_type,
-            error_message,
-            context,
-            now_ms,
-        );
+        let error_id =
+            self.mem
+                .feedback_loop
+                .record_error(error_type, error_message, context, now_ms);
 
         // Activate related working memory slots when an error occurs
         self.mem
@@ -839,10 +850,9 @@ fn tier_discriminant(tier: &MemoryTier) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use aura_types::{events::EventSource, ipc::MemoryTier, memory::MemoryQuery};
+
     use super::*;
-    use aura_types::events::EventSource;
-    use aura_types::ipc::MemoryTier;
-    use aura_types::memory::MemoryQuery;
 
     // Helper: current time for tests (Jan 1 2025, 00:00:00 UTC in ms)
     const TEST_NOW_MS: u64 = 1_735_689_600_000;
@@ -1129,9 +1139,7 @@ mod tests {
         assert_eq!(mem.working.len(), 1);
 
         // Consolidate after TTL expires
-        let report = mem
-            .consolidate(ConsolidationLevel::Micro, now + 2000)
-            .await;
+        let report = mem.consolidate(ConsolidationLevel::Micro, now + 2000).await;
         assert_eq!(report.working_slots_swept, 1);
         assert_eq!(mem.working.len(), 0);
     }
@@ -1172,8 +1180,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(ctx.contains("[Episodic Memory]") || ctx.contains("dark mode"),
-            "context should contain retrieved memory content; got: {:?}", ctx);
+        assert!(
+            ctx.contains("[Episodic Memory]") || ctx.contains("dark mode"),
+            "context should contain retrieved memory content; got: {:?}",
+            ctx
+        );
         assert!(ctx.contains("dark mode"));
     }
 
@@ -1182,12 +1193,7 @@ mod tests {
         let mut mem = AuraMemory::new_in_memory().unwrap();
         let now = TEST_NOW_MS;
 
-        mem.store_working(
-            "test content".into(),
-            EventSource::Internal,
-            0.5,
-            now,
-        );
+        mem.store_working("test content".into(), EventSource::Internal, 0.5, now);
 
         let report = mem.memory_usage().await.unwrap();
         assert!(report.working_bytes > 0);
@@ -1276,13 +1282,7 @@ mod tests {
             // Record several outcomes to build a pattern
             for i in 0..5 {
                 intel
-                    .on_action(
-                        "compile",
-                        "rust project",
-                        "success",
-                        true,
-                        now + i * 1000,
-                    )
+                    .on_action("compile", "rust project", "success", true, now + i * 1000)
                     .unwrap();
             }
             let prediction = intel.predict_outcome("compile", "rust project");

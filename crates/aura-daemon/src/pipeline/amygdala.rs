@@ -296,7 +296,10 @@ impl Amygdala {
         self.decay_cognitive_load(now);
         // Increase load, capping at 1.0.
         self.cognitive_load = (self.cognitive_load + 0.05).min(1.0);
-        trace!(cognitive_load = self.cognitive_load, "Human decision recorded, cognitive load increased");
+        trace!(
+            cognitive_load = self.cognitive_load,
+            "Human decision recorded, cognitive load increased"
+        );
     }
 
     /// Produce routing metrics for a pending decision.
@@ -321,7 +324,9 @@ impl Amygdala {
     /// # Architecture note — Theater AGI guard
     /// This always returns `DecisionTier::RequireHuman` so the LLM is always
     /// consulted. Replace all call sites with `route_decision_metrics()`.
-    #[deprecated(note = "Theater AGI: formula drove tier routing. Use route_decision_metrics() and let the LLM decide.")]
+    #[deprecated(
+        note = "Theater AGI: formula drove tier routing. Use route_decision_metrics() and let the LLM decide."
+    )]
     pub fn route_decision(&mut self, decision_importance: f32) -> DecisionTier {
         self.route_decision_metrics(decision_importance);
         // Always escalate to LLM — do not auto-route in Rust.
@@ -366,10 +371,10 @@ impl Amygdala {
     /// Called by the learning engine when it observes that autonomous actions
     /// during low cognitive load periods had good/bad outcomes.
     ///
-    /// - `good_outcome = true`: AURA acted during low load and user was satisfied
-    ///   → current decay rate is good, reinforce (small regression toward 24h mean)
-    /// - `good_outcome = false`: AURA acted during low load but user was overwhelmed
-    ///   → decay is too fast, increase half-life (slow down decay)
+    /// - `good_outcome = true`: AURA acted during low load and user was satisfied → current decay
+    ///   rate is good, reinforce (small regression toward 24h mean)
+    /// - `good_outcome = false`: AURA acted during low load but user was overwhelmed → decay is too
+    ///   fast, increase half-life (slow down decay)
     // Phase 8 wire point: called by outcome_bus learning subscriber.
     #[allow(dead_code)]
     pub(crate) fn adjust_decay_rate(&mut self, good_outcome: bool) {
@@ -377,7 +382,8 @@ impl Amygdala {
 
         if good_outcome {
             // Reinforce current rate — slight regression toward mean (24h).
-            let adjustment = LEARN_RATE * (DEFAULT_DECAY_HALF_LIFE_HOURS - self.decay_half_life_hours);
+            let adjustment =
+                LEARN_RATE * (DEFAULT_DECAY_HALF_LIFE_HOURS - self.decay_half_life_hours);
             let new_half_life = self.decay_half_life_hours + adjustment;
             // Guard against NaN/Inf from arithmetic.
             if new_half_life.is_finite() {
@@ -391,7 +397,9 @@ impl Amygdala {
             }
         }
 
-        self.decay_half_life_hours = self.decay_half_life_hours.clamp(MIN_DECAY_HALF_LIFE, MAX_DECAY_HALF_LIFE);
+        self.decay_half_life_hours = self
+            .decay_half_life_hours
+            .clamp(MIN_DECAY_HALF_LIFE, MAX_DECAY_HALF_LIFE);
 
         tracing::debug!(
             half_life = self.decay_half_life_hours,
@@ -556,8 +564,9 @@ impl Default for Amygdala {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::events::{EventSource, Intent};
+
+    use super::*;
 
     fn make_event(content: &str, ts: u64) -> ParsedEvent {
         ParsedEvent {
@@ -634,7 +643,8 @@ mod tests {
 
         // First high-score event → InstantWake.
         let s1 = amygdala.score(&make_event("urgent error crash", 10_000));
-        // High composite score → InstantWake (EmergencyBypass no longer triggered from keyword scan).
+        // High composite score → InstantWake (EmergencyBypass no longer triggered from keyword
+        // scan).
         assert!(
             matches!(
                 s1.gate_decision,

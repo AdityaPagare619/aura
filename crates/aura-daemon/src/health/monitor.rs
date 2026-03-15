@@ -7,9 +7,7 @@
 //! All collections are bounded to prevent unbounded heap growth on a
 //! memory-constrained Android device (4–8 GB shared with the OS).
 
-use std::collections::VecDeque;
-use std::fmt;
-use std::time::Duration;
+use std::{collections::VecDeque, fmt, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
@@ -41,18 +39,17 @@ use tracing::{debug, error, info, warn};
 // measurement point. Do NOT unify them — different sensors have different
 // safe operating ranges:
 //
-// 1. **Kotlin `PowerManager` mapping** (AuraDaemonBridge.kt):
-//    Maps Android's `THERMAL_STATUS_*` enum to approximate °C values
-//    (30/37/42/48/55/65/75). These are coarse estimates for the UI layer.
+// 1. **Kotlin `PowerManager` mapping** (AuraDaemonBridge.kt): Maps Android's `THERMAL_STATUS_*`
+//    enum to approximate °C values (30/37/42/48/55/65/75). These are coarse estimates for the UI
+//    layer.
 //
-// 2. **Rust sysfs junction temps** (this file, heartbeat loop):
-//    Reads raw thermal zone values from `/sys/class/thermal/`. Junction
-//    temps run hotter than skin: Normal <45, Warm 45–54, Hot 55–64,
+// 2. **Rust sysfs junction temps** (this file, heartbeat loop): Reads raw thermal zone values from
+//    `/sys/class/thermal/`. Junction temps run hotter than skin: Normal <45, Warm 45–54, Hot 55–64,
 //    Critical 65–74, Shutdown ≥75, Emergency >85°C.
 //
-// 3. **Rust skin temps** (thermal.rs, ISO 13732-1 model):
-//    Physics-based skin temperature model with lower thresholds: Cool <37,
-//    Warm 37–40, Hot 40–43, Critical >43°C. Used for user comfort decisions.
+// 3. **Rust skin temps** (thermal.rs, ISO 13732-1 model): Physics-based skin temperature model with
+//    lower thresholds: Cool <37, Warm 37–40, Hot 40–43, Critical >43°C. Used for user comfort
+//    decisions.
 
 /// Default health check interval in milliseconds (30 seconds).
 ///
@@ -198,8 +195,7 @@ impl<T> BoundedVec<T> {
     /// Retain only elements matching the predicate.
     pub fn retain<F>(&mut self, f: F)
     where
-        F: FnMut(&T) -> bool,
-    {
+        F: FnMut(&T) -> bool, {
         self.inner.retain(f);
     }
 }
@@ -221,8 +217,10 @@ impl<T> BoundedVec<T> {
 /// | Critical | THERMAL_STATUS_CRITICAL       | Immediate throttling needed   |
 /// | Shutdown | THERMAL_STATUS_SHUTDOWN       | Emergency — device may halt   |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ThermalState {
     /// No thermal concern — device is cool.
+    #[default]
     Normal,
     /// Device is warm — noticeable but not concerning.
     Warm,
@@ -263,11 +261,6 @@ impl fmt::Display for ThermalState {
     }
 }
 
-impl Default for ThermalState {
-    fn default() -> Self {
-        ThermalState::Normal
-    }
-}
 
 // ─── HealthStatus ───────────────────────────────────────────────────────────
 
@@ -276,8 +269,10 @@ impl Default for ThermalState {
 /// Derived from the combination of all health signals — error rate, thermal
 /// state, neocortex liveness, resource pressure, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum HealthStatus {
     /// All systems nominal.
+    #[default]
     Healthy,
     /// Something is off but the daemon can still function.
     /// The `String` describes the degradation reason.
@@ -317,11 +312,6 @@ impl fmt::Display for HealthStatus {
     }
 }
 
-impl Default for HealthStatus {
-    fn default() -> Self {
-        HealthStatus::Healthy
-    }
-}
 
 // ─── HealthReport ───────────────────────────────────────────────────────────
 
@@ -505,8 +495,7 @@ impl HealthMonitor {
     pub fn new(start_time_ms: u64, session_number: u64) -> Self {
         info!(
             session = session_number,
-            "health monitor initialized at {}ms",
-            start_time_ms
+            "health monitor initialized at {}ms", start_time_ms
         );
 
         Self {
@@ -610,13 +599,13 @@ impl HealthMonitor {
                     consecutive = self.consecutive_healthy,
                     "health check: healthy"
                 );
-            }
+            },
             HealthStatus::Degraded(reason) => {
                 warn!(reason = reason.as_str(), "health check: degraded");
-            }
+            },
             HealthStatus::Critical(reason) => {
                 error!(reason = reason.as_str(), "health check: CRITICAL");
-            }
+            },
         }
 
         report
@@ -697,13 +686,19 @@ impl HealthMonitor {
                     consecutive = self.consecutive_healthy,
                     "health check (with ping): healthy"
                 );
-            }
+            },
             HealthStatus::Degraded(reason) => {
-                warn!(reason = reason.as_str(), "health check (with ping): degraded");
-            }
+                warn!(
+                    reason = reason.as_str(),
+                    "health check (with ping): degraded"
+                );
+            },
             HealthStatus::Critical(reason) => {
-                error!(reason = reason.as_str(), "health check (with ping): CRITICAL");
-            }
+                error!(
+                    reason = reason.as_str(),
+                    "health check (with ping): CRITICAL"
+                );
+            },
         }
 
         report
@@ -822,9 +817,7 @@ impl HealthMonitor {
         if !memory_accessible {
             return HealthStatus::Critical("shared memory inaccessible".to_string());
         }
-        if !neocortex_alive
-            && self.neocortex_restart_attempts >= MAX_NEOCORTEX_RESTART_ATTEMPTS
-        {
+        if !neocortex_alive && self.neocortex_restart_attempts >= MAX_NEOCORTEX_RESTART_ATTEMPTS {
             return HealthStatus::Critical(format!(
                 "neocortex dead after {} restart attempts",
                 self.neocortex_restart_attempts
@@ -964,7 +957,12 @@ impl HealthMonitor {
                     65..=74 => ThermalState::Critical,
                     _ => ThermalState::Shutdown,
                 };
-                debug!(path = ZONE_PATH, celsius, ?state, "thermal state read from sysfs");
+                debug!(
+                    path = ZONE_PATH,
+                    celsius,
+                    ?state,
+                    "thermal state read from sysfs"
+                );
                 return state;
             }
         }
@@ -987,10 +985,7 @@ impl HealthMonitor {
                 if let Some(rest) = line.strip_prefix("VmRSS:") {
                     let trimmed = rest.trim();
                     // Strip the trailing " kB" unit if present.
-                    let number_str = trimmed
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("0");
+                    let number_str = trimmed.split_whitespace().next().unwrap_or("0");
                     if let Ok(kb) = number_str.parse::<u64>() {
                         let bytes = kb * 1024;
                         debug!(kb, bytes, "RSS read from /proc/self/status");
@@ -1040,8 +1035,8 @@ impl HealthMonitor {
     /// **Phase 3 migration:** Convert remaining sync `check()` callers to use
     /// `check_with_ping()`, then either:
     /// - Remove `ping_neocortex()` entirely, or
-    /// - Wrap the body in `tokio::task::spawn_blocking()` for any sync callers
-    ///   that genuinely cannot be made async.
+    /// - Wrap the body in `tokio::task::spawn_blocking()` for any sync callers that genuinely
+    ///   cannot be made async.
     fn ping_neocortex(&self) -> bool {
         use aura_types::ipc::{DaemonToNeocortex, NeocortexToDaemon};
 
@@ -1053,7 +1048,7 @@ impl HealthMonitor {
             Err(_) => {
                 warn!("ping_neocortex: no Tokio runtime — assuming neocortex alive");
                 return true;
-            }
+            },
         };
 
         // block_on drives the async IPC call to completion from this sync
@@ -1061,41 +1056,41 @@ impl HealthMonitor {
         // from check(), which is itself invoked from a sync cron handler
         // running outside the async executor.
         handle.block_on(async {
-                let mut client = match crate::ipc::NeocortexClient::connect().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        debug!(error = %e, "ping_neocortex: connect failed — treating as dead");
-                        return false;
-                    }
-                };
+            let mut client = match crate::ipc::NeocortexClient::connect().await {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!(error = %e, "ping_neocortex: connect failed — treating as dead");
+                    return false;
+                },
+            };
 
-                let result = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    client.request(&DaemonToNeocortex::Ping),
-                )
-                .await;
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.request(&DaemonToNeocortex::Ping),
+            )
+            .await;
 
-                match result {
-                    Ok(Ok(NeocortexToDaemon::Pong { .. })) => {
-                        debug!("ping_neocortex: Pong received — neocortex alive");
-                        true
-                    }
-                    Ok(Ok(unexpected)) => {
-                        warn!(
-                            resp = ?std::mem::discriminant(&unexpected),
-                            "ping_neocortex: unexpected response — treating as dead"
-                        );
-                        false
-                    }
-                    Ok(Err(e)) => {
-                        warn!(error = %e, "ping_neocortex: request error — treating as dead");
-                        false
-                    }
-                    Err(_elapsed) => {
-                        warn!("ping_neocortex: 5-second timeout — treating as dead");
-                        false
-                    }
-                }
+            match result {
+                Ok(Ok(NeocortexToDaemon::Pong { .. })) => {
+                    debug!("ping_neocortex: Pong received — neocortex alive");
+                    true
+                },
+                Ok(Ok(unexpected)) => {
+                    warn!(
+                        resp = ?std::mem::discriminant(&unexpected),
+                        "ping_neocortex: unexpected response — treating as dead"
+                    );
+                    false
+                },
+                Ok(Err(e)) => {
+                    warn!(error = %e, "ping_neocortex: request error — treating as dead");
+                    false
+                },
+                Err(_elapsed) => {
+                    warn!("ping_neocortex: 5-second timeout — treating as dead");
+                    false
+                },
+            }
         })
     }
 
@@ -1279,7 +1274,7 @@ pub async fn run_heartbeat_loop(
             Some(t) if t >= 65.0 => 3, // Critical
             Some(t) if t >= 55.0 => 2, // Hot
             Some(t) if t >= 45.0 => 1, // Warm
-            _ => 0,                     // Normal
+            _ => 0,                    // Normal
         };
         let snapshot = HealthSnapshot {
             timestamp_ms: now_ms,
@@ -1308,22 +1303,18 @@ pub async fn run_heartbeat_loop(
             {
                 break;
             }
-        } else if battery_pct < BATTERY_LOW_PCT {
-            if tx
+        } else if battery_pct < BATTERY_LOW_PCT
+            && tx
                 .send(DaemonEvent::BatteryLow { pct: battery_pct })
                 .await
                 .is_err()
             {
                 break;
             }
-        }
 
         // ── Memory pressure ─────────────────────────────────────────────────
         if memory_mb >= MEMORY_CRITICAL_MB {
-            error!(
-                memory_mb,
-                "Critical memory pressure, activating safe mode"
-            );
+            error!(memory_mb, "Critical memory pressure, activating safe mode");
             if tx
                 .send(DaemonEvent::MemoryPressure {
                     critical: true,
@@ -1335,8 +1326,8 @@ pub async fn run_heartbeat_loop(
             {
                 break;
             }
-        } else if memory_mb >= MEMORY_WARN_MB {
-            if tx
+        } else if memory_mb >= MEMORY_WARN_MB
+            && tx
                 .send(DaemonEvent::MemoryPressure {
                     critical: false,
                     current_bytes: memory_bytes,
@@ -1347,7 +1338,6 @@ pub async fn run_heartbeat_loop(
             {
                 break;
             }
-        }
 
         // ── Thermal critical ────────────────────────────────────────────────
         if let Some(temp) = thermal_celsius {
@@ -1376,7 +1366,7 @@ pub async fn run_heartbeat_loop(
                         Ok(Ok(NeocortexToDaemon::Pong { .. })) => true,
                         _ => false,
                     }
-                }
+                },
                 Err(_) => false,
             }
         };
@@ -1878,11 +1868,11 @@ mod tests {
     fn test_status_thermal_shutdown_is_critical() {
         let monitor = HealthMonitor::new(0, 1);
         let status = monitor.compute_overall_status(
-            true,  // neocortex alive
-            true,  // memory accessible
-            1.0,   // full battery
+            true, // neocortex alive
+            true, // memory accessible
+            1.0,  // full battery
             &ThermalState::Shutdown,
-            0.0,   // no errors
+            0.0, // no errors
         );
         assert!(status.is_critical());
         assert!(status.to_string().contains("thermal shutdown"));
@@ -1944,26 +1934,14 @@ mod tests {
     #[test]
     fn test_status_all_good_is_healthy() {
         let monitor = HealthMonitor::new(0, 1);
-        let status = monitor.compute_overall_status(
-            true,
-            true,
-            0.80,
-            &ThermalState::Normal,
-            0.0,
-        );
+        let status = monitor.compute_overall_status(true, true, 0.80, &ThermalState::Normal, 0.0);
         assert!(status.is_healthy());
     }
 
     #[test]
     fn test_status_warm_thermal_is_healthy() {
         let monitor = HealthMonitor::new(0, 1);
-        let status = monitor.compute_overall_status(
-            true,
-            true,
-            0.80,
-            &ThermalState::Warm,
-            0.0,
-        );
+        let status = monitor.compute_overall_status(true, true, 0.80, &ThermalState::Warm, 0.0);
         // Warm is noticeable but not degraded.
         assert!(status.is_healthy());
     }
@@ -1987,9 +1965,9 @@ mod tests {
         let status = monitor.compute_overall_status(
             false, // neocortex dead
             true,
-            0.05,  // low battery
+            0.05, // low battery
             &ThermalState::Hot,
-            0.35,  // high errors
+            0.35, // high errors
         );
         // All three should appear in the degraded message.
         if let HealthStatus::Degraded(reason) = &status {

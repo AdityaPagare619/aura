@@ -74,29 +74,23 @@ const TECHNICAL_PATTERNS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum VoiceModePreference {
     Always,
+    #[default]
     Smart,
     Never,
 }
 
-impl Default for VoiceModePreference {
-    fn default() -> Self {
-        Self::Smart
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CommunicationMode {
     Voice,
+    #[default]
     Text,
 }
 
-impl Default for CommunicationMode {
-    fn default() -> Self {
-        Self::Text
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct CommunicationContext {
@@ -168,7 +162,7 @@ impl VoiceHandler {
             VoiceModePreference::Smart => {
                 let is_short = response_text.split_whitespace().count() < SHORT_RESPONSE_THRESHOLD;
                 is_short && context.last_response_was_voice
-            }
+            },
             VoiceModePreference::Never => false,
         }
     }

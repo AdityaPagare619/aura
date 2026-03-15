@@ -47,7 +47,6 @@ pub struct PersonalityPromptInjector;
 
 impl PersonalityPromptInjector {
     /// Generate a complete personality directive for the LLM.
-    ///
     // IRON LAW: LLM classifies intent and generates behavioral style.
     // Rust does not inject directive strings into LLM prompts. Phase N wire-point.
     // Use `serialize_identity_block()` to pass raw OCEAN/VAD numbers instead.
@@ -64,7 +63,6 @@ impl PersonalityPromptInjector {
 
     /// Generate a compact personality context (single paragraph) for
     /// token-constrained situations.
-    ///
     // IRON LAW: LLM classifies intent. Rust does not. Phase N wire-point.
     #[instrument(skip_all)]
     pub fn generate_compact_context(
@@ -194,7 +192,6 @@ impl PersonalityPromptInjector {
     }
 
     /// Generate the anti-sycophancy honesty directive for prompt injection.
-    ///
     // IRON LAW: LLM classifies intent. Rust does not. Phase N wire-point.
     // Anti-sycophancy signal should be passed as a structured fact (e.g.
     // `{"sycophancy_verdict": "nudge"}`) in the identity block, not as
@@ -205,7 +202,6 @@ impl PersonalityPromptInjector {
     }
 
     /// Generate the strong anti-sycophancy directive for regeneration.
-    ///
     // IRON LAW: LLM classifies intent. Rust does not. Phase N wire-point.
     // Anti-sycophancy signal should be passed as a structured fact (e.g.
     // `{"sycophancy_verdict": "block"}`) in the identity block, not as
@@ -222,8 +218,9 @@ impl PersonalityPromptInjector {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::identity::{DispositionState, EmotionLabel, MoodVAD};
+
+    use super::*;
 
     fn default_disposition() -> DispositionState {
         DispositionState::default()

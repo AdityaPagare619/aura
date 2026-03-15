@@ -3,14 +3,15 @@
 //! Uses bincode 2 with serde compat layer. Atomic writes via
 //! write-to-tmp + rename pattern.  Checkpoint size is capped at 64 KB.
 
-use std::io::Write;
-use std::path::Path;
+use std::{io::Write, path::Path};
 
-use aura_types::goals::Goal;
 #[cfg(test)]
 use aura_types::goals::{GoalPriority, GoalSource, GoalStatus};
-use aura_types::identity::{DispositionState, OceanTraits, RelationshipStage};
-use aura_types::power::PowerBudget;
+use aura_types::{
+    goals::Goal,
+    identity::{DispositionState, OceanTraits, RelationshipStage},
+    power::PowerBudget,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::memory::ConsolidationWeights;
@@ -133,11 +134,10 @@ fn bincode_config() -> impl bincode::config::Config {
 
 /// Encode a checkpoint to bytes via bincode 2 serde compat layer.
 pub fn encode_checkpoint(cp: &DaemonCheckpoint) -> Result<Vec<u8>, CheckpointError> {
-    let bytes = bincode::serde::encode_to_vec(cp, bincode_config())
-        .map_err(|e| {
-            tracing::error!(error = %e, "checkpoint encode failed");
-            CheckpointError::EncodeFailed(e.to_string())
-        })?;
+    let bytes = bincode::serde::encode_to_vec(cp, bincode_config()).map_err(|e| {
+        tracing::error!(error = %e, "checkpoint encode failed");
+        CheckpointError::EncodeFailed(e.to_string())
+    })?;
 
     if bytes.len() > MAX_CHECKPOINT_BYTES {
         tracing::error!(
@@ -161,11 +161,10 @@ pub fn encode_checkpoint(cp: &DaemonCheckpoint) -> Result<Vec<u8>, CheckpointErr
 /// version is too old to be handled, falls back to defaults.
 pub fn decode_checkpoint(bytes: &[u8]) -> Result<DaemonCheckpoint, CheckpointError> {
     let (mut cp, _len): (DaemonCheckpoint, usize) =
-        bincode::serde::decode_from_slice(bytes, bincode_config())
-            .map_err(|e| {
-                tracing::error!(error = %e, "checkpoint decode failed");
-                CheckpointError::DecodeFailed(e.to_string())
-            })?;
+        bincode::serde::decode_from_slice(bytes, bincode_config()).map_err(|e| {
+            tracing::error!(error = %e, "checkpoint decode failed");
+            CheckpointError::DecodeFailed(e.to_string())
+        })?;
 
     if cp.version == CHECKPOINT_VERSION {
         return Ok(cp);
@@ -213,20 +212,20 @@ fn migrate_checkpoint(mut cp: DaemonCheckpoint) -> Result<DaemonCheckpoint, Chec
                 cp.last_memory_insight_ms = 0;
                 cp.version = 2;
                 tracing::info!("migrated checkpoint v1→v2");
-            }
+            },
             // v2→v3: consolidation_weights added (serde default handles it).
             2 => {
                 cp.consolidation_weights = ConsolidationWeights::default();
                 cp.version = 3;
                 tracing::info!("migrated checkpoint v2→v3: consolidation_weights initialized");
-            }
+            },
             unsupported => {
                 tracing::warn!(
                     version = unsupported,
                     "no migration path from this version — resetting to defaults"
                 );
                 return Ok(DaemonCheckpoint::default());
-            }
+            },
         }
     }
     Ok(cp)
@@ -290,7 +289,7 @@ pub fn load_checkpoint(path: &Path) -> Result<DaemonCheckpoint, CheckpointError>
                 "checkpoint restored"
             );
             Ok(cp)
-        }
+        },
         Err(e) => {
             tracing::warn!(
                 error = %e,
@@ -298,7 +297,7 @@ pub fn load_checkpoint(path: &Path) -> Result<DaemonCheckpoint, CheckpointError>
                 "corrupt checkpoint — falling back to defaults"
             );
             Ok(DaemonCheckpoint::default())
-        }
+        },
     }
 }
 
@@ -406,10 +405,7 @@ mod tests {
             });
         }
         let result = encode_checkpoint(&cp);
-        assert!(
-            result.is_err(),
-            "should reject checkpoint exceeding 64KB"
-        );
+        assert!(result.is_err(), "should reject checkpoint exceeding 64KB");
     }
 
     #[test]

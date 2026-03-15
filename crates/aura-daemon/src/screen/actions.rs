@@ -2,14 +2,19 @@
 //!
 //! All screen interaction goes through the `ScreenProvider` trait. This enables:
 //! - `AndroidScreenProvider`: real device via AccessibilityService JNI
-//! - `MockScreenProvider`: fully functional test double that loads fixture screen trees
-//!   and simulates transitions by advancing through a `Vec<ScreenTree>`.
+//! - `MockScreenProvider`: fully functional test double that loads fixture screen trees and
+//!   simulates transitions by advancing through a `Vec<ScreenTree>`.
 
-use aura_types::actions::{ActionResult, ActionType};
-use aura_types::errors::ScreenError;
-use aura_types::screen::ScreenTree;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Instant,
+};
+
+use aura_types::{
+    actions::{ActionResult, ActionType},
+    errors::ScreenError,
+    screen::ScreenTree,
+};
 
 /// Maximum number of actions retained in the `MockScreenProvider` action log.
 /// Prevents unbounded memory growth during long-running test scenarios.
@@ -336,7 +341,7 @@ fn execute_action_jni(action: &ActionType) -> Result<ActionResult, ScreenError> 
                 error!("JNI tap failed: {e}");
                 ScreenError::ActionNotSupported(format!("{action:?}"))
             })?
-        }
+        },
         ActionType::Swipe {
             from_x,
             from_y,
@@ -359,7 +364,7 @@ fn execute_action_jni(action: &ActionType) -> Result<ActionResult, ScreenError> 
                 error!("JNI type failed: {e}");
                 ScreenError::ActionNotSupported(format!("{action:?}"))
             })?
-        }
+        },
         ActionType::Back => crate::platform::jni_bridge::jni_press_back().map_err(|e| {
             error!("JNI back failed: {e}");
             ScreenError::ActionNotSupported(format!("{action:?}"))
@@ -376,7 +381,7 @@ fn execute_action_jni(action: &ActionType) -> Result<ActionResult, ScreenError> 
             // For actions not yet mapped to dedicated JNI calls, fall back to
             // the JSON-serialised generic path.
             execute_action_generic_jni(action)?
-        }
+        },
     };
 
     let duration_ms = start.elapsed().as_millis() as u32;
@@ -443,8 +448,9 @@ fn is_alive_jni() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::screen::{Bounds, ScreenNode};
+
+    use super::*;
 
     fn make_test_tree(package: &str, text: &str) -> ScreenTree {
         ScreenTree {

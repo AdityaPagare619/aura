@@ -25,10 +25,13 @@
 //! All result vectors are truncated to compile-time constants to prevent
 //! unbounded memory growth on resource-constrained Android devices.
 
+use std::{
+    collections::HashSet,
+    fmt,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::fmt;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, trace, warn};
 
 use crate::platform::jni_bridge;
@@ -192,7 +195,6 @@ pub struct NotificationInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SystemCommand {
     // ── Device state (direct API ≈ 1 ms each) ────────────────────────────
-
     /// Query `BatteryManager` for current level, charging state, and health.
     BatteryStatus,
 
@@ -209,7 +211,6 @@ pub enum SystemCommand {
     ThermalState,
 
     // ── Content providers (direct query ≈ 10-50 ms each) ─────────────────
-
     /// Search contacts via `ContentResolver` + `ContactsContract`.
     ContactSearch(String),
 
@@ -228,7 +229,6 @@ pub enum SystemCommand {
     NotificationList,
 
     // ── System actions (direct API ≈ 5-20 ms each) ───────────────────────
-
     /// Set an alarm via `AlarmManager` / intent.
     SetAlarm {
         /// Hour in 24-hour format (0-23).
@@ -269,12 +269,16 @@ impl fmt::Display for SystemCommand {
             Self::ContactSearch(q) => write!(f, "ContactSearch({q})"),
             Self::CalendarEvents { start_ms, end_ms } => {
                 write!(f, "CalendarEvents({start_ms}..{end_ms})")
-            }
+            },
             Self::RecentPhotos(n) => write!(f, "RecentPhotos({n})"),
             Self::NotificationList => write!(f, "NotificationList"),
-            Self::SetAlarm { hour, minute, label } => {
+            Self::SetAlarm {
+                hour,
+                minute,
+                label,
+            } => {
                 write!(f, "SetAlarm({hour:02}:{minute:02}, {label:?})")
-            }
+            },
             Self::SendSms { recipient, .. } => write!(f, "SendSms(to={recipient})"),
             Self::SetBrightness(v) => write!(f, "SetBrightness({v:.2})"),
             Self::ToggleWifi(on) => write!(f, "ToggleWifi({on})"),
@@ -523,8 +527,7 @@ impl SystemBridge {
     /// based on API level and granted permissions.
     #[must_use]
     pub fn new() -> Self {
-        let supported_commands: HashSet<CommandType> =
-            CommandType::ALL.iter().copied().collect();
+        let supported_commands: HashSet<CommandType> = CommandType::ALL.iter().copied().collect();
 
         info!(
             commands = supported_commands.len(),
@@ -545,17 +548,12 @@ impl SystemBridge {
     ///
     /// Returns [`SystemBridgeError::CommandNotSupported`] if the command type
     /// is not in the `supported_commands` set.
-    pub fn execute(
-        &mut self,
-        cmd: SystemCommand,
-    ) -> Result<SystemResult, SystemBridgeError> {
+    pub fn execute(&mut self, cmd: SystemCommand) -> Result<SystemResult, SystemBridgeError> {
         let cmd_type = CommandType::from(&cmd);
 
         if !self.supported_commands.contains(&cmd_type) {
             warn!(%cmd_type, "command not in supported set");
-            return Err(SystemBridgeError::CommandNotSupported(
-                cmd_type.to_string(),
-            ));
+            return Err(SystemBridgeError::CommandNotSupported(cmd_type.to_string()));
         }
 
         debug!(%cmd, "executing system command");
@@ -567,15 +565,11 @@ impl SystemBridge {
             SystemCommand::NetworkStatus => self.execute_network(),
             SystemCommand::MemoryPressure => self.execute_memory(),
             SystemCommand::ThermalState => self.execute_thermal(),
-            SystemCommand::ContactSearch(ref query) => {
-                self.execute_contact_search(query)
-            }
+            SystemCommand::ContactSearch(ref query) => self.execute_contact_search(query),
             SystemCommand::CalendarEvents { start_ms, end_ms } => {
                 self.execute_calendar(start_ms, end_ms)
-            }
-            SystemCommand::RecentPhotos(count) => {
-                self.execute_recent_photos(count)
-            }
+            },
+            SystemCommand::RecentPhotos(count) => self.execute_recent_photos(count),
             SystemCommand::NotificationList => self.execute_notifications(),
             SystemCommand::SetAlarm {
                 hour,
@@ -586,15 +580,9 @@ impl SystemBridge {
                 ref recipient,
                 ref body,
             } => self.execute_send_sms(recipient, body),
-            SystemCommand::SetBrightness(level) => {
-                self.execute_set_brightness(level)
-            }
-            SystemCommand::ToggleWifi(enable) => {
-                self.execute_toggle_wifi(enable)
-            }
-            SystemCommand::LaunchApp(ref package) => {
-                self.execute_launch_app(package)
-            }
+            SystemCommand::SetBrightness(level) => self.execute_set_brightness(level),
+            SystemCommand::ToggleWifi(enable) => self.execute_toggle_wifi(enable),
+            SystemCommand::LaunchApp(ref package) => self.execute_launch_app(package),
         };
 
         self.record_execution(start);
@@ -707,8 +695,20 @@ impl SystemBridge {
             return None;
         }
         // Require an explicit action word — "wifi status" must NOT match here.
-        let enable_words = ["turn on", "enable", "switch on", "start wifi", "turn wifi on"];
-        let disable_words = ["turn off", "disable", "switch off", "stop wifi", "turn wifi off"];
+        let enable_words = [
+            "turn on",
+            "enable",
+            "switch on",
+            "start wifi",
+            "turn wifi on",
+        ];
+        let disable_words = [
+            "turn off",
+            "disable",
+            "switch off",
+            "stop wifi",
+            "turn wifi off",
+        ];
 
         if enable_words.iter().any(|w| lower.contains(w)) {
             return Some(SystemCommand::ToggleWifi(true));
@@ -753,9 +753,8 @@ impl SystemBridge {
     ///
     /// Falls back to 7:00 when no time is found.
     fn match_alarm(lower: &str) -> Option<SystemCommand> {
-        let has_alarm = lower.contains("alarm")
-            || lower.contains("wake me up")
-            || lower.contains("wake up");
+        let has_alarm =
+            lower.contains("alarm") || lower.contains("wake me up") || lower.contains("wake up");
         if !has_alarm {
             return None;
         }
@@ -836,8 +835,14 @@ impl SystemBridge {
     fn match_launch_app(lower: &str) -> Option<SystemCommand> {
         // Words that should NOT be treated as app names.
         const BLOCKLIST: &[&str] = &[
-            "the door", "a file", "the menu", "the app", "an app",
-            "settings menu", "this", "that",
+            "the door",
+            "a file",
+            "the menu",
+            "the app",
+            "an app",
+            "settings menu",
+            "this",
+            "that",
         ];
 
         let app_name = if let Some(rest) = lower.strip_prefix("open ") {
@@ -853,7 +858,10 @@ impl SystemBridge {
         }
 
         // Reject blocklisted phrases.
-        if BLOCKLIST.iter().any(|b| app_name.starts_with(b) || *b == app_name) {
+        if BLOCKLIST
+            .iter()
+            .any(|b| app_name.starts_with(b) || *b == app_name)
+        {
             return None;
         }
         // Reject if it starts with "the " (heuristic: "the door", "the settings", etc.)
@@ -869,7 +877,11 @@ impl SystemBridge {
     /// Match battery status queries: "check my battery", "battery level", "is it charging", etc.
     fn match_battery(lower: &str) -> Option<SystemCommand> {
         let keywords = [
-            "battery", "charging", "charge level", "juice", "power level",
+            "battery",
+            "charging",
+            "charge level",
+            "juice",
+            "power level",
         ];
         if keywords.iter().any(|k| lower.contains(k)) {
             return Some(SystemCommand::BatteryStatus);
@@ -879,21 +891,33 @@ impl SystemBridge {
 
     /// Match storage queries: "check storage", "disk space", "free space", "space left".
     fn match_storage(lower: &str) -> Option<SystemCommand> {
-        let keywords = ["storage", "disk space", "free space", "space left", "how much space"];
+        let keywords = [
+            "storage",
+            "disk space",
+            "free space",
+            "space left",
+            "how much space",
+        ];
         if keywords.iter().any(|k| lower.contains(k)) {
             return Some(SystemCommand::StorageInfo);
         }
         None
     }
 
-    /// Match network status queries: "network status", "internet connection", "wifi status", "connectivity".
+    /// Match network status queries: "network status", "internet connection", "wifi status",
+    /// "connectivity".
     ///
     /// Note: explicit wifi on/off toggles are already matched by `match_wifi_toggle` earlier
     /// in the chain, so reaching this helper with "wifi" in the string means it's a status query.
     fn match_network(lower: &str) -> Option<SystemCommand> {
         let keywords = [
-            "network status", "internet connection", "wifi status", "wi-fi status",
-            "connectivity", "connected to the internet", "check internet",
+            "network status",
+            "internet connection",
+            "wifi status",
+            "wi-fi status",
+            "connectivity",
+            "connected to the internet",
+            "check internet",
             "am i connected",
         ];
         if keywords.iter().any(|k| lower.contains(k)) {
@@ -911,11 +935,18 @@ impl SystemBridge {
         None
     }
 
-    /// Match thermal queries: "device temperature", "phone is hot", "overheating", "thermal status".
+    /// Match thermal queries: "device temperature", "phone is hot", "overheating", "thermal
+    /// status".
     fn match_thermal(lower: &str) -> Option<SystemCommand> {
         let keywords = [
-            "temperature", "overheat", "thermal", "too hot", "is hot", "is warm",
-            "phone hot", "device hot",
+            "temperature",
+            "overheat",
+            "thermal",
+            "too hot",
+            "is hot",
+            "is warm",
+            "phone hot",
+            "device hot",
         ];
         if keywords.iter().any(|k| lower.contains(k)) {
             return Some(SystemCommand::ThermalState);
@@ -950,7 +981,10 @@ impl SystemBridge {
     /// Match notification queries: "check notifications", "what did i miss", "pending alerts".
     fn match_notifications(lower: &str) -> Option<SystemCommand> {
         let keywords = [
-            "notification", "what did i miss", "pending alert", "new alert",
+            "notification",
+            "what did i miss",
+            "pending alert",
+            "new alert",
             "alerts",
         ];
         if keywords.iter().any(|k| lower.contains(k)) {
@@ -1001,7 +1035,7 @@ impl SystemBridge {
         trace!("execute_memory: returning placeholder");
         Ok(SystemResult::Memory {
             total_bytes: 8 * 1024 * 1024 * 1024,     // 8 GB placeholder
-            available_bytes: 4 * 1024 * 1024 * 1024,  // 4 GB placeholder
+            available_bytes: 4 * 1024 * 1024 * 1024, // 4 GB placeholder
             low_memory: false,
         })
     }
@@ -1014,10 +1048,7 @@ impl SystemBridge {
     }
 
     /// Search contacts via `ContentResolver` + `ContactsContract`.
-    fn execute_contact_search(
-        &self,
-        query: &str,
-    ) -> Result<SystemResult, SystemBridgeError> {
+    fn execute_contact_search(&self, query: &str) -> Result<SystemResult, SystemBridgeError> {
         if query.is_empty() {
             return Err(SystemBridgeError::InvalidArgument(
                 "contact search query must not be empty".into(),
@@ -1050,27 +1081,33 @@ impl SystemBridge {
             )));
         }
         trace!(start_ms, end_ms, "execute_calendar: calling JNI");
-        let bytes = jni_bridge::jni_query_calendar(start_ms as i64, end_ms as i64).map_err(|e| {
-            warn!(error = %e, "jni_query_calendar failed");
-            SystemBridgeError::ExecutionFailed(e.to_string())
-        })?;
+        let bytes =
+            jni_bridge::jni_query_calendar(start_ms as i64, end_ms as i64).map_err(|e| {
+                warn!(error = %e, "jni_query_calendar failed");
+                SystemBridgeError::ExecutionFailed(e.to_string())
+            })?;
         let mut events: Vec<CalendarEvent> = serde_json::from_slice(&bytes).map_err(|e| {
             warn!(error = %e, "calendar JSON parse failed");
             SystemBridgeError::ExecutionFailed(format!("calendar parse: {e}"))
         })?;
         events.truncate(MAX_CALENDAR_EVENTS);
-        debug!(start_ms, end_ms, count = events.len(), "calendar events found");
+        debug!(
+            start_ms,
+            end_ms,
+            count = events.len(),
+            "calendar events found"
+        );
         Ok(SystemResult::Calendar(events))
     }
 
     /// Query `MediaStore` for recent photos.
-    fn execute_recent_photos(
-        &self,
-        count: u32,
-    ) -> Result<SystemResult, SystemBridgeError> {
+    fn execute_recent_photos(&self, count: u32) -> Result<SystemResult, SystemBridgeError> {
         let bounded_count = (count as usize).min(MAX_PHOTOS);
         // TODO(jni): Query MediaStore.Images via ContentResolver
-        trace!(bounded_count, "execute_recent_photos: returning empty placeholder");
+        trace!(
+            bounded_count,
+            "execute_recent_photos: returning empty placeholder"
+        );
         let photos: Vec<PhotoInfo> = Vec::new();
         debug_assert!(photos.len() <= MAX_PHOTOS);
         Ok(SystemResult::Photos(photos))
@@ -1083,10 +1120,11 @@ impl SystemBridge {
             warn!(error = %e, "jni_query_notifications failed");
             SystemBridgeError::ExecutionFailed(e.to_string())
         })?;
-        let mut notifications: Vec<NotificationInfo> = serde_json::from_slice(&bytes).map_err(|e| {
-            warn!(error = %e, "notifications JSON parse failed");
-            SystemBridgeError::ExecutionFailed(format!("notifications parse: {e}"))
-        })?;
+        let mut notifications: Vec<NotificationInfo> =
+            serde_json::from_slice(&bytes).map_err(|e| {
+                warn!(error = %e, "notifications JSON parse failed");
+                SystemBridgeError::ExecutionFailed(format!("notifications parse: {e}"))
+            })?;
         notifications.truncate(MAX_NOTIFICATIONS);
         debug!(count = notifications.len(), "active notifications found");
         Ok(SystemResult::Notifications(notifications))
@@ -1125,10 +1163,13 @@ impl SystemBridge {
                     success: true,
                     message: format!("Alarm set for {hour:02}:{minute:02} — {label}"),
                 })
-            }
+            },
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: AccessibilityService fallback.
-                warn!(hour, minute, "Path A failed; attempting Path B (accessibility)");
+                warn!(
+                    hour,
+                    minute, "Path A failed; attempting Path B (accessibility)"
+                );
                 let dispatched = self.accessibility_set_alarm(hour, minute, label);
                 Ok(SystemResult::ActionCompleted {
                     command: format!("SetAlarm({hour:02}:{minute:02})"),
@@ -1139,15 +1180,19 @@ impl SystemBridge {
                         format!("Failed to set alarm for {hour:02}:{minute:02}")
                     },
                 })
-            }
+            },
             Ok(false) => {
-                warn!(hour, minute, "Path A returned false; thermal gate blocked Path B");
+                warn!(
+                    hour,
+                    minute, "Path A returned false; thermal gate blocked Path B"
+                );
                 Ok(SystemResult::ActionCompleted {
                     command: format!("SetAlarm({hour:02}:{minute:02})"),
                     success: false,
-                    message: "Alarm intent failed and device is too hot for accessibility fallback".into(),
+                    message: "Alarm intent failed and device is too hot for accessibility fallback"
+                        .into(),
                 })
-            }
+            },
             Err(e) => {
                 warn!(error = %e, "Path A error; thermal gate blocked Path B");
                 Ok(SystemResult::ActionCompleted {
@@ -1155,7 +1200,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("Alarm failed: {e}"),
                 })
-            }
+            },
         }
     }
 
@@ -1185,10 +1230,13 @@ impl SystemBridge {
                     success: true,
                     message: format!("SMS sent to {recipient}"),
                 })
-            }
+            },
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: open SMS app via accessibility and fill fields.
-                warn!(recipient, "Path A failed; attempting Path B (accessibility)");
+                warn!(
+                    recipient,
+                    "Path A failed; attempting Path B (accessibility)"
+                );
                 let dispatched = self.accessibility_send_sms(recipient, body);
                 Ok(SystemResult::ActionCompleted {
                     command: format!("SendSms(to={recipient})"),
@@ -1199,15 +1247,18 @@ impl SystemBridge {
                         format!("Failed to send SMS to {recipient}")
                     },
                 })
-            }
+            },
             Ok(false) => {
-                warn!(recipient, "SMS Path A returned false; thermal gate blocked Path B");
+                warn!(
+                    recipient,
+                    "SMS Path A returned false; thermal gate blocked Path B"
+                );
                 Ok(SystemResult::ActionCompleted {
                     command: format!("SendSms(to={recipient})"),
                     success: false,
                     message: "SMS failed and device is too hot for accessibility fallback".into(),
                 })
-            }
+            },
             Err(e) => {
                 warn!(error = %e, recipient, "SMS JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1215,15 +1266,12 @@ impl SystemBridge {
                     success: false,
                     message: format!("SMS failed: {e}"),
                 })
-            }
+            },
         }
     }
 
     /// Set screen brightness via `Settings.System`.
-    fn execute_set_brightness(
-        &self,
-        level: f32,
-    ) -> Result<SystemResult, SystemBridgeError> {
+    fn execute_set_brightness(&self, level: f32) -> Result<SystemResult, SystemBridgeError> {
         if !(0.0..=1.0).contains(&level) {
             return Err(SystemBridgeError::InvalidArgument(format!(
                 "brightness must be 0.0..=1.0, got {level}"
@@ -1244,7 +1292,7 @@ impl SystemBridge {
                     success: true,
                     message: format!("Brightness set to {:.0}%", level * 100.0),
                 })
-            }
+            },
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: navigate Settings UI via accessibility.
                 warn!(level, "brightness Path A failed; attempting Path B");
@@ -1258,15 +1306,19 @@ impl SystemBridge {
                         "Failed to set brightness".into()
                     },
                 })
-            }
+            },
             Ok(false) => {
-                warn!(level, "brightness Path A returned false; thermal gate blocked Path B");
+                warn!(
+                    level,
+                    "brightness Path A returned false; thermal gate blocked Path B"
+                );
                 Ok(SystemResult::ActionCompleted {
                     command: format!("SetBrightness({level:.2})"),
                     success: false,
-                    message: "Brightness failed and device is too hot for accessibility fallback".into(),
+                    message: "Brightness failed and device is too hot for accessibility fallback"
+                        .into(),
                 })
-            }
+            },
             Err(e) => {
                 warn!(error = %e, "brightness JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1274,15 +1326,12 @@ impl SystemBridge {
                     success: false,
                     message: format!("Brightness failed: {e}"),
                 })
-            }
+            },
         }
     }
 
     /// Toggle Wi-Fi via `WifiManager`.
-    fn execute_toggle_wifi(
-        &self,
-        enable: bool,
-    ) -> Result<SystemResult, SystemBridgeError> {
+    fn execute_toggle_wifi(&self, enable: bool) -> Result<SystemResult, SystemBridgeError> {
         let action = if enable { "enabled" } else { "disabled" };
 
         let thermal_ok = jni_bridge::jni_get_thermal_status()
@@ -1302,10 +1351,10 @@ impl SystemBridge {
                     message: if confirmed {
                         format!("Wi-Fi {action}")
                     } else {
-                        format!("Wi-Fi intent dispatched but state unconfirmed")
+                        "Wi-Fi intent dispatched but state unconfirmed".to_string()
                     },
                 })
-            }
+            },
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: navigate Settings app via accessibility.
                 warn!(enable, "Wi-Fi Path A failed; attempting Path B");
@@ -1316,18 +1365,22 @@ impl SystemBridge {
                     message: if dispatched {
                         format!("Wi-Fi {action} via accessibility")
                     } else {
-                        format!("Failed to toggle Wi-Fi")
+                        "Failed to toggle Wi-Fi".to_string()
                     },
                 })
-            }
+            },
             Ok(false) => {
-                warn!(enable, "Wi-Fi Path A returned false; thermal gate blocked Path B");
+                warn!(
+                    enable,
+                    "Wi-Fi Path A returned false; thermal gate blocked Path B"
+                );
                 Ok(SystemResult::ActionCompleted {
                     command: format!("ToggleWifi({enable})"),
                     success: false,
-                    message: "Wi-Fi toggle failed and device is too hot for accessibility fallback".into(),
+                    message: "Wi-Fi toggle failed and device is too hot for accessibility fallback"
+                        .into(),
                 })
-            }
+            },
             Err(e) => {
                 warn!(error = %e, "Wi-Fi JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1335,15 +1388,12 @@ impl SystemBridge {
                     success: false,
                     message: format!("Wi-Fi toggle failed: {e}"),
                 })
-            }
+            },
         }
     }
 
     /// Launch an app by package name.
-    fn execute_launch_app(
-        &self,
-        package: &str,
-    ) -> Result<SystemResult, SystemBridgeError> {
+    fn execute_launch_app(&self, package: &str) -> Result<SystemResult, SystemBridgeError> {
         if package.is_empty() {
             return Err(SystemBridgeError::InvalidArgument(
                 "package name must not be empty".into(),
@@ -1370,7 +1420,7 @@ impl SystemBridge {
                         format!("Launch intent sent to {package} but not confirmed foreground")
                     },
                 })
-            }
+            },
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: open via accessibility (long-press recents, find icon, tap).
                 warn!(package, "Path A failed; attempting Path B (accessibility)");
@@ -1384,15 +1434,20 @@ impl SystemBridge {
                         format!("Failed to launch {package}")
                     },
                 })
-            }
+            },
             Ok(false) => {
-                warn!(package, "launch Path A returned false; thermal gate blocked Path B");
+                warn!(
+                    package,
+                    "launch Path A returned false; thermal gate blocked Path B"
+                );
                 Ok(SystemResult::ActionCompleted {
                     command: format!("LaunchApp({package})"),
                     success: false,
-                    message: "Launch intent failed and device is too hot for accessibility fallback".into(),
+                    message:
+                        "Launch intent failed and device is too hot for accessibility fallback"
+                            .into(),
                 })
-            }
+            },
             Err(e) => {
                 warn!(error = %e, package, "launch JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1400,7 +1455,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("Launch failed: {e}"),
                 })
-            }
+            },
         }
     }
 
@@ -1418,16 +1473,19 @@ impl SystemBridge {
                 Ok(pkg) if pkg == expected_pkg => {
                     debug!(attempt, expected_pkg, "foreground package confirmed");
                     return true;
-                }
+                },
                 Ok(pkg) => {
                     trace!(attempt, expected_pkg, actual = %pkg, "foreground package mismatch");
-                }
+                },
                 Err(e) => {
                     trace!(attempt, error = %e, "foreground package query failed");
-                }
+                },
             }
         }
-        warn!(expected_pkg, "could not confirm foreground package after 3 polls");
+        warn!(
+            expected_pkg,
+            "could not confirm foreground package after 3 polls"
+        );
         false
     }
 
@@ -1444,10 +1502,10 @@ impl SystemBridge {
                         return true;
                     }
                     trace!(attempt, enable, net_type, "Wi-Fi state not yet changed");
-                }
+                },
                 Err(e) => {
                     trace!(attempt, error = %e, "network type query failed");
-                }
+                },
             }
         }
         warn!(enable, "could not confirm Wi-Fi state after 3 polls");
@@ -1462,11 +1520,15 @@ impl SystemBridge {
 
     /// Path B fallback: open the Clock app via accessibility and set alarm.
     fn accessibility_set_alarm(&self, hour: u8, minute: u8, label: &str) -> bool {
-        trace!(hour, minute, label, "accessibility_set_alarm: dispatching Path B");
+        trace!(
+            hour,
+            minute,
+            label,
+            "accessibility_set_alarm: dispatching Path B"
+        );
         // Press home first to ensure a known state, then launch Clock.
         let _ = jni_bridge::jni_press_home();
-        let ok = jni_bridge::jni_launch_app("com.google.android.deskclock")
-            .unwrap_or(false)
+        let ok = jni_bridge::jni_launch_app("com.google.android.deskclock").unwrap_or(false)
             || jni_bridge::jni_launch_app("com.android.deskclock").unwrap_or(false);
         if ok {
             debug!(hour, minute, "Clock app launched for accessibility alarm");
@@ -1479,8 +1541,7 @@ impl SystemBridge {
     /// Path B fallback: open the default SMS app via accessibility.
     fn accessibility_send_sms(&self, recipient: &str, _body: &str) -> bool {
         trace!(recipient, "accessibility_send_sms: dispatching Path B");
-        let ok = jni_bridge::jni_launch_app("com.google.android.apps.messaging")
-            .unwrap_or(false)
+        let ok = jni_bridge::jni_launch_app("com.google.android.apps.messaging").unwrap_or(false)
             || jni_bridge::jni_launch_app("com.android.mms").unwrap_or(false);
         if ok {
             debug!(recipient, "SMS app launched for accessibility send");
@@ -1543,8 +1604,8 @@ impl SystemBridge {
         if self.execution_count == 1 {
             self.average_latency_ms = elapsed;
         } else {
-            self.average_latency_ms = self.average_latency_ms * (1.0 - LATENCY_EMA_ALPHA)
-                + elapsed * LATENCY_EMA_ALPHA;
+            self.average_latency_ms =
+                self.average_latency_ms * (1.0 - LATENCY_EMA_ALPHA) + elapsed * LATENCY_EMA_ALPHA;
         }
 
         trace!(
@@ -1604,7 +1665,11 @@ impl SystemBridge {
                     let after_colon = rest[1..].trim_start();
                     let mut j = 0usize;
                     while j < after_colon.len()
-                        && after_colon.as_bytes().get(j).map(|b| b.is_ascii_digit()).unwrap_or(false)
+                        && after_colon
+                            .as_bytes()
+                            .get(j)
+                            .map(|b| b.is_ascii_digit())
+                            .unwrap_or(false)
                     {
                         j += 1;
                     }
@@ -1642,9 +1707,17 @@ impl SystemBridge {
     fn apply_am_pm(hour: u8, suffix: &str) -> u8 {
         let s = suffix.trim();
         if s.starts_with("pm") {
-            if hour == 12 { 12 } else { hour + 12 }
+            if hour == 12 {
+                12
+            } else {
+                hour + 12
+            }
         } else if s.starts_with("am") {
-            if hour == 12 { 0 } else { hour }
+            if hour == 12 {
+                0
+            } else {
+                hour
+            }
         } else {
             // No am/pm — treat as-is (24-hour already parsed).
             hour
@@ -1699,8 +1772,8 @@ impl SystemBridge {
 
     /// Split an SMS intent string of the form `"<recipient> saying <body>"`.
     ///
-    /// - If the string contains ` saying `, the part before it is the recipient
-    ///   and the part after is the message body.
+    /// - If the string contains ` saying `, the part before it is the recipient and the part after
+    ///   is the message body.
     /// - Otherwise the whole string is treated as the recipient with an empty body.
     ///
     /// Returns `(recipient, body)`.
@@ -1797,7 +1870,7 @@ mod tests {
             SystemResult::Battery { level, health, .. } => {
                 assert_eq!(level, 1.0);
                 assert_eq!(health, BatteryHealth::Good);
-            }
+            },
             other => panic!("expected Battery, got {other:?}"),
         }
         assert_eq!(bridge.execution_count, 1);
@@ -1808,10 +1881,13 @@ mod tests {
         let mut bridge = SystemBridge::new();
         let result = bridge.execute(SystemCommand::StorageInfo).unwrap();
         match result {
-            SystemResult::Storage { total_bytes, free_bytes } => {
+            SystemResult::Storage {
+                total_bytes,
+                free_bytes,
+            } => {
                 assert!(total_bytes > 0);
                 assert!(free_bytes <= total_bytes);
-            }
+            },
             other => panic!("expected Storage, got {other:?}"),
         }
     }
@@ -1841,10 +1917,7 @@ mod tests {
     fn test_execute_contact_search_empty_query() {
         let mut bridge = SystemBridge::new();
         let result = bridge.execute(SystemCommand::ContactSearch(String::new()));
-        assert!(matches!(
-            result,
-            Err(SystemBridgeError::InvalidArgument(_))
-        ));
+        assert!(matches!(result, Err(SystemBridgeError::InvalidArgument(_))));
     }
 
     #[test]
@@ -1854,10 +1927,7 @@ mod tests {
             start_ms: 1000,
             end_ms: 500,
         });
-        assert!(matches!(
-            result,
-            Err(SystemBridgeError::InvalidArgument(_))
-        ));
+        assert!(matches!(result, Err(SystemBridgeError::InvalidArgument(_))));
     }
 
     #[test]
@@ -1868,10 +1938,7 @@ mod tests {
             minute: 0,
             label: "test".into(),
         });
-        assert!(matches!(
-            result,
-            Err(SystemBridgeError::InvalidArgument(_))
-        ));
+        assert!(matches!(result, Err(SystemBridgeError::InvalidArgument(_))));
     }
 
     #[test]
@@ -1882,10 +1949,7 @@ mod tests {
             minute: 61,
             label: "test".into(),
         });
-        assert!(matches!(
-            result,
-            Err(SystemBridgeError::InvalidArgument(_))
-        ));
+        assert!(matches!(result, Err(SystemBridgeError::InvalidArgument(_))));
     }
 
     #[test]
@@ -1895,37 +1959,29 @@ mod tests {
             recipient: String::new(),
             body: "hello".into(),
         });
-        assert!(matches!(
-            result,
-            Err(SystemBridgeError::InvalidArgument(_))
-        ));
+        assert!(matches!(result, Err(SystemBridgeError::InvalidArgument(_))));
     }
 
     #[test]
     fn test_execute_set_brightness_out_of_range() {
         let mut bridge = SystemBridge::new();
-        assert!(bridge
-            .execute(SystemCommand::SetBrightness(-0.1))
-            .is_err());
-        assert!(bridge
-            .execute(SystemCommand::SetBrightness(1.5))
-            .is_err());
+        assert!(bridge.execute(SystemCommand::SetBrightness(-0.1)).is_err());
+        assert!(bridge.execute(SystemCommand::SetBrightness(1.5)).is_err());
     }
 
     #[test]
     fn test_execute_launch_app_empty() {
         let mut bridge = SystemBridge::new();
         let result = bridge.execute(SystemCommand::LaunchApp(String::new()));
-        assert!(matches!(
-            result,
-            Err(SystemBridgeError::InvalidArgument(_))
-        ));
+        assert!(matches!(result, Err(SystemBridgeError::InvalidArgument(_))));
     }
 
     #[test]
     fn test_execute_unsupported_command() {
         let mut bridge = SystemBridge::new();
-        bridge.supported_commands.remove(&CommandType::BatteryStatus);
+        bridge
+            .supported_commands
+            .remove(&CommandType::BatteryStatus);
         let result = bridge.execute(SystemCommand::BatteryStatus);
         assert!(matches!(
             result,
@@ -2169,19 +2225,31 @@ mod tests {
         let cmd = SystemBridge::can_handle_intent("set alarm for 7:30 am");
         assert!(matches!(
             cmd,
-            Some(SystemCommand::SetAlarm { hour: 7, minute: 30, .. })
+            Some(SystemCommand::SetAlarm {
+                hour: 7,
+                minute: 30,
+                ..
+            })
         ));
 
         let cmd = SystemBridge::can_handle_intent("wake me up at 6am");
         assert!(matches!(
             cmd,
-            Some(SystemCommand::SetAlarm { hour: 6, minute: 0, .. })
+            Some(SystemCommand::SetAlarm {
+                hour: 6,
+                minute: 0,
+                ..
+            })
         ));
 
         let cmd = SystemBridge::can_handle_intent("alarm at 14:00");
         assert!(matches!(
             cmd,
-            Some(SystemCommand::SetAlarm { hour: 14, minute: 0, .. })
+            Some(SystemCommand::SetAlarm {
+                hour: 14,
+                minute: 0,
+                ..
+            })
         ));
     }
 
@@ -2379,8 +2447,7 @@ mod tests {
             label: "Wake up".into(),
         };
         let json = serde_json::to_string(&cmd).expect("serialize");
-        let decoded: SystemCommand =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: SystemCommand = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, cmd);
     }
 
@@ -2392,8 +2459,7 @@ mod tests {
             health: BatteryHealth::Good,
         };
         let json = serde_json::to_string(&result).expect("serialize");
-        let decoded: SystemResult =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: SystemResult = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, result);
     }
 
@@ -2401,8 +2467,7 @@ mod tests {
     fn test_system_bridge_error_serde_roundtrip() {
         let err = SystemBridgeError::PermissionDenied("READ_CONTACTS".into());
         let json = serde_json::to_string(&err).expect("serialize");
-        let decoded: SystemBridgeError =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: SystemBridgeError = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, err);
     }
 

@@ -313,8 +313,14 @@ impl EntityExtractor {
             ("hrs", "h"),
         ];
 
-        let words: Vec<&str> = lower.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
-        let input_words: Vec<&str> = input.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
+        let words: Vec<&str> = lower
+            .split_whitespace()
+            .take(MAX_PIPELINE_ENTITIES)
+            .collect();
+        let input_words: Vec<&str> = input
+            .split_whitespace()
+            .take(MAX_PIPELINE_ENTITIES)
+            .collect();
         for i in 0..words.len().saturating_sub(1) {
             if let Some(num) = parse_number_word(words[i]) {
                 for (unit, suffix) in &units {
@@ -340,7 +346,10 @@ impl EntityExtractor {
 
     fn extract_numbers(&self, _input: &str, lower: &str, out: &mut Vec<Entity>) {
         // Extract number words not already captured by duration/time.
-        let words: Vec<&str> = lower.split_whitespace().take(MAX_PIPELINE_ENTITIES).collect();
+        let words: Vec<&str> = lower
+            .split_whitespace()
+            .take(MAX_PIPELINE_ENTITIES)
+            .collect();
         for (i, word) in words.iter().enumerate() {
             if let Some(num) = parse_number_word(word) {
                 let start = byte_offset_of_word(lower, &words, i);
@@ -433,7 +442,6 @@ impl EntityExtractor {
         // understand who the user means rather than passing the raw input to the
         // model. Wire point: re-enable only if contacts are needed as typed
         // structured parameters for tool dispatch (not intent classification).
-        return;
     }
 
     // -- App fuzzy matching --------------------------------------------------
@@ -447,7 +455,6 @@ impl EntityExtractor {
         // App name fuzzy matching (NLU in Rust) is deliberately stubbed. App
         // resolution is deferred to the LLM. Wire point: re-enable only if app
         // names are required as typed structural parameters for tool dispatch.
-        return;
     }
 }
 
@@ -515,11 +522,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     }
 
     // Early exit if length difference alone exceeds threshold.
-    let len_diff = if a_len > b_len {
-        a_len - b_len
-    } else {
-        b_len - a_len
-    };
+    let len_diff = a_len.abs_diff(b_len);
     if len_diff > 3 {
         return len_diff;
     }
@@ -713,7 +716,10 @@ mod tests {
             .iter()
             .filter(|e| e.entity_type == EntityType::Contact)
             .collect();
-        assert!(contacts.is_empty(), "contact extraction is stubbed — LLM handles this");
+        assert!(
+            contacts.is_empty(),
+            "contact extraction is stubbed — LLM handles this"
+        );
     }
 
     #[test]
@@ -726,7 +732,10 @@ mod tests {
             .iter()
             .filter(|e| e.entity_type == EntityType::App)
             .collect();
-        assert!(apps.is_empty(), "app extraction is stubbed — LLM handles this");
+        assert!(
+            apps.is_empty(),
+            "app extraction is stubbed — LLM handles this"
+        );
     }
 
     #[test]

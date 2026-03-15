@@ -25,9 +25,11 @@
 //! system has 3 tiers. When the type is extended, add a new tier between
 //! Brainstem and Standard (or above Full) and update the cascade tables.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use aura_llama_sys::{GgufMeta, LlamaContext, LlamaContextParams, LlamaModel, LlamaModelParams};
 use aura_types::ipc::{ModelParams, ModelTier};
@@ -69,8 +71,8 @@ impl PowerState {
     /// Derive power state from battery percentage and charging flag.
     ///
     /// # Arguments
-    /// - `battery_pct` — battery level in the range `0.0` (empty) to `1.0` (full).
-    ///   Values from Android's `BatteryManager.EXTRA_LEVEL / EXTRA_SCALE`.
+    /// - `battery_pct` — battery level in the range `0.0` (empty) to `1.0` (full). Values from
+    ///   Android's `BatteryManager.EXTRA_LEVEL / EXTRA_SCALE`.
     /// - `is_charging` — true if plugged in (any charging source).
     ///
     /// # Thresholds
@@ -262,7 +264,7 @@ impl ModelScanner {
             Err(e) => {
                 debug!(dir = %model_dir.display(), error = %e, "model dir not readable, using fallback filenames");
                 return Self::default();
-            }
+            },
         };
 
         for entry in read_dir.flatten() {
@@ -281,10 +283,10 @@ impl ModelScanner {
                         "scanned GGUF model"
                     );
                     entries.push((path, meta));
-                }
+                },
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "skipping non-parseable GGUF file");
-                }
+                },
             }
         }
 
@@ -295,7 +297,7 @@ impl ModelScanner {
         match entries.len() {
             0 => {
                 debug!("no GGUF files found in model dir");
-            }
+            },
             1 => {
                 // Only one model — map it to all tiers
                 let (path, meta) = entries.remove(0);
@@ -303,26 +305,31 @@ impl ModelScanner {
                 models.insert(ModelTier::Brainstem1_5B, (path.clone(), meta.clone()));
                 models.insert(ModelTier::Standard4B, (path.clone(), meta.clone()));
                 models.insert(ModelTier::Full8B, (path, meta));
-            }
+            },
             2 => {
                 // Two models: small → Brainstem, large → Full + Standard
                 let (small_path, small_meta) = entries.remove(0);
                 let (large_path, large_meta) = entries.remove(0);
                 models.insert(ModelTier::Brainstem1_5B, (small_path, small_meta));
-                models.insert(ModelTier::Standard4B, (large_path.clone(), large_meta.clone()));
+                models.insert(
+                    ModelTier::Standard4B,
+                    (large_path.clone(), large_meta.clone()),
+                );
                 models.insert(ModelTier::Full8B, (large_path, large_meta));
-            }
+            },
             _ => {
                 // 3+ models: pick smallest, middle, largest
                 let (small_path, small_meta) = entries.remove(0);
-                let (large_path, large_meta) = entries.pop().expect("entries has 3+ items in this match arm");
+                let (large_path, large_meta) = entries
+                    .pop()
+                    .expect("entries has 3+ items in this match arm");
                 // Middle: prefer the one whose RAM estimate is closest to the average
                 let mid_idx = entries.len() / 2;
                 let (mid_path, mid_meta) = entries.remove(mid_idx);
                 models.insert(ModelTier::Brainstem1_5B, (small_path, small_meta));
                 models.insert(ModelTier::Standard4B, (mid_path, mid_meta));
                 models.insert(ModelTier::Full8B, (large_path, large_meta));
-            }
+            },
         }
 
         Self { models }
@@ -388,8 +395,8 @@ impl ModelScanner {
 /// - `available_mb`     — available RAM in MB (hard ceiling from `/proc/meminfo`)
 /// - `power`            — current device power state (battery ceiling)
 /// - `prev_confidence`  — confidence from a prior attempt on this request, if any
-/// - `scanner`          — optional model scanner for real per-GGUF RAM estimates;
-///                        pass `None` to fall back to hardcoded estimates
+/// - `scanner`          — optional model scanner for real per-GGUF RAM estimates; pass `None` to
+///   fall back to hardcoded estimates
 ///
 /// # Algorithm
 /// 1. Start at Brainstem1_5B (cheapest tier, always attempted first)
@@ -814,9 +821,7 @@ impl ModelManager {
 
         // Try to load, downgrading if post-load headroom check fails.
         loop {
-            let file_path = self
-                .scanner
-                .path_for_tier(tier, &self.model_dir);
+            let file_path = self.scanner.path_for_tier(tier, &self.model_dir);
 
             // Override: if model_path is a specific file (not a dir), use it.
             let file_path = {
@@ -1091,11 +1096,11 @@ fn load_model_ffi(
                 "model loaded via backend"
             );
             (model_ptr, ctx_ptr)
-        }
+        },
         Err(e) => {
             error!(error = %e, path = %path_str, "model load failed");
             (std::ptr::null_mut(), std::ptr::null_mut())
-        }
+        },
     }
 }
 
@@ -1113,8 +1118,9 @@ fn free_model_ffi(model_ptr: *mut LlamaModel, ctx_ptr: *mut LlamaContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use aura_types::ipc::InferenceMode;
+
+    use super::*;
 
     // ── Tier helpers ────────────────────────────────────────────────────
 
@@ -1206,8 +1212,7 @@ mod tests {
 
     #[test]
     fn intelligent_selection_basic_v2() {
-        let decision =
-            select_tier_intelligent(8192, PowerState::Normal, None, None);
+        let decision = select_tier_intelligent(8192, PowerState::Normal, None, None);
         // Standard complexity starts at Brainstem, but should be acceptable
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
         assert!(!decision.is_escalation);
@@ -1215,23 +1220,20 @@ mod tests {
 
     #[test]
     fn intelligent_selection_deep_task() {
-        let decision =
-            select_tier_intelligent(8192, PowerState::Normal, None, None);
+        let decision = select_tier_intelligent(8192, PowerState::Normal, None, None);
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
     }
 
     #[test]
     fn intelligent_selection_power_clamp_v2() {
-        let decision =
-            select_tier_intelligent(8192, PowerState::Critical, None, None);
+        let decision = select_tier_intelligent(8192, PowerState::Critical, None, None);
         // Critical power clamps to Brainstem
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
     }
 
     #[test]
     fn intelligent_selection_ram_clamp_v2() {
-        let decision =
-            select_tier_intelligent(1500, PowerState::Normal, None, None);
+        let decision = select_tier_intelligent(1500, PowerState::Normal, None, None);
         // Only 1500 MB available — Brainstem only
         assert_eq!(decision.recommended_tier, ModelTier::Brainstem1_5B);
     }
@@ -1410,7 +1412,11 @@ mod tests {
     fn resolve_path_uses_model_dir_fallback() {
         let model_dir = PathBuf::from("/data/local/aura/models");
         let path = resolve_model_path(&model_dir, "some-name", ModelTier::Standard4B);
-        assert!(path.to_string_lossy().contains("qwen3.5-4b"));
+        assert!(
+            path.to_string_lossy().contains("qwen3-4b"),
+            "expected path to contain 'qwen3-4b', got: {}",
+            path.display()
+        );
     }
 
     #[test]

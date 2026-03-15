@@ -870,10 +870,7 @@ impl HealthMonitor {
 
         // Expected checks per hour at current interval.
         let interval = self.check_interval_ms();
-        let expected_checks = interval
-            .checked_div(1)
-            .and_then(|_| ONE_HOUR_MS.checked_div(interval))
-            .unwrap_or(1);
+        let expected_checks = ONE_HOUR_MS.checked_div(interval).unwrap_or(1);
 
         // Rate = errors / expected checks, clamped to [0.0, 1.0].
         let rate = recent_errors as f32 / expected_checks.max(1) as f32;

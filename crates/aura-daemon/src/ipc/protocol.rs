@@ -214,8 +214,25 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
         Ok(stream)
     }
 
-    // Non-Android Unix or Windows: TCP fallback
-    #[cfg(not(target_os = "android"))]
+    // Non-Android Unix: file-path Unix domain socket
+    #[cfg(all(unix, not(target_os = "android")))]
+    {
+        use tokio::net::UnixStream;
+
+        let path = format!("/tmp/aura_ipc_v4.sock");
+
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&path))
+            .await
+            .map_err(|_| IpcError::Timeout {
+                context: format!("connect to {path} timed out after {CONNECT_TIMEOUT:?}"),
+            })?
+            .map_err(IpcError::Io)?;
+
+        Ok(stream)
+    }
+
+    // Windows: TCP fallback
+    #[cfg(not(unix))]
     {
         let addr = format!("{TCP_FALLBACK_ADDR}:{TCP_FALLBACK_PORT}");
 

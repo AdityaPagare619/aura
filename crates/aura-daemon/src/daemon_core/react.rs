@@ -1103,10 +1103,10 @@ impl ReactEngine {
     /// Execute a task using Document-Guided Scripting (System 1) with real
     /// subsystems.
     ///
-    /// Passes the full [`ActionPlan`] to the [`Executor`] which drives the
-    /// 11-stage pipeline (capture → resolve → anti-bot → delay → execute →
-    /// verify → retry → cycle → invariants → ETG → result). The outcome
-    /// is mapped back to a single [`Iteration`] record and [`TaskOutcome`].
+    /// Passes each plan step to the [`Executor`] which drives the 11-stage
+    /// pipeline (capture → resolve → anti-bot → delay → execute → verify →
+    /// retry → cycle → invariants → ETG → result). The outcome is mapped
+    /// back to a single [`Iteration`] record and [`TaskOutcome`].
     #[instrument(skip(self), fields(session_id = session.session_id))]
     async fn execute_dgs(
         &mut self,
@@ -1130,43 +1130,63 @@ impl ReactEngine {
         );
 
         let start = Instant::now();
+        let mut budget = TokenBudgetManager::new(TokenBudgetConfig::default());
 
-        // --- Policy gate check (before any action reaches the Executor) ---
-        // Evaluate the plan's goal against the policy gate.  For DGS, the
-        // entire plan is delegated to the Executor in one call, so we gate
-        // on the goal description.  Individual step-level gating happens
-        // inside the Executor's own pipeline if needed.
-        {
-            let mut policy_ctx = PolicyContext {
-                gate: &mut self.policy_gate,
-                audit: &mut self.audit_log,
-            };
-            let action_str = format!("dgs:{}", plan.goal_description);
-            if let Some(denied_result) = policy_ctx.check_action(&action_str) {
-                let tool_call = ToolCall {
-                    tool_name: "dgs_plan".to_string(),
-                    parameters: BTreeMap::new(),
-                    reasoning: plan.goal_description.clone(),
+        for (step_idx, step) in plan.steps.iter().enumerate() {
+            if let Some(reason) = session.should_terminate() {
+                warn!(reason, step = step_idx, "session terminating");
+                return TaskOutcome::Failed {
+                    reason: reason.to_string(),
+                    iterations_used: session.iteration_count,
+                    total_ms: start.elapsed().as_millis() as u64,
+                    last_strategy: session.strategy,
                 };
-                let thought = format!(
-                    "DGS plan blocked by policy gate: {}",
-                    denied_result.error.as_deref().unwrap_or("unknown")
-                );
-                let (reflection, confidence) =
-                    compute_iteration_signals(&tool_call, &denied_result, session.strategy);
-                session.record_iteration(Iteration {
-                    thought,
-                    action: tool_call,
-                    observation: denied_result,
-                    reflection,
-                    confidence,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                });
-                // Don't abort the entire session — just skip this step.
-                // The loop will continue and may try the next plan step or
-                // terminate on consecutive failures.
-                continue;
             }
+
+            let tool_call = plan_step_to_tool_call(step);
+            let thought = format!(
+                "DGS step {}/{}: {} ({})",
+                step_idx + 1,
+                plan.steps.len(),
+                tool_call.tool_name,
+                tool_call.reasoning
+            );
+
+            debug!(step = step_idx, action = %tool_call.tool_name, "executing DGS step");
+
+            // --- Policy gate check (before any action reaches the Executor) ---
+            {
+                let mut policy_ctx = PolicyContext {
+                    gate: &mut self.policy_gate,
+                    audit: &mut self.audit_log,
+                };
+                let action_str = format!("dgs:{}", plan.goal_description);
+                if let Some(denied_result) = policy_ctx.check_action(&action_str) {
+                    let (reflection, confidence) =
+                        compute_iteration_signals(&tool_call, &denied_result, session.strategy);
+                    session.record_iteration(Iteration {
+                        thought,
+                        action: tool_call,
+                        observation: denied_result,
+                        reflection,
+                        confidence,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                    // Don't abort the entire session — just skip this step.
+                    // The loop will continue and may try the next plan step or
+                    // terminate on consecutive failures.
+                    continue;
+                }
+            }
+
+            // Build a single-step plan for the Executor.
+            let single_step_plan = ActionPlan {
+                goal_description: plan.goal_description.clone(),
+                steps: vec![step.clone()],
+                estimated_duration_ms: step.timeout_ms,
+                confidence: plan.confidence,
+                source: plan.source,
+            };
 
             // Capture before-hash for change detection.
             let before_hash = self.capture_screen_hash();
@@ -1327,6 +1347,37 @@ impl ReactEngine {
                 }
             }
         }
+
+        // All steps completed — return success with final confidence.
+        let final_confidence = session
+            .iterations
+            .last()
+            .map(|i| i.confidence)
+            .unwrap_or(0.0);
+
+        TaskOutcome::Success {
+            iterations_used: session.iteration_count,
+            total_ms: start.elapsed().as_millis() as u64,
+            final_confidence,
+        }
+    }
+
+    /// Execute a task using Semantic ReAct (System 2) with real subsystems.
+    ///
+    /// LLM-driven think→act→observe loop for novel or complex tasks.
+    /// Delegates to the standalone implementation when no engine-specific
+    /// subsystems are needed.
+    #[instrument(skip(self), fields(session_id = session.session_id))]
+    async fn execute_semantic_react(
+        &mut self,
+        session: &mut AgenticSession,
+        plan: Option<ActionPlan>,
+    ) -> TaskOutcome {
+        let mut policy_ctx = PolicyContext {
+            gate: &mut self.policy_gate,
+            audit: &mut self.audit_log,
+        };
+        execute_semantic_react_standalone(session, plan, Some(&mut policy_ctx)).await
     }
 }
 
@@ -2563,9 +2614,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fnv1a_hash_deterministic() {
-        // Same input must always produce the same hash — required for
-        // cycle detection and session ID stability.
+    fn test_fnv1a_hash_deterministic_extended() {
         let data = b"hello world";
         let h1 = fnv1a_hash(data);
         let h2 = fnv1a_hash(data);

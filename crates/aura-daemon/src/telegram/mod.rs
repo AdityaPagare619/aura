@@ -35,6 +35,7 @@ pub mod queue;
 pub mod reqwest_backend;
 pub mod security;
 pub mod voice_handler;
+#[cfg(feature = "voice")]
 pub mod voice_pipeline;
 
 use std::sync::{atomic::AtomicBool, Arc};
@@ -240,31 +241,40 @@ impl TelegramEngine {
                 // Rust (body) extracts audio → future STT feeds LLM (brain).
                 // For alpha: decode succeeds → log → still route description text.
                 // When STT is wired, transcript replaces description text.
-                let voice_processed = if let Some(ref voice_bytes) = update.voice_data {
-                    let bytes = voice_bytes.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        voice_pipeline::process_voice_input(&bytes)
-                    })
-                    .await
+                let voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data {
+                    #[cfg(feature = "voice")]
                     {
-                        Ok(Ok(result)) => {
-                            debug!(
-                                duration_secs = result.duration_secs,
-                                pcm_samples = result.pcm_16k.len(),
-                                "voice pipeline: decoded OGG/Opus successfully"
-                            );
-                            // TODO(stt-alpha): When STT is wired, transcribe pcm_16k
-                            // and use transcript as `text` instead of description.
-                            Some(result.duration_secs)
-                        },
-                        Ok(Err(e)) => {
-                            warn!(error = %e, "voice pipeline: decode failed — falling back to text");
-                            None
-                        },
-                        Err(e) => {
-                            warn!(error = %e, "voice pipeline: spawn_blocking panicked");
-                            None
-                        },
+                        let bytes = voice_bytes.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            voice_pipeline::process_voice_input(&bytes)
+                        })
+                        .await
+                        {
+                            Ok(Ok(result)) => {
+                                debug!(
+                                    duration_secs = result.duration_secs,
+                                    pcm_samples = result.pcm_16k.len(),
+                                    "voice pipeline: decoded OGG/Opus successfully"
+                                );
+                                // TODO(stt-alpha): When STT is wired, transcribe pcm_16k
+                                // and use transcript as `text` instead of description.
+                                Some(result.duration_secs)
+                            },
+                            Ok(Err(e)) => {
+                                warn!(error = %e, "voice pipeline: decode failed — falling back to text");
+                                None
+                            },
+                            Err(e) => {
+                                warn!(error = %e, "voice pipeline: spawn_blocking panicked");
+                                None
+                            },
+                        }
+                    }
+                    #[cfg(not(feature = "voice"))]
+                    {
+                        let _ = voice_bytes;
+                        warn!("voice data received but 'voice' feature not enabled — skipping");
+                        None
                     }
                 } else {
                     None
@@ -392,7 +402,8 @@ impl TelegramEngine {
                                         // If this was a voice message, try to respond
                                         // with voice too. Falls back to text if TTS
                                         // is unavailable (alpha: always falls back).
-                                        if voice_processed.is_some() {
+                                        #[cfg(feature = "voice")]
+                                        let voice_sent = if voice_processed.is_some() {
                                             let tts_text = text.clone();
                                             match voice_pipeline::synthesize_voice_response(
                                                 &tts_text,
@@ -405,32 +416,29 @@ impl TelegramEngine {
                                                         &MessageContent::Voice {
                                                             data: ogg_bytes,
                                                             duration_secs: duration,
-                                                            caption: Some(text),
+                                                            caption: Some(text.clone()),
                                                         },
                                                         0,
                                                         3600,
                                                         3,
                                                         None,
                                                     );
+                                                    true
                                                 },
                                                 Err(_) => {
                                                     // TTS unavailable (expected in alpha).
                                                     // Fall back to text response.
                                                     debug!("TTS unavailable — responding with text to voice message");
-                                                    let _ = queue.enqueue(
-                                                        chat_id,
-                                                        &MessageContent::Text {
-                                                            text,
-                                                            parse_mode: None,
-                                                        },
-                                                        0,
-                                                        3600,
-                                                        3,
-                                                        None,
-                                                    );
+                                                    false
                                                 },
                                             }
                                         } else {
+                                            false
+                                        };
+                                        #[cfg(not(feature = "voice"))]
+                                        let voice_sent = false;
+
+                                        if !voice_sent {
                                             let _ = queue.enqueue(
                                                 chat_id,
                                                 &MessageContent::Text {

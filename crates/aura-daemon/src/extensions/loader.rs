@@ -188,6 +188,9 @@ impl CapabilityLoader {
         let mut sandbox = ExtensionSandbox::new(manifest).map_err(LoaderError::SandboxError)?;
         sandbox.activate();
 
+        // Clone manifest fields before moving skill into the map.
+        let manifest_id = manifest.id.clone();
+
         info!(
             "Registered Skill: {} (v{}) [tier={:?}, perms={}]",
             manifest.name,
@@ -195,11 +198,11 @@ impl CapabilityLoader {
             manifest.execution_tier,
             manifest.permissions.len()
         );
-        guard.insert(manifest.id.clone(), skill);
+        guard.insert(manifest_id.clone(), skill);
         drop(guard);
 
         // Store sandbox.
-        self.store_sandbox(manifest.id.clone(), sandbox).await;
+        self.store_sandbox(manifest_id, sandbox).await;
 
         Ok(())
     }
@@ -234,11 +237,14 @@ impl CapabilityLoader {
         let mut sandbox = ExtensionSandbox::new(manifest).map_err(LoaderError::SandboxError)?;
         sandbox.activate();
 
+        // Clone manifest id before moving lens into the map.
+        let manifest_id = manifest.id.clone();
+
         info!("Registered Lens: {} (v{})", manifest.name, manifest.version);
         guard.insert(id.clone(), lens);
         drop(guard);
 
-        self.store_sandbox(manifest.id.clone(), sandbox).await;
+        self.store_sandbox(manifest_id, sandbox).await;
         Ok(())
     }
 

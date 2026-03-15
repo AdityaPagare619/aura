@@ -144,9 +144,12 @@ impl GgufMeta {
 
     /// Estimated RAM usage in MB at the detected quantization level.
     ///
-    /// Formula (conservative):
-    ///   weights ≈ (embedding² × 8 + embedding × ffn × 3) × layers × bits/8 × 1.1
-    ///   kv_cache ≈ 2 × layers × heads_kv × head_dim × context × sizeof(fp16)
+    /// Formula (conservative, GQA-aware):
+    ///   weights ≈ (2×emb² + 2×emb×kv_dim + emb×ffn×3) × layers × bits/8 × 1.1
+    ///   kv_cache ≈ 2 × layers × heads_kv × head_dim × practical_ctx × sizeof(fp16)
+    ///
+    /// Uses a practical mobile context (2048 tokens) for KV cache sizing rather
+    /// than the model's full context window to match real on-device usage.
     ///
     /// Falls back to rough per-architecture heuristics when dims are missing.
     pub fn ram_estimate_mb(&self) -> u32 {
@@ -162,17 +165,12 @@ impl GgufMeta {
             return self.ram_fallback_mb();
         }
 
-        // Weight memory: each layer has:
-        //   - 2 × emb² attention projections (q/k/v/o fused: 4 × emb²) — simplified to 8 × emb²
-        //   - 3 × emb × ffn FFN projections (gate, up, down)
-        let attn_params: u64 = 8 * emb * emb;
-        let ffn_params: u64 = 3 * emb * ffn;
-        let params_per_layer: u64 = attn_params + ffn_params;
-        let total_params: u64 = params_per_layer * layers + 2 * emb * emb; // + embedding table
-
-        let weight_bytes: u64 = total_params * bits as u64 / 8;
-
-        // KV cache: 2 (K+V) × layers × n_kv_heads × head_dim × context × 2 bytes (fp16)
+        // GQA-aware attention parameters:
+        //   Q projection: emb × emb
+        //   K projection: emb × (kv_heads × head_dim)
+        //   V projection: emb × (kv_heads × head_dim)
+        //   O projection: emb × emb
+        // Total: 2 × emb² + 2 × emb × kv_dim
         let head_count_kv = self.attention_head_count_kv.unwrap_or(8) as u64;
         let head_count_q = self.attention_head_count.unwrap_or(32) as u64;
         let head_dim = if head_count_q > 0 {
@@ -180,8 +178,19 @@ impl GgufMeta {
         } else {
             64
         };
-        let ctx = self.effective_context() as u64;
-        let kv_cache_bytes: u64 = 2 * layers * head_count_kv * head_dim * ctx * 2;
+        let kv_dim = head_count_kv * head_dim;
+        let attn_params: u64 = 2 * emb * emb + 2 * emb * kv_dim;
+        let ffn_params: u64 = 3 * emb * ffn;
+        let params_per_layer: u64 = attn_params + ffn_params;
+        let total_params: u64 = params_per_layer * layers + 2 * emb * emb; // + embedding table
+
+        let weight_bytes: u64 = (total_params as f64 * bits as f64 / 8.0) as u64;
+
+        // KV cache: 2 (K+V) × layers × n_kv_heads × head_dim × context × 2 bytes (fp16)
+        // Use a practical mobile context (2048) rather than the model's max context,
+        // since mobile devices won't allocate the full context window at once.
+        let practical_ctx: u64 = (self.effective_context() as u64).min(2048);
+        let kv_cache_bytes: u64 = 2 * layers * head_count_kv * head_dim * practical_ctx * 2;
 
         // 10% overhead for activations, page tables, runtime state
         let total_bytes = (weight_bytes as f64 * 1.1) as u64 + kv_cache_bytes;

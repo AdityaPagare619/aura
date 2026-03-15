@@ -280,6 +280,7 @@ pub struct SandboxStats {
 /// The sandbox never grants permissions not in the manifest.
 /// The sandbox never allows actions that PolicyGate denies.
 /// The sandbox never exceeds resource limits.
+#[derive(Debug)]
 pub struct ExtensionSandbox {
     /// The runtime context (permissions + limits).
     context: ExtensionContext,
@@ -422,8 +423,8 @@ impl ExtensionSandbox {
         }
 
         // PolicyGate integration: evaluate action against policy rules.
+        let action = self.policy_action_for(permission);
         if let Some(ref mut gate) = self.policy_gate {
-            let action = self.policy_action_for(permission);
             let decision = gate.evaluate(&action);
             if matches!(decision.effect, RuleEffect::Deny) {
                 self.stats.policy_violations += 1;

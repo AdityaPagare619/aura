@@ -599,7 +599,7 @@ impl BoundaryReasoner {
         let lower_action = action.to_ascii_lowercase();
 
         // --- Level 1: Absolute (NEVER overridden) ---
-        for rule in &self.absolute_rules {
+        for rule in self.absolute_rules {
             if matches_action_pattern(&lower_action, rule.pattern) {
                 tracing::warn!(
                     target: "BOUNDARY",
@@ -833,7 +833,7 @@ impl BoundaryReasoner {
         out.push_str("=== AURA Boundary Rules ===\n\n");
 
         out.push_str("--- Level 1: ABSOLUTE (never overridden) ---\n");
-        for rule in &self.absolute_rules {
+        for rule in self.absolute_rules {
             out.push_str(&format!(
                 "  [{}] {} (pattern: {})\n",
                 rule.id, rule.description, rule.pattern

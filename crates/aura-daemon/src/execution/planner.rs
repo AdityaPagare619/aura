@@ -773,7 +773,8 @@ impl EnhancedPlanner {
         // propagate the async boundary up to the caller.  See also: retry.rs
         // `classify_failure_via_llm()` which wraps with `block_in_place()` as
         // a safer interim pattern.
-        handle.block_on(async {
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
             let mut client = match crate::ipc::NeocortexClient::connect().await {
                 Ok(c) => c,
                 Err(e) => {
@@ -804,6 +805,7 @@ impl EnhancedPlanner {
                     0.5
                 },
             }
+        })
         })
     }
 
@@ -1642,7 +1644,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_score_plan_returns_neutral_with_runtime_no_ipc() {
         // With a Tokio runtime present but no Neocortex IPC server,
         // score_plan should still fall back to 0.5 (IPC connect fails).
@@ -1873,7 +1875,7 @@ mod tests {
         assert_eq!(ep.cache_size(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_score_plan_all_sources_return_neutral_without_ipc() {
         // Verifies all PlanSource variants produce the same neutral fallback
         // when IPC is unavailable, confirming the fallback is source-agnostic.

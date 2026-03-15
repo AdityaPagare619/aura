@@ -1412,7 +1412,11 @@ mod tests {
     fn resolve_path_uses_model_dir_fallback() {
         let model_dir = PathBuf::from("/data/local/aura/models");
         let path = resolve_model_path(&model_dir, "some-name", ModelTier::Standard4B);
-        assert!(path.to_string_lossy().contains("qwen3.5-4b"));
+        assert!(
+            path.to_string_lossy().contains("qwen3-4b"),
+            "expected path to contain 'qwen3-4b', got: {}",
+            path.display()
+        );
     }
 
     #[test]

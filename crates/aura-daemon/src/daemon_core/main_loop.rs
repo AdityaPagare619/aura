@@ -4421,7 +4421,8 @@ fn enrich_system2_message(
         let mode_str = match pkg.inference_mode {
             InferenceMode::Conversational => "conversational",
             InferenceMode::Planner => "planning",
-            InferenceMode::Composing => "composing",
+            InferenceMode::Composer => "composing",
+            InferenceMode::Strategist => "strategizing",
         };
         pkg.self_knowledge = Some(SelfKnowledge::for_mode(mode_str));
 

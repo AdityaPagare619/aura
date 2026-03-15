@@ -654,7 +654,7 @@ impl EpisodicMemory {
 
 fn store_episode_sync(
     conn: &Connection,
-    hnsw_state: &HnswState,
+    hnsw_state: &mut HnswState,
     content: &str,
     emotional_valence: f32,
     base_importance: f32,

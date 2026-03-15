@@ -77,7 +77,7 @@ pub fn decode_ogg_opus(ogg_bytes: &[u8]) -> Result<Vec<i16>, VoicePipelineError>
     let mut packet_reader = ogg::PacketReader::new(cursor);
 
     // Create Opus decoder: 48kHz, mono.
-    let decoder =
+    let mut decoder =
         audiopus::coder::Decoder::new(audiopus::SampleRate::Hz48000, audiopus::Channels::Mono)
             .map_err(|e| VoicePipelineError::OpusDecode(format!("init: {e}")))?;
 
@@ -94,12 +94,14 @@ pub fn decode_ogg_opus(ogg_bytes: &[u8]) -> Result<Vec<i16>, VoicePipelineError>
                     continue;
                 }
 
+                let opus_packet = audiopus::packet::Packet::try_from(packet.data.as_slice())
+                    .map_err(|e| VoicePipelineError::OpusDecode(format!("packet: {e}")))?;
+                let output_signals =
+                    audiopus::MutSignals::try_from(decode_buf.as_mut_slice())
+                        .map_err(|e| VoicePipelineError::OpusDecode(format!("signals: {e}")))?;
+
                 let decoded_samples = decoder
-                    .decode(
-                        Some(&packet.data),
-                        &mut decode_buf,
-                        false, // no FEC
-                    )
+                    .decode(Some(opus_packet), output_signals, false)
                     .map_err(|e| VoicePipelineError::OpusDecode(format!("frame: {e}")))?;
 
                 pcm_out.extend_from_slice(&decode_buf[..decoded_samples]);
@@ -197,7 +199,7 @@ pub fn encode_ogg_opus(pcm_48k: &[i16]) -> Result<Vec<u8>, VoicePipelineError> {
     let opus_head = build_opus_head();
     packet_writer
         .write_packet(
-            opus_head.into(),
+            opus_head,
             serial,
             ogg::writing::PacketWriteEndInfo::EndPage,
             0, // granule position
@@ -208,7 +210,7 @@ pub fn encode_ogg_opus(pcm_48k: &[i16]) -> Result<Vec<u8>, VoicePipelineError> {
     let opus_tags = build_opus_tags();
     packet_writer
         .write_packet(
-            opus_tags.into(),
+            opus_tags,
             serial,
             ogg::writing::PacketWriteEndInfo::EndPage,
             0,
@@ -238,7 +240,7 @@ pub fn encode_ogg_opus(pcm_48k: &[i16]) -> Result<Vec<u8>, VoicePipelineError> {
 
         packet_writer
             .write_packet(
-                encode_buf[..encoded_len].to_vec().into(),
+                encode_buf[..encoded_len].to_vec(),
                 serial,
                 end_info,
                 granule_pos,
@@ -260,7 +262,7 @@ pub fn encode_ogg_opus(pcm_48k: &[i16]) -> Result<Vec<u8>, VoicePipelineError> {
         granule_pos += OPUS_FRAME_SAMPLES as u64;
         packet_writer
             .write_packet(
-                encode_buf[..encoded_len].to_vec().into(),
+                encode_buf[..encoded_len].to_vec(),
                 serial,
                 ogg::writing::PacketWriteEndInfo::EndStream,
                 granule_pos,

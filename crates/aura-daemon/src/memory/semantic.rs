@@ -1104,7 +1104,7 @@ fn find_by_concept_sync(
 
     // Use HNSW to find candidates (request more than limit to allow filtering)
     let candidates = {
-        let state = hnsw
+        let mut state = hnsw
             .lock()
             .map_err(|_| MemError::QueryFailed("HNSW lock poisoned".into()))?;
 
@@ -1539,7 +1539,7 @@ mod tests {
         .unwrap();
 
         // HNSW search for programming-related content
-        let state = store.hnsw.lock().unwrap();
+        let mut state = store.hnsw.lock().unwrap();
         let query_emb = embed("programming code software");
         let results = state.search(&query_emb, 3, HNSW_EF_SEARCH).unwrap();
 

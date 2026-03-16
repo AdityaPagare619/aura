@@ -1,8 +1,8 @@
 //! IPC client module for the AURA daemon.
 //!
 //! Provides the daemon-side client for communicating with the Neocortex
-//! process over length-prefixed bincode frames. On Android, uses Unix domain
-//! sockets at an abstract address. On host/Windows, falls back to TCP on
+//! process over length-prefixed bincode frames.  On Android, uses an abstract
+//! Unix domain socket (`@aura_ipc_v4`).  On all other platforms, uses TCP on
 //! `127.0.0.1:19400`.
 //!
 //! # Submodules

@@ -6,10 +6,25 @@
 
 use std::{
     io::{self, Read, Write},
-    net::TcpStream,
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
+
+// ─── Platform-specific IPC stream type ──────────────────────────────────────
+//
+// On Android, the neocortex server accepts connections on an abstract Unix
+// domain socket (`@aura_ipc_v4`).  On all other platforms (Linux desktop,
+// macOS, Windows) it accepts TCP connections on `127.0.0.1:19400`.
+//
+// Both `std::net::TcpStream` and `std::os::unix::net::UnixStream` implement
+// `Read + Write + set_read_timeout + set_write_timeout + try_clone`, so the
+// rest of the handler code is identical regardless of transport.
+
+#[cfg(target_os = "android")]
+type IpcStreamInner = std::os::unix::net::UnixStream;
+
+#[cfg(not(target_os = "android"))]
+type IpcStreamInner = std::net::TcpStream;
 
 use aura_types::ipc::{
     ContextPackage, DaemonToNeocortex, FailureContext, InferenceMode, NeocortexToDaemon,
@@ -44,7 +59,7 @@ const LENGTH_PREFIX_SIZE: usize = 4;
 
 /// Manages the IPC connection to the daemon.
 pub struct IpcHandler {
-    stream: TcpStream,
+    stream: IpcStreamInner,
     model_manager: ModelManager,
     inference_engine: InferenceEngine,
     #[allow(dead_code)]
@@ -56,14 +71,14 @@ pub struct IpcHandler {
 }
 
 impl IpcHandler {
-    /// Create a new handler wrapping an accepted TCP stream.
+    /// Create a new handler wrapping an accepted connection stream.
     ///
     /// `startup_capabilities` is derived from GGUF metadata at startup and
     /// seeded into `InferenceEngine` so it is never blind to model geometry
     /// from the first millisecond. When `None`, the engine falls back to the
     /// mode's `max_tokens * 2` budget — acceptable only before any model loads.
     pub fn new(
-        stream: TcpStream,
+        stream: IpcStreamInner,
         model_manager: ModelManager,
         cancel_token: Arc<AtomicBool>,
         startup_capabilities: Option<ModelCapabilities>,

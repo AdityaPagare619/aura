@@ -17,12 +17,15 @@ use super::IpcError;
 
 // ─── Platform-specific stream type ──────────────────────────────────────────
 
-/// On Unix, re-export `tokio::net::UnixStream`.
-/// On non-Unix (Windows), fall back to `tokio::net::TcpStream`.
-#[cfg(unix)]
+/// On Android, the daemon↔neocortex link uses Unix domain sockets (abstract
+/// namespace) for lower latency and no TCP overhead.
+///
+/// On all other platforms (Linux desktop, macOS, Windows) the link uses TCP
+/// to `127.0.0.1:19400`, matching the neocortex server's `TcpListener`.
+#[cfg(target_os = "android")]
 pub type IpcStream = tokio::net::UnixStream;
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "android"))]
 pub type IpcStream = tokio::net::TcpStream;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -179,9 +182,8 @@ pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), Ipc
 
 /// Establish a platform-appropriate async stream to the Neocortex process.
 ///
-/// - **Unix (non-Android):** TCP to `127.0.0.1:19400` (matches server-side).
 /// - **Android:** Unix domain socket at abstract address `@aura_ipc_v4`.
-/// - **Windows:** TCP to `127.0.0.1:19400`.
+/// - **Non-Android (Linux, macOS, Windows):** TCP to `127.0.0.1:19400`.
 ///
 /// The connection attempt is bounded by [`CONNECT_TIMEOUT`].
 ///
@@ -214,25 +216,12 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
         Ok(stream)
     }
 
-    // Non-Android Unix: file-path Unix domain socket
-    #[cfg(all(unix, not(target_os = "android")))]
-    {
-        use tokio::net::UnixStream;
-
-        let path = "/tmp/aura_ipc_v4.sock".to_string();
-
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&path))
-            .await
-            .map_err(|_| IpcError::Timeout {
-                context: format!("connect to {path} timed out after {CONNECT_TIMEOUT:?}"),
-            })?
-            .map_err(IpcError::Io)?;
-
-        Ok(stream)
-    }
-
-    // Windows: TCP fallback
-    #[cfg(not(unix))]
+    // Non-Android: TCP to the standard IPC port.
+    //
+    // The neocortex server binds a `std::net::TcpListener` on this address.
+    // On Linux desktop, macOS, and Windows, TCP is used for simplicity and
+    // because the neocortex IpcHandler is built around `std::net::TcpStream`.
+    #[cfg(not(target_os = "android"))]
     {
         let addr = format!("{TCP_FALLBACK_ADDR}:{TCP_FALLBACK_PORT}");
 

@@ -72,8 +72,9 @@ impl std::fmt::Debug for NeocortexProcess {
 impl NeocortexProcess {
     /// Spawn the Neocortex process from the given binary path.
     ///
-    /// The child process is started with stdout/stderr inherited for
-    /// development logging.  On Android, uses the system-specific path.
+    /// The child process is started with `--socket` set to the platform-
+    /// appropriate IPC address (abstract Unix socket on Android, TCP loopback
+    /// on host).  stdout/stderr are piped for monitoring.
     ///
     /// # Errors
     ///
@@ -83,7 +84,19 @@ impl NeocortexProcess {
     pub async fn spawn(binary_path: &Path) -> Result<Self, IpcError> {
         info!(path = %binary_path.display(), "spawning neocortex process");
 
+        // Pass the platform-appropriate socket address so the neocortex server
+        // binds to the same endpoint the daemon's `connect_stream()` connects to.
+        //
+        // Android: abstract Unix socket @aura_ipc_v4
+        // Host:    TCP 127.0.0.1:19400
+        #[cfg(target_os = "android")]
+        let socket_arg = "@aura_ipc_v4";
+        #[cfg(not(target_os = "android"))]
+        let socket_arg = "127.0.0.1:19400";
+
         let child = Command::new(binary_path)
+            .arg("--socket")
+            .arg(socket_arg)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)

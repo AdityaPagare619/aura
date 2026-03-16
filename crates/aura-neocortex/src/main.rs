@@ -19,7 +19,6 @@ mod prompts;
 mod tool_format;
 
 use std::{
-    net::TcpListener,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -35,10 +34,25 @@ use tracing::{error, info, warn};
 
 // ─── CLI argument parsing (no clap dependency — keep it minimal) ────────────
 
+/// Platform-specific default socket address.
+///
+/// - **Android:** `@aura_ipc_v4` (abstract Unix domain socket).
+/// - **Non-Android:** `127.0.0.1:19400` (TCP, matching daemon's `TCP_FALLBACK_PORT`).
+fn default_socket_address() -> String {
+    #[cfg(target_os = "android")]
+    {
+        String::from("@aura_ipc_v4")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        String::from("127.0.0.1:19400")
+    }
+}
+
 struct Args {
     /// Socket address to bind.
     /// On Android: Unix abstract socket name (e.g., "@aura_ipc_v4").
-    /// On host: TCP address (e.g., "127.0.0.1:9876").
+    /// On host: TCP address (e.g., "127.0.0.1:19400").
     socket: String,
     /// Directory containing GGUF model files.
     model_dir: PathBuf,
@@ -51,7 +65,7 @@ impl Args {
     fn parse() -> Result<Self, String> {
         let args: Vec<String> = std::env::args().collect();
 
-        let mut socket = String::from("127.0.0.1:9876");
+        let mut socket = default_socket_address();
         let mut model_dir = PathBuf::from("models");
         let mut config_path: Option<PathBuf> = None;
 
@@ -100,8 +114,8 @@ USAGE:
 
 OPTIONS:
     -s, --socket <ADDR>       Socket address to bind
-                              Default: 127.0.0.1:9876 (TCP on host)
-                              Android: @aura_ipc_v4 (Unix abstract socket)
+                              Default: 127.0.0.1:19400 (TCP on host)
+                              Android: @aura_ipc_v4 (abstract Unix socket)
     -m, --model-dir <PATH>    Directory containing GGUF model files
                               Default: models
     -c, --config <PATH>       Path to aura.config.toml
@@ -218,7 +232,8 @@ fn main() {
     );
 
     // Bind and accept connections.
-    // On host: TCP.  On Android: would be Unix domain socket.
+    // On host: TCP on 127.0.0.1:19400.
+    // On Android: abstract Unix domain socket @aura_ipc_v4.
     if let Err(e) = run_server(
         &args.socket,
         effective_model_dir,
@@ -318,12 +333,6 @@ fn run_server(
     shutdown: Arc<AtomicBool>,
     startup_capabilities: Option<ModelCapabilities>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(address)?;
-    info!(address, "listening for daemon connections");
-
-    // Set non-blocking so we can check the shutdown flag periodically.
-    listener.set_nonblocking(true)?;
-
     // We need to share model_manager across reconnections.
     // Since we handle one connection at a time, we can move it in and out.
     let mut mgr = model_manager;
@@ -333,70 +342,124 @@ fn run_server(
     // Updated after each connection ends in case new models were dropped in.
     let mut current_caps = startup_capabilities;
 
+    // ── Platform-specific listener binding ──────────────────────────────────
+    //
+    // On Android: bind an abstract Unix domain socket so the daemon can reach
+    //   us without filesystem permissions or port conflicts.
+    // On host: bind a TCP socket on loopback for simplicity.
+
+    #[cfg(target_os = "android")]
+    let accept_connection = {
+        use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener};
+
+        // Abstract sockets don't need filesystem cleanup — the kernel manages
+        // their lifecycle.  Strip the leading '@' convention if present.
+        let abstract_name = address.strip_prefix('@').unwrap_or(address);
+        let addr = StdSocketAddr::from_abstract_name(abstract_name.as_bytes())?;
+        let listener = UnixListener::bind_addr(&addr)?;
+        listener.set_nonblocking(true)?;
+        info!(address, "listening on abstract Unix socket");
+
+        move |shutdown: &AtomicBool| -> Result<Option<std::os::unix::net::UnixStream>, std::io::Error> {
+            loop {
+                if shutdown.load(Ordering::SeqCst) {
+                    return Ok(None);
+                }
+                match listener.accept() {
+                    Ok((stream, _addr)) => {
+                        info!("daemon connected (Unix socket)");
+                        stream.set_nonblocking(false)?;
+                        return Ok(Some(stream));
+                    },
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        continue;
+                    },
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    };
+
+    #[cfg(not(target_os = "android"))]
+    let accept_connection = {
+        let listener = std::net::TcpListener::bind(address)?;
+        listener.set_nonblocking(true)?;
+        info!(address, "listening on TCP");
+
+        move |shutdown: &AtomicBool| -> Result<Option<std::net::TcpStream>, std::io::Error> {
+            loop {
+                if shutdown.load(Ordering::SeqCst) {
+                    return Ok(None);
+                }
+                match listener.accept() {
+                    Ok((stream, addr)) => {
+                        info!(peer = %addr, "daemon connected (TCP)");
+                        stream.set_nonblocking(false)?;
+                        return Ok(Some(stream));
+                    },
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // No pending connection — poll again after a short sleep.
+                        //
+                        // Tradeoff: 50ms gives ≤50ms latency on new connections
+                        // while keeping idle CPU wake-ups at 20/sec (negligible
+                        // even on mobile).
+                        //
+                        // NOTE: handler.run_loop() BLOCKS for the entire duration
+                        // of a daemon connection.  This poll loop only runs while
+                        // waiting for a NEW connection.
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        continue;
+                    },
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    };
+
+    // ── Accept loop ─────────────────────────────────────────────────────────
+
     loop {
         if shutdown.load(Ordering::SeqCst) {
             info!("shutdown flag set — stopping server");
             break;
         }
 
-        match listener.accept() {
-            Ok((stream, addr)) => {
-                info!(peer = %addr, "daemon connected");
-
-                // Switch stream to blocking mode for the handler.
-                stream.set_nonblocking(false)?;
-
-                let mut handler =
-                    IpcHandler::new(stream, mgr, cancel_token.clone(), current_caps.clone())?;
-
-                match handler.run_loop() {
-                    Ok(()) => info!("connection closed cleanly"),
-                    Err(e) => error!(error = %e, "connection error"),
-                }
-
-                // Recover model manager from handler for reuse.
-                // Since IpcHandler owns it, we need to reconstruct.
-                // Config and capabilities are cheap to re-derive from the same
-                // model_dir — no file re-parsing required.
-                let mut new_mgr = ModelManager::new(model_dir.clone());
-                new_mgr.scan();
-                mgr = new_mgr;
-
-                // Re-derive capabilities after reconnect so the next IpcHandler
-                // gets fresh GGUF geometry (a new model may have been dropped
-                // into the model directory while the previous connection was live).
-                let reconnect_caps = build_startup_capabilities(&mgr, &runtime_config);
-                info!(
-                    capabilities = %reconnect_caps.summary(),
-                    "model capabilities after reconnect"
-                );
-                current_caps = Some(reconnect_caps);
-            },
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No pending connection — poll again after a short sleep.
-                //
-                // Tradeoff: 50ms gives ≤50ms latency on new connections while
-                // keeping idle CPU wake-ups at 20/sec (negligible even on mobile).
-                //
-                // NOTE: handler.run_loop() above BLOCKS for the entire duration
-                // of a daemon connection (it uses blocking read_exact() with a
-                // 30-second read timeout for idle-unload checks).  This poll loop
-                // only runs while waiting for a NEW connection — not during active
-                // inference.  So the 50ms sleep only affects reconnection latency,
-                // which is acceptable for alpha.
-                //
-                // Future improvement: use `mio` or OS-level `poll()`/`select()`
-                // for zero-latency accept without busy-wait.  This would also
-                // allow multiplexing the shutdown flag check into the same poll
-                // set, eliminating the separate shutdown-listener thread.
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                continue;
+        let stream = match accept_connection(&shutdown) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                info!("shutdown during accept — stopping server");
+                break;
             },
             Err(e) => {
                 error!(error = %e, "accept failed");
                 return Err(e.into());
             },
+        };
+
+        let mut handler = IpcHandler::new(stream, mgr, cancel_token.clone(), current_caps.clone())?;
+
+        match handler.run_loop() {
+            Ok(()) => info!("connection closed cleanly"),
+            Err(e) => error!(error = %e, "connection error"),
         }
+
+        // Recover model manager from handler for reuse.
+        // Config and capabilities are cheap to re-derive from the same
+        // model_dir — no file re-parsing required.
+        let mut new_mgr = ModelManager::new(model_dir.clone());
+        new_mgr.scan();
+        mgr = new_mgr;
+
+        // Re-derive capabilities after reconnect so the next IpcHandler
+        // gets fresh GGUF geometry (a new model may have been dropped
+        // into the model directory while the previous connection was live).
+        let reconnect_caps = build_startup_capabilities(&mgr, &runtime_config);
+        info!(
+            capabilities = %reconnect_caps.summary(),
+            "model capabilities after reconnect"
+        );
+        current_caps = Some(reconnect_caps);
     }
 
     Ok(())
@@ -479,11 +542,16 @@ mod tests {
         // We can't easily test Args::parse() since it reads std::env::args(),
         // but we can verify the default values directly.
         let args = Args {
-            socket: "127.0.0.1:9876".into(),
+            socket: default_socket_address(),
             model_dir: PathBuf::from("models"),
             config_path: None,
         };
-        assert_eq!(args.socket, "127.0.0.1:9876");
+        // On non-Android hosts the default is TCP on 19400 (matching the
+        // daemon's TCP_FALLBACK_PORT).  On Android it would be @aura_ipc_v4.
+        #[cfg(not(target_os = "android"))]
+        assert_eq!(args.socket, "127.0.0.1:19400");
+        #[cfg(target_os = "android")]
+        assert_eq!(args.socket, "@aura_ipc_v4");
         assert_eq!(args.model_dir, PathBuf::from("models"));
         assert!(args.config_path.is_none());
     }

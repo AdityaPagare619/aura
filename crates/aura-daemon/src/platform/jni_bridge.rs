@@ -36,7 +36,7 @@ mod inner {
 
     use aura_types::errors::PlatformError;
     use jni::{
-        objects::{GlobalRef, JClass, JObject, JString, JValue},
+        objects::{JClass, JObject, JString, JValue},
         sys::{jboolean, jfloat, jint, jlong, JNI_VERSION_1_6},
         JNIEnv, JavaVM,
     };
@@ -44,9 +44,6 @@ mod inner {
 
     /// Cached `JavaVM` pointer — set once in `JNI_OnLoad`.
     static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
-
-    /// Cached global reference to the `AuraDaemonBridge` class.
-    static BRIDGE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
     /// JNI class path for the Kotlin-side bridge.
     ///
@@ -127,17 +124,6 @@ mod inner {
         // repeatedly on the same thread.
         vm.attach_current_thread_permanently()
             .map_err(|e| PlatformError::JniFailed(format!("attach thread: {e}")))
-    }
-
-    /// Get a reference to the cached AuraDaemonBridge class.
-    fn bridge_class<'a>(env: &mut JNIEnv<'a>) -> Result<&'static GlobalRef, PlatformError> {
-        BRIDGE_CLASS.get_or_try_init(|| {
-            let cls = env
-                .find_class(BRIDGE_CLASS_PATH)
-                .map_err(|e| PlatformError::JniFailed(format!("find {BRIDGE_CLASS_PATH}: {e}")))?;
-            env.new_global_ref(cls)
-                .map_err(|e| PlatformError::JniFailed(format!("global ref: {e}")))
-        })
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -248,10 +234,9 @@ mod inner {
     /// Invoke `AuraDaemonBridge.performTap(x, y)`.
     pub fn jni_perform_tap(x: i32, y: i32) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "performTap",
                 "(II)Z",
                 &[JValue::Int(x), JValue::Int(y)],
@@ -270,10 +255,9 @@ mod inner {
         duration_ms: i32,
     ) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "performSwipe",
                 "(IIIII)Z",
                 &[
@@ -292,13 +276,12 @@ mod inner {
     /// Invoke `AuraDaemonBridge.typeText(text)`.
     pub fn jni_type_text(text: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_text = env
             .new_string(text)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "typeText",
                 "(Ljava/lang/String;)Z",
                 &[(&j_text).into()],
@@ -311,9 +294,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getScreenTree()` → JSON bytes.
     pub fn jni_get_screen_tree() -> Result<Vec<u8>, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getScreenTree", "()[B", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getScreenTree", "()[B", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getScreenTree: {e}")))?;
         check_jni_exception(&mut env, "getScreenTree")?;
 
@@ -357,10 +339,9 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getForegroundPackage()`.
     pub fn jni_get_foreground_package() -> Result<String, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "getForegroundPackage",
                 "()Ljava/lang/String;",
                 &[],
@@ -387,9 +368,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getBatteryLevel()` → 0-100.
     pub fn jni_get_battery_level() -> Result<u8, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getBatteryLevel", "()I", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getBatteryLevel", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getBatteryLevel: {e}")))?;
         check_jni_exception(&mut env, "getBatteryLevel")?;
         let level = result.i().unwrap_or(50) as u8;
@@ -411,9 +391,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getThermalStatus()` → temperature in °C.
     pub fn jni_get_thermal_status() -> Result<f32, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getThermalStatus", "()F", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getThermalStatus", "()F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getThermalStatus: {e}")))?;
         check_jni_exception(&mut env, "getThermalStatus")?;
         let temp = result.f().unwrap_or(35.0);
@@ -430,12 +409,11 @@ mod inner {
     /// Invoke `AuraDaemonBridge.acquireWakelock(tag, timeoutMs)`.
     pub fn jni_acquire_wakelock(tag: &str, timeout_ms: i64) -> Result<(), PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_tag = env
             .new_string(tag)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         env.call_static_method(
-            &cls,
+            BRIDGE_CLASS_PATH,
             "acquireWakelock",
             "(Ljava/lang/String;J)V",
             &[(&j_tag).into(), JValue::Long(timeout_ms)],
@@ -448,8 +426,7 @@ mod inner {
     /// Invoke `AuraDaemonBridge.releaseWakelock()`.
     pub fn jni_release_wakelock() -> Result<(), PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
-        env.call_static_method(&cls, "releaseWakelock", "()V", &[])
+        env.call_static_method(BRIDGE_CLASS_PATH, "releaseWakelock", "()V", &[])
             .map_err(|e| PlatformError::JniFailed(format!("releaseWakelock: {e}")))?;
         check_jni_exception(&mut env, "releaseWakelock")?;
         Ok(())
@@ -464,7 +441,6 @@ mod inner {
         importance: i32,
     ) -> Result<(), PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_id = env
             .new_string(channel_id)
             .map_err(|e| PlatformError::JniFailed(format!("new_string id: {e}")))?;
@@ -472,7 +448,7 @@ mod inner {
             .new_string(name)
             .map_err(|e| PlatformError::JniFailed(format!("new_string name: {e}")))?;
         env.call_static_method(
-            &cls,
+            BRIDGE_CLASS_PATH,
             "registerNotificationChannel",
             "(Ljava/lang/String;Ljava/lang/String;I)V",
             &[(&j_id).into(), (&j_name).into(), JValue::Int(importance)],
@@ -491,7 +467,6 @@ mod inner {
         ongoing: bool,
     ) -> Result<(), PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_channel = env
             .new_string(channel_id)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
@@ -502,7 +477,7 @@ mod inner {
             .new_string(body)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         env.call_static_method(
-            &cls,
+            BRIDGE_CLASS_PATH,
             "postNotification",
             "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V",
             &[
@@ -521,9 +496,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.cancelNotification(id)`.
     pub fn jni_cancel_notification(id: i32) -> Result<(), PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         env.call_static_method(
-            &cls,
+            BRIDGE_CLASS_PATH,
             "cancelNotification",
             "(I)V",
             &[JValue::Int(id)],
@@ -538,9 +512,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getAvailableMemoryMb()`.
     pub fn jni_get_available_memory_mb() -> Result<i64, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getAvailableMemoryMb", "()J", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getAvailableMemoryMb", "()J", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getAvailableMemoryMb: {e}")))?;
         Ok(result.j().unwrap_or(512))
     }
@@ -572,9 +545,8 @@ mod inner {
     /// Call a static `()Z` method with no arguments on AuraDaemonBridge.
     fn call_bool_no_args(method: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, method, "()Z", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, method, "()Z", &[])
             .map_err(|e| PlatformError::JniFailed(format!("{method}: {e}")))?;
         // AND-CRIT-007: Clear any pending exception before reading the result.
         check_jni_exception(&mut env, method)?;
@@ -586,9 +558,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getAccelerometer()` → `[F` (float[3]: x, y, z).
     pub fn jni_get_accelerometer() -> Result<(f32, f32, f32), PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getAccelerometer", "()[F", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getAccelerometer", "()[F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getAccelerometer: {e}")))?;
         let arr = result
             .l()
@@ -603,9 +574,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getLightLevel()` → `F`.
     pub fn jni_get_light_level() -> Result<f32, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getLightLevel", "()F", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getLightLevel", "()F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getLightLevel: {e}")))?;
         Ok(result.f().unwrap_or(100.0))
     }
@@ -618,9 +588,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getStepCount()` → `I`.
     pub fn jni_get_step_count() -> Result<u32, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getStepCount", "()I", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getStepCount", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getStepCount: {e}")))?;
         Ok(result.i().unwrap_or(0) as u32)
     }
@@ -630,9 +599,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getNetworkType()` → `String` ("wifi"|"cellular"|"none").
     pub fn jni_get_network_type() -> Result<String, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getNetworkType", "()Ljava/lang/String;", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getNetworkType", "()Ljava/lang/String;", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getNetworkType: {e}")))?;
         let jstr: JString = result
             .l()
@@ -653,9 +621,8 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getWifiRssi()` → `I`.
     pub fn jni_get_wifi_rssi() -> Result<i32, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "getWifiRssi", "()I", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "getWifiRssi", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getWifiRssi: {e}")))?;
         Ok(result.i().unwrap_or(-100))
     }
@@ -673,13 +640,12 @@ mod inner {
     /// startActivity()`.
     pub fn jni_launch_app(package: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_pkg = env
             .new_string(package)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "launchApp",
                 "(Ljava/lang/String;)Z",
                 &[(&j_pkg).into()],
@@ -693,13 +659,12 @@ mod inner {
     /// Kotlin impl: `Intent(ACTION_VIEW, Uri.parse(url)) + startActivity()`.
     pub fn jni_open_url(url: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_url = env
             .new_string(url)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "openUrl",
                 "(Ljava/lang/String;)Z",
                 &[(&j_url).into()],
@@ -713,7 +678,6 @@ mod inner {
     /// Kotlin impl: `SmsManager.getDefault().sendTextMessage()`.
     pub fn jni_send_sms(recipient: &str, body: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_recipient = env
             .new_string(recipient)
             .map_err(|e| PlatformError::JniFailed(format!("new_string recipient: {e}")))?;
@@ -722,7 +686,7 @@ mod inner {
             .map_err(|e| PlatformError::JniFailed(format!("new_string body: {e}")))?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "sendSms",
                 "(Ljava/lang/String;Ljava/lang/String;)Z",
                 &[(&j_recipient).into(), (&j_body).into()],
@@ -736,13 +700,12 @@ mod inner {
     /// Kotlin impl: `Intent(AlarmClock.ACTION_SET_ALARM) + startActivity()`.
     pub fn jni_set_alarm(hour: u8, minute: u8, label: &str) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_label = env
             .new_string(label)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "setAlarm",
                 "(IILjava/lang/String;)Z",
                 &[
@@ -760,10 +723,9 @@ mod inner {
     /// Kotlin impl: `ContentResolver.query(CalendarContract.Events.CONTENT_URI)`.
     pub fn jni_query_calendar(start_ms: i64, end_ms: i64) -> Result<Vec<u8>, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "queryCalendar",
                 "(JJ)[B",
                 &[JValue::Long(start_ms), JValue::Long(end_ms)],
@@ -788,13 +750,12 @@ mod inner {
     /// Kotlin impl: `ContentResolver.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI)`.
     pub fn jni_query_contacts(query: &str) -> Result<Vec<u8>, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let j_query = env
             .new_string(query)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "queryContacts",
                 "(Ljava/lang/String;)[B",
                 &[(&j_query).into()],
@@ -819,9 +780,8 @@ mod inner {
     /// Kotlin impl: `NotificationListenerService.getActiveNotifications()`.
     pub fn jni_query_notifications() -> Result<Vec<u8>, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(&cls, "queryNotifications", "()[B", &[])
+            .call_static_method(BRIDGE_CLASS_PATH, "queryNotifications", "()[B", &[])
             .map_err(|e| PlatformError::JniFailed(format!("queryNotifications: {e}")))?;
         let obj = result
             .l()
@@ -844,10 +804,9 @@ mod inner {
     /// `level` is in range `0.0..=1.0` (scaled to 0–255 on the Kotlin side).
     pub fn jni_set_brightness(level: f32) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "setBrightness",
                 "(F)Z",
                 &[JValue::Float(level)],
@@ -866,10 +825,9 @@ mod inner {
     /// the Wi-Fi state via `jni_get_network_type()` to confirm the change.
     pub fn jni_toggle_wifi(enable: bool) -> Result<bool, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "toggleWifi",
                 "(Z)Z",
                 &[JValue::Bool(enable as jboolean)],
@@ -883,10 +841,9 @@ mod inner {
     /// Invoke `AuraDaemonBridge.getDeviceManufacturer()` → `String`.
     pub fn jni_get_device_manufacturer() -> Result<String, PlatformError> {
         let mut env = jni_env()?;
-        let cls = bridge_class(&mut env)?;
         let result = env
             .call_static_method(
-                &cls,
+                BRIDGE_CLASS_PATH,
                 "getDeviceManufacturer",
                 "()Ljava/lang/String;",
                 &[],

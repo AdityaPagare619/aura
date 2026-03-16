@@ -381,6 +381,31 @@ If you're rate-limited by HuggingFace, get a free token at [huggingface.co/setti
 HF_TOKEN=your_token_here bash install.sh --repair model
 ```
 
+**"rustls-platform-verifier panic" / "Expect rustls-platform-verifier to be initialized"**
+
+This happens when `rustup` tries to use Android's native TLS verifier, which Termux doesn't provide. The installer now sets `RUSTUP_USE_CURL=1` automatically to avoid this. If you see this error on an older install.sh, re-download it:
+```bash
+curl -fsSL https://raw.githubusercontent.com/AdityaPagare619/aura/main/install.sh -o install.sh
+bash install.sh
+```
+Or set the env var manually before running: `export RUSTUP_USE_CURL=1`
+
+**"$HOME differs from euid-obtained home directory"**
+
+This is a known Termux quirk. The installer now exports `CARGO_HOME` and `RUSTUP_HOME` explicitly. If you hit this on an older install.sh, update it (see above) or set manually:
+```bash
+export CARGO_HOME="$HOME/.cargo"
+export RUSTUP_HOME="$HOME/.rustup"
+```
+
+**"cannot install while Rust is installed" (pkg conflict)**
+
+If you previously installed Rust via `pkg install rust`, it conflicts with rustup. The installer now auto-removes it. If it persists:
+```bash
+pkg uninstall -y rust
+bash install.sh --repair rust
+```
+
 ### Runtime Issues
 
 **"AURA stops when I lock my screen"**

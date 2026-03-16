@@ -106,6 +106,11 @@ AURA_BIN="$TERMUX_PREFIX/bin/aura-daemon"
 AURA_NEOCORTEX_BIN="$TERMUX_PREFIX/bin/aura-neocortex"
 AURA_SV_DIR="$TERMUX_PREFIX/var/service/aura-daemon"
 
+# Rust toolchain paths — use existing env vars if set, otherwise default
+CARGO_HOME="${CARGO_HOME:-$HOME_DIR/.cargo}"
+RUSTUP_HOME="${RUSTUP_HOME:-$HOME_DIR/.rustup}"
+export CARGO_HOME RUSTUP_HOME
+
 INSTALL_LOG="${TMPDIR:-/tmp}/aura-install-$(date +%Y%m%d-%H%M%S).log"
 
 # ── Collected during interactive phases ──────────────────────────────────────
@@ -700,6 +705,33 @@ phase_packages() {
 phase_rust() {
     log_header "Phase 5 · Rust Toolchain"
 
+    # ── Termux environment workarounds ────────────────────────────────────────
+    # On Android/Termux, rustup's built-in TLS uses rustls-platform-verifier
+    # which calls into Android's native certificate verifier. Termux does NOT
+    # provide the standard Android keystore JNI, causing:
+    #   panicked at rustls-platform-verifier/src/android.rs:
+    #     "Expect rustls-platform-verifier to be initialized"
+    #
+    # RUSTUP_USE_CURL=1 forces rustup to delegate TLS to the system curl
+    # (which Termux ships with working TLS via openssl/rustls).
+    #
+    # We also set CARGO_HOME / RUSTUP_HOME explicitly because Termux's $HOME
+    # (/data/data/com.termux/files/home) differs from the euid-derived home
+    # (/data), which causes rustup to error with:
+    #   "$HOME differs from euid-obtained home directory"
+    if [ "$IS_TERMUX" = "1" ]; then
+        export RUSTUP_USE_CURL=1
+        export RUSTUP_INIT_SKIP_PATH_CHECK=yes
+
+        # Remove any pkg-installed Rust that conflicts with rustup.
+        # Termux's `pkg install rust` puts binaries in $PREFIX/bin which
+        # clashes with rustup's toolchain management.
+        if command -v rustc &>/dev/null && ! command -v rustup &>/dev/null; then
+            log_info "Removing pkg-installed Rust (conflicts with rustup)..."
+            run pkg uninstall -y rust 2>/dev/null || true
+        fi
+    fi
+
     if command -v rustup &>/dev/null; then
         log_step "rustup already installed: $(rustup --version 2>/dev/null || echo 'unknown')"
         run rustup update nightly-2026-03-01
@@ -727,8 +759,8 @@ phase_rust() {
 
         # Source cargo env
         # shellcheck source=/dev/null
-        [ -f "$HOME_DIR/.cargo/env" ] && source "$HOME_DIR/.cargo/env"
-        export PATH="$HOME_DIR/.cargo/bin:$PATH"
+        [ -f "$CARGO_HOME/env" ] && source "$CARGO_HOME/env"
+        export PATH="$CARGO_HOME/bin:$PATH"
         log_step "rustup installed"
     fi
 
@@ -981,8 +1013,8 @@ phase_build() {
 
     # Source cargo env if needed
     # shellcheck source=/dev/null
-    [ -f "$HOME_DIR/.cargo/env" ] && source "$HOME_DIR/.cargo/env" 2>/dev/null || true
-    export PATH="$HOME_DIR/.cargo/bin:$PATH"
+    [ -f "$CARGO_HOME/env" ] && source "$CARGO_HOME/env" 2>/dev/null || true
+    export PATH="$CARGO_HOME/bin:$PATH"
 
     command -v cargo &>/dev/null || die "cargo not found." "Run: source ~/.cargo/env"
 
@@ -1037,10 +1069,10 @@ phase_purge_build_tools() {
     local before_kb
     before_kb=$(df -k "$HOME_DIR" 2>/dev/null | awk 'NR==2 {print $3}' || echo "0")
 
-    # Remove rustup + cargo install (toolchain is in ~/.rustup and ~/.cargo)
+    # Remove rustup + cargo install (toolchain is in $RUSTUP_HOME and $CARGO_HOME)
     if command -v rustup &>/dev/null; then
         run rustup self uninstall -y 2>/dev/null || \
-            { run rm -rf "$HOME_DIR/.rustup" "$HOME_DIR/.cargo"; }
+            { run rm -rf "$RUSTUP_HOME" "$CARGO_HOME"; }
         log_step "Rust toolchain removed"
     fi
 
@@ -1599,8 +1631,8 @@ main() {
     # ── Repair mode: single phase only ──────────────────────────────────────
     if [ -n "$OPT_REPAIR" ]; then
         # shellcheck source=/dev/null
-        [ -f "$HOME_DIR/.cargo/env" ] && source "$HOME_DIR/.cargo/env" 2>/dev/null || true
-        export PATH="$HOME_DIR/.cargo/bin:$PATH"
+        [ -f "$CARGO_HOME/env" ] && source "$CARGO_HOME/env" 2>/dev/null || true
+        export PATH="$CARGO_HOME/bin:$PATH"
         run_repair "$OPT_REPAIR"
         exit 0
     fi

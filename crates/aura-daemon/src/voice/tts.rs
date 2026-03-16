@@ -137,7 +137,7 @@ impl PiperTts {
     }
 
     /// Synthesize text into PCM i16 samples.
-    pub fn synthesize(&self, text: &str, params: &TtsParams) -> TtsResult<Vec<i16>> {
+    pub fn synthesize(&self, text: &str, _params: &TtsParams) -> TtsResult<Vec<i16>> {
         if text.is_empty() {
             return Err(TtsError::EmptyText);
         }
@@ -159,7 +159,7 @@ impl PiperTts {
                 piper_ffi::piper_synthesize(
                     self.state,
                     c_text.as_ptr(),
-                    params.speed,
+                    _params.speed,
                     &mut out_ptr,
                     &mut out_len,
                 )
@@ -172,7 +172,7 @@ impl PiperTts {
             unsafe { piper_ffi::piper_free_samples(out_ptr) };
 
             // Apply volume
-            let samples = Self::apply_volume(samples, params.volume);
+            let samples = Self::apply_volume(samples, _params.volume);
             Ok(samples)
         }
 
@@ -181,12 +181,12 @@ impl PiperTts {
             // Mock: generate a simple tone proportional to text length
             let duration_samples = (text.len() * 200).min(self.sample_rate as usize * 10);
             let mut samples = Vec::with_capacity(duration_samples);
-            let freq = 220.0 * params.pitch; // A3 * pitch
+            let freq = 220.0 * _params.pitch; // A3 * pitch
             for i in 0..duration_samples {
                 let t = i as f32 / self.sample_rate as f32;
-                let sample = (params.volume
+                let sample = (_params.volume
                     * 8000.0
-                    * (2.0 * std::f32::consts::PI * freq * t * params.speed).sin())
+                    * (2.0 * std::f32::consts::PI * freq * t * _params.speed).sin())
                     as i16;
                 samples.push(sample);
             }
@@ -289,7 +289,7 @@ impl ESpeakTts {
     }
 
     /// Synthesize text. eSpeak is always available as a fallback.
-    pub fn synthesize(&self, text: &str, params: &TtsParams) -> TtsResult<Vec<i16>> {
+    pub fn synthesize(&self, text: &str, _params: &TtsParams) -> TtsResult<Vec<i16>> {
         if text.is_empty() {
             return Err(TtsError::EmptyText);
         }
@@ -312,12 +312,12 @@ impl ESpeakTts {
             // Mock: simple square wave (robotic, like eSpeak)
             let duration_samples = (text.len() * 100).min(self.sample_rate as usize * 10);
             let mut samples = Vec::with_capacity(duration_samples);
-            let period = (self.sample_rate as f32 / (150.0 * params.pitch)) as usize;
+            let period = (self.sample_rate as f32 / (150.0 * _params.pitch)) as usize;
             for i in 0..duration_samples {
                 let val = if (i / period.max(1)).is_multiple_of(2) {
-                    (4000.0 * params.volume) as i16
+                    (4000.0 * _params.volume) as i16
                 } else {
-                    (-4000.0 * params.volume) as i16
+                    (-4000.0 * _params.volume) as i16
                 };
                 samples.push(val);
             }
@@ -334,6 +334,28 @@ impl Drop for ESpeakTts {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Logging helpers (platform-specific)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "android")]
+mod log {
+    macro_rules! tts_warn {
+        ($($arg:tt)*) => { tracing::warn!($($arg)*) };
+    }
+    pub(super) use tts_warn;
+}
+
+#[cfg(not(target_os = "android"))]
+mod log {
+    macro_rules! tts_warn {
+        ($($arg:tt)*) => { eprintln!("[WARN] {}", format!($($arg)*)) };
+    }
+    pub(super) use tts_warn;
+}
+
+use log::tts_warn;
 
 // ---------------------------------------------------------------------------
 // Unified TextToSpeech
@@ -458,15 +480,6 @@ pub struct SynthesizedAudio {
 pub enum TtsEngine {
     Piper,
     ESpeak,
-}
-
-// Logging stub for non-Android
-#[cfg(not(target_os = "android"))]
-mod log {
-    macro_rules! tts_warn {
-        ($($arg:tt)*) => { eprintln!("[WARN] {}", format!($($arg)*)) };
-    }
-    pub(crate) use tts_warn;
 }
 
 // ---------------------------------------------------------------------------

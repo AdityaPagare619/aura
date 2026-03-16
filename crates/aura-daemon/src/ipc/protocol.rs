@@ -15,7 +15,7 @@ use tracing::debug;
 
 use super::IpcError;
 
-// ─── Platform-specific stream type ──────────────────────────────────────────
+// ─── Platform-specific stream type ──────────────────────────────────────────────────
 
 /// On Android, the daemon↔neocortex link uses Unix domain sockets (abstract
 /// namespace) for lower latency and no TCP overhead.
@@ -28,7 +28,7 @@ pub type IpcStream = tokio::net::UnixStream;
 #[cfg(not(target_os = "android"))]
 pub type IpcStream = tokio::net::TcpStream;
 
-// ─── Constants ──────────────────────────────────────────────────────────────
+// ─── Constants ──────────────────────────────────────────────────────────
 
 /// Abstract socket address used on Android / Linux.
 ///
@@ -56,7 +56,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Size of the length-prefix header (u32 little-endian).
 pub const FRAME_HEADER_SIZE: usize = 4;
 
-// ─── Encoding ───────────────────────────────────────────────────────────────
+// ─── Encoding ───────────────────────────────────────────────────────────
 
 /// Serialize `msg` into a length-prefixed frame ready for sending.
 ///
@@ -197,8 +197,7 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
     // (NOT std::os::linux -- Android has its own target triple).
     #[cfg(target_os = "android")]
     {
-        use std::os::android::net::SocketAddrExt;
-        use std::os::unix::net::SocketAddr as StdSocketAddr;
+        use std::os::{android::net::SocketAddrExt, unix::net::SocketAddr as StdSocketAddr};
 
         let addr = StdSocketAddr::from_abstract_name(b"aura_ipc_v4").map_err(|e| {
             IpcError::Io(std::io::Error::new(
@@ -244,7 +243,7 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
     }
 }
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+// ─── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

@@ -35,6 +35,7 @@ zeroize = { version = "1", features = ["derive"] }
 log = "0.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
 jni = "0.21"
 
 [dev-dependencies]

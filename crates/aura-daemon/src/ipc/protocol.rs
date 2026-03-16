@@ -192,21 +192,55 @@ pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), Ipc
 /// - [`IpcError::Timeout`] if the connection is not established within [`CONNECT_TIMEOUT`].
 /// - [`IpcError::Io`] for other connection failures.
 pub async fn connect_stream() -> Result<IpcStream, IpcError> {
-    // Android: abstract Unix domain socket
+    // Android: abstract Unix domain socket via raw libc syscalls.
+    // std::os::linux is NOT available on target_os = "android" (Android uses its own
+    // target triple). We use libc directly to construct the abstract sockaddr_un.
     #[cfg(target_os = "android")]
     {
-        use std::os::linux::net::SocketAddrExt;
-        use std::os::unix::net::SocketAddr as StdSocketAddr;
-
-        let addr = StdSocketAddr::from_abstract_name(b"aura_ipc_v4").map_err(|e| {
-            IpcError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid abstract socket name: {e}"),
-            ))
-        })?;
+        use std::os::unix::io::FromRawFd;
 
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, async {
-            let std_stream = std::os::unix::net::UnixStream::connect_addr(&addr)?;
+            // SAFETY: All raw fd and pointer operations are immediately checked.
+            let fd = unsafe {
+                let sock = libc::socket(
+                    libc::AF_UNIX,
+                    libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+                    0,
+                );
+                if sock < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // Build abstract sockaddr_un: sun_path[0] = ' ', then the name.
+                let mut addr: libc::sockaddr_un = std::mem::zeroed();
+                addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+                let name: &[u8] = b"aura_ipc_v4";
+                for (i, &b) in name.iter().enumerate() {
+                    addr.sun_path[1 + i] = b as libc::c_char;
+                }
+                // addrlen = offsetof(sockaddr_un, sun_path) + 1 (null byte) + name.len()
+                let sun_path_offset = {
+                    let base = &addr as *const libc::sockaddr_un as usize;
+                    let field = &addr.sun_path as *const _ as usize;
+                    field - base
+                };
+                let addrlen =
+                    (sun_path_offset + 1 + name.len()) as libc::socklen_t;
+
+                let ret = libc::connect(
+                    sock,
+                    &addr as *const libc::sockaddr_un as *const libc::sockaddr,
+                    addrlen,
+                );
+                if ret < 0 {
+                    let err = std::io::Error::last_os_error();
+                    libc::close(sock);
+                    return Err(err);
+                }
+                sock
+            };
+
+            let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
             std_stream.set_nonblocking(true)?;
             tokio::net::UnixStream::from_std(std_stream)
         })

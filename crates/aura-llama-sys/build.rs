@@ -27,22 +27,41 @@ fn main() {
                 );
             }
 
-            let mut build = cc::Build::new();
-            build
+            // Compile C files separately with -std=c11.
+            // Using .cpp(true) on .c files forces C++ mode and breaks NDK r26b clang
+            // which rejects C99 compound literals and void* implicit casts in C++ mode.
+            let mut c_build = cc::Build::new();
+            c_build
+                .cpp(false)
+                .flag("-std=c11")
+                .flag("-march=armv8-a+fp+simd")
+                .flag("-DGGML_USE_NEON")
+                .flag("-O3")
+                .flag("-DNDEBUG")
+                .flag("-Wno-error")
+                .file("llama.cpp/ggml.c")
+                .file("llama.cpp/ggml-alloc.c")
+                .file("llama.cpp/ggml-backend.c")
+                .file("llama.cpp/ggml-quants.c")
+                .include("llama.cpp");
+            c_build.compile("llama_c");
+
+            // Compile C++ files with -std=c++17.
+            let mut cpp_build = cc::Build::new();
+            cpp_build
                 .cpp(true)
                 .flag("-std=c++17")
                 .flag("-march=armv8-a+fp+simd")
                 .flag("-DGGML_USE_NEON")
                 .flag("-O3")
                 .flag("-DNDEBUG")
+                .flag("-Wno-error")
                 .file("llama.cpp/llama.cpp")
-                .file("llama.cpp/ggml.c")
-                .file("llama.cpp/ggml-alloc.c")
-                .file("llama.cpp/ggml-backend.c")
-                .file("llama.cpp/ggml-quants.c")
                 .include("llama.cpp");
-            build.compile("llama");
-            println!("cargo:rustc-link-lib=static=llama");
+            cpp_build.compile("llama_cpp");
+
+            println!("cargo:rustc-link-lib=static=llama_c");
+            println!("cargo:rustc-link-lib=static=llama_cpp");
         }
 
         // In stub mode on Android: emit the stub marker instead of compiling native code.

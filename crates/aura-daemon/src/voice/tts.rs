@@ -392,7 +392,7 @@ impl TextToSpeech {
                     });
                 },
                 Err(e) => {
-                    log::tts_warn!("Piper TTS failed, falling back to eSpeak: {e}");
+                    tts_warn!("Piper TTS failed, falling back to eSpeak: {e}");
                 },
             }
         }
@@ -419,7 +419,7 @@ impl TextToSpeech {
         if let Some(ref piper) = self.primary {
             match piper.synthesize_streaming(text, &self.params, &mut callback) {
                 Ok(()) => return Ok(TtsEngine::Piper),
-                Err(e) => log::tts_warn!("Piper streaming failed: {e}"),
+                Err(e) => tts_warn!("Piper streaming failed: {e}"),
             }
         }
 

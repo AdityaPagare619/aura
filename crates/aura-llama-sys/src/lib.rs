@@ -1117,8 +1117,8 @@ extern "C" {
         model: *mut LlamaModel,
         params: LlamaContextParams,
     ) -> *mut LlamaContext;
-    fn llama_free_model(model: *mut LlamaModel);
-    fn llama_free(ctx: *mut LlamaContext);
+    pub fn llama_free_model(model: *mut LlamaModel);
+    pub fn llama_free(ctx: *mut LlamaContext);
     fn llama_tokenize(
         ctx: *mut LlamaContext,
         text: *const std::ffi::c_char,

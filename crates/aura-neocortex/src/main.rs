@@ -351,6 +351,7 @@ fn run_server(
     #[cfg(target_os = "android")]
     let accept_connection = {
         use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener};
+        use std::os::android::net::SocketAddrExt;
 
         // Abstract sockets don't need filesystem cleanup — the kernel manages
         // their lifecycle.  Strip the leading '@' convention if present.

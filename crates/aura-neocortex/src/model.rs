@@ -664,9 +664,17 @@ impl Drop for LoadedModel {
         // the stubs module resolves them correctly at runtime — there is no
         // reason to skip cleanup.
         if !self.ctx_ptr.is_null() {
+            // On Android, call real FFI directly (stubs are non-android only).
+            // The FFI extern name is `llama_free` (not `llama_free_context`).
+            #[cfg(target_os = "android")]
+            unsafe { aura_llama_sys::llama_free(self.ctx_ptr); }
+            #[cfg(not(target_os = "android"))]
             aura_llama_sys::stubs::llama_free_context(self.ctx_ptr);
         }
         if !self.model_ptr.is_null() {
+            #[cfg(target_os = "android")]
+            unsafe { aura_llama_sys::llama_free_model(self.model_ptr); }
+            #[cfg(not(target_os = "android"))]
             aura_llama_sys::stubs::llama_free_model(self.model_ptr);
         }
     }

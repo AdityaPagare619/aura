@@ -705,6 +705,12 @@ phase_packages() {
 phase_rust() {
     log_header "Phase 5 · Rust Toolchain"
 
+    # Skip Rust toolchain installation when using pre-built binaries
+    if [ "$OPT_SKIP_BUILD" = "1" ]; then
+        log_info "Skipping Rust toolchain (--skip-build)"
+        return
+    fi
+
     # ── Termux environment workarounds ────────────────────────────────────────
     # On Android/Termux, rustup's built-in TLS uses rustls-platform-verifier
     # which calls into Android's native certificate verifier. Termux does NOT
@@ -777,6 +783,12 @@ phase_rust() {
 
 phase_source() {
     log_header "Phase 6 · Source Acquisition"
+
+    # Skip source acquisition when using pre-built binaries
+    if [ "$OPT_SKIP_BUILD" = "1" ]; then
+        log_info "Skipping source acquisition (--skip-build)"
+        return
+    fi
 
     local target_ref
     case "$OPT_CHANNEL" in
@@ -1342,66 +1354,19 @@ max_delay_ms   = 10000
 jitter_ms      = 50
 
 # =============================================================================
-#  § 13. Contextor
+#  § 13. Feature Flags
 # =============================================================================
 
-[contextor]
-enable_episodic      = true
-enable_semantic      = true
-token_budget_low     = 200
-token_budget_medium  = 500
-token_budget_high    = 1000
-token_budget_emergency = 2000
-max_results_low      = 2
-max_results_medium   = 4
-max_results_high     = 6
-max_results_emergency = 10
-min_relevance        = 0.15
-max_conversation_turns = 10
-weight_similarity    = 0.40
-weight_recency       = 0.20
-weight_importance    = 0.20
-weight_activation    = 0.20
-recency_window_ms    = 3600000
-chars_per_token      = 4
-
-# =============================================================================
-#  § 14. Ethics & Anti-Sycophancy
-# =============================================================================
-
-[ethics]
-blocked_patterns = [
-    "delete all",
-    "factory reset",
-    "format storage",
-    "uninstall system",
-    "disable security",
-    "root device",
-    "bypass lock",
-]
-audit_keywords = ["password", "credential", "payment", "bank"]
-blocked_packages = []
-
-[anti_sycophancy]
-ring_size          = 20
-block_threshold    = 0.40
-warn_threshold     = 0.25
-max_regenerations  = 3
-
-# =============================================================================
-#  § 15. Checkpoint & Context Package
-# =============================================================================
-
-[checkpoint]
-version   = 1
-max_bytes = 65536
-
-[context_package]
-max_size = 65536
+[features]
+voice_enabled              = false
+proactive_triggers_enabled = true
+learning_enabled           = true
+sentiment_analysis_enabled = true
+multi_language_enabled     = false
+debug_mode                 = false
 TOML_EOF
 
-    chmod 600 "$AURA_CONFIG_FILE"
-    log_step "Config written (permissions 600): $AURA_CONFIG_FILE"
+    log_step "Configuration written: $AURA_CONFIG_FILE"
 }
 
 # =============================================================================
@@ -1416,61 +1381,58 @@ phase_service() {
         return
     fi
 
-    if [ "$IS_TERMUX" = "1" ] && command -v sv-enable &>/dev/null; then
-        setup_termux_service
-    else
-        setup_bashrc_autostart
-    fi
-}
-
-setup_termux_service() {
-    log_info "Setting up termux-services autostart..."
-    run mkdir -p "$AURA_SV_DIR/log"
-
-    if [ "$OPT_DRY_RUN" != "1" ]; then
-        cat > "$AURA_SV_DIR/run" <<SV_EOF
-#!/data/data/com.termux/files/usr/bin/sh
-exec "${AURA_BIN}" \\
-    --config "${AURA_CONFIG_FILE}" \\
-    2>&1
-SV_EOF
-        chmod +x "$AURA_SV_DIR/run"
-
-        cat > "$AURA_SV_DIR/log/run" <<SV_LOG_EOF
-#!/data/data/com.termux/files/usr/bin/sh
-exec svlogd -tt "${AURA_LOGS_DIR}/"
-SV_LOG_EOF
-        chmod +x "$AURA_SV_DIR/log/run"
-    fi
-
-    run sv-enable aura-daemon 2>/dev/null || true
-    run sv up aura-daemon 2>/dev/null || true
-    log_step "termux-services: aura-daemon enabled and started"
-    log_info "AURA will auto-start whenever Termux opens"
-}
-
-setup_bashrc_autostart() {
-    local bashrc="$HOME_DIR/.bashrc"
-    local marker="# AURA v4 auto-start"
-
-    if grep -q "$marker" "$bashrc" 2>/dev/null; then
-        log_info "Auto-start already configured in ~/.bashrc"
+    if [ "$IS_TERMUX" != "1" ]; then
+        log_info "Skipping service setup — not in Termux"
         return
     fi
 
-    log_info "Adding auto-start to ~/.bashrc (fallback method)"
-    if [ "$OPT_DRY_RUN" != "1" ]; then
-        cat >> "$bashrc" <<BASHRC_EOF
+    # Attempt termux-services (preferred) — uses runit-style /var/service
+    if command -v sv &>/dev/null; then
+        log_info "Setting up termux-services (sv/runit)..."
 
-${marker} (managed by install.sh — do not remove this line)
-if ! pgrep -x aura-daemon > /dev/null 2>&1; then
-    nohup "${AURA_BIN}" --config "${AURA_CONFIG_FILE}" > /dev/null 2>&1 &
-fi
-BASHRC_EOF
+        run mkdir -p "$AURA_SV_DIR"
+        run mkdir -p "$AURA_SV_DIR/log"
+
+        # Main run script
+        cat > "$AURA_SV_DIR/run" <<'RUN_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+exec 2>&1
+exec "$PREFIX/bin/aura-daemon"
+RUN_EOF
+        chmod +x "$AURA_SV_DIR/run"
+
+        # Log run script
+        cat > "$AURA_SV_DIR/log/run" <<'LOG_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+exec svlogd -tt "$HOME/.local/share/aura/logs"
+LOG_EOF
+        chmod +x "$AURA_SV_DIR/log/run"
+
+        log_step "termux-services scripts created"
+        log_info "Enable with: sv-enable aura-daemon && sv up aura-daemon"
+        log_info "Logs at:     $AURA_LOGS_DIR/"
     else
-        log_info "[dry-run] Would append auto-start to ~/.bashrc"
+        # Fallback: .bashrc auto-start
+        log_info "termux-services not installed — using .bashrc fallback"
+        local bashrc="$HOME_DIR/.bashrc"
+
+        if ! grep -q 'aura-daemon' "$bashrc" 2>/dev/null; then
+            cat >> "$bashrc" <<'BASHRC_EOF'
+
+# ── AURA v4 auto-start ─────────────────────────────────────────────────────
+if [ -z "$AURA_STARTED" ] && command -v aura-daemon &>/dev/null; then
+    export AURA_STARTED=1
+    echo "[AURA] Starting daemon..."
+    nohup aura-daemon >> "$HOME/.local/share/aura/logs/daemon.log" 2>&1 &
+fi
+# ────────────────────────────────────────────────────────────────────────────
+BASHRC_EOF
+            log_step ".bashrc auto-start added"
+        else
+            log_info ".bashrc already contains aura-daemon entry — skipping"
+        fi
+        log_info "AURA will start automatically on next Termux session."
     fi
-    log_step "Auto-start added to ~/.bashrc"
 }
 
 # =============================================================================
@@ -1480,104 +1442,107 @@ BASHRC_EOF
 phase_verify() {
     log_header "Phase 12 · Verification"
 
-    local ok=1
+    local all_ok=1
 
-    if [ -f "$AURA_BIN" ]; then
-        log_step "Binary: $AURA_BIN"
+    # Binary check
+    if [ -x "$AURA_BIN" ]; then
+        log_step "aura-daemon binary: $AURA_BIN"
     else
-        warn "Daemon binary not found at $AURA_BIN"
-        ok=0
+        warn "aura-daemon binary missing or not executable!"
+        all_ok=0
     fi
 
-    if [ -f "$AURA_NEOCORTEX_BIN" ]; then
-        log_step "Binary: $AURA_NEOCORTEX_BIN"
+    if [ -x "$AURA_NEOCORTEX_BIN" ]; then
+        log_step "aura-neocortex binary: $AURA_NEOCORTEX_BIN"
     else
-        warn "Neocortex binary not found at $AURA_NEOCORTEX_BIN"
-        ok=0
+        warn "aura-neocortex binary missing or not executable!"
+        all_ok=0
     fi
 
+    # Config check
     if [ -f "$AURA_CONFIG_FILE" ]; then
-        log_step "Config: $AURA_CONFIG_FILE"
+        log_step "Configuration: $AURA_CONFIG_FILE"
     else
-        warn "Config file not found: $AURA_CONFIG_FILE"
-        ok=0
+        warn "Configuration file missing!"
+        all_ok=0
     fi
 
-    local model_name
-    case "$OPT_MODEL" in
-        qwen3-1.5b) model_name="$MODEL_QWEN3_1_5B_NAME" ;;
-        qwen3-4b)   model_name="$MODEL_QWEN3_4B_NAME"   ;;
-        qwen3-14b)  model_name="$MODEL_QWEN3_14B_NAME"  ;;
-        *)          model_name="$MODEL_QWEN3_8B_NAME"   ;;
-    esac
-    if [ -f "$AURA_MODELS_DIR/$model_name" ]; then
-        local size_mb
-        size_mb=$(du -m "$AURA_MODELS_DIR/$model_name" 2>/dev/null | cut -f1 || echo "?")
-        log_step "Model: $model_name (${size_mb} MB)"
-    else
-        warn "Model not found: $AURA_MODELS_DIR/$model_name"
-        ok=0
-    fi
-
-    if [ "$OPT_SKIP_SERVICE" != "1" ]; then
-        if pgrep -x aura-daemon > /dev/null 2>&1; then
-            log_step "Daemon: running (PID $(pgrep -x aura-daemon))"
+    # Model check
+    if [ "$OPT_SKIP_MODEL" != "1" ]; then
+        local model_name
+        case "$OPT_MODEL" in
+            qwen3-1.5b) model_name="$MODEL_QWEN3_1_5B_NAME" ;;
+            qwen3-4b)   model_name="$MODEL_QWEN3_4B_NAME"   ;;
+            qwen3-14b)  model_name="$MODEL_QWEN3_14B_NAME"  ;;
+            *)          model_name="$MODEL_QWEN3_8B_NAME"   ;;
+        esac
+        if [ -f "$AURA_MODELS_DIR/$model_name" ]; then
+            log_step "Model: $model_name"
         else
-            log_info "Daemon: not yet running (will start on next Termux open)"
+            warn "Model file missing: $model_name"
+            all_ok=0
         fi
     fi
 
-    [ "$ok" = "1" ] && print_success_banner || warn "Some checks failed — review output above"
-}
+    # Quick smoke test — just version output
+    if [ "$OPT_DRY_RUN" != "1" ] && [ -x "$AURA_BIN" ]; then
+        local ver
+        ver=$("$AURA_BIN" --version 2>/dev/null || echo "")
+        if [ -n "$ver" ]; then
+            log_step "Daemon responds: $ver"
+        else
+            warn "Daemon did not respond to --version"
+        fi
+    fi
 
-print_success_banner() {
     echo ""
-    echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${GREEN}${BOLD}║         AURA v4 installation complete!                   ║${RESET}"
-    echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
-    echo ""
-    echo -e "${BOLD}  ⚠  IMPORTANT: Enable Wakelock to keep AURA running${RESET}"
-    echo ""
-    echo -e "  ${DIM}Without a wakelock, Android will kill the daemon when the screen turns off.${RESET}"
-    echo -e "  ${BOLD}How to enable:${RESET}"
-    echo -e "    1. Pull down the notification shade"
-    echo -e "    2. Hold the ${CYAN}AURA / Termux${RESET} notification"
-    echo -e "    3. Tap ${CYAN}Acquire Wakelock${RESET}"
-    echo -e "    ${DIM}OR:${RESET} Termux app → notification → long press → Wakelock"
-    echo ""
-    echo -e "${BOLD}  Quick start:${RESET}"
-    echo ""
-    echo -e "    ${CYAN}# Start daemon manually (if not auto-started):${RESET}"
-    echo -e "    aura-daemon --config $AURA_CONFIG_FILE &"
-    echo ""
-    if command -v sv &>/dev/null; then
-        echo -e "    ${CYAN}# Status / Stop (termux-services):${RESET}"
-        echo -e "    sv status aura-daemon"
-        echo -e "    sv down aura-daemon"
+    if [ "$all_ok" = "1" ]; then
+        echo -e "${GREEN}${BOLD}"
+        echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+        echo "  ║                                                                   ║"
+        echo "  ║      █████╗ ██╗   ██╗██████╗  █████╗     ██╗   ██╗██╗  ██╗       ║"
+        echo "  ║     ██╔══██╗██║   ██║██╔══██╗██╔══██╗    ██║   ██║██║  ██║       ║"
+        echo "  ║     ███████║██║   ██║██████╔╝███████║    ██║   ██║███████║       ║"
+        echo "  ║     ██╔══██║██║   ██║██╔══██╗██╔══██║    ╚██╗ ██╔╝╚════██║       ║"
+        echo "  ║     ██║  ██║╚██████╔╝██║  ██║██║  ██║     ╚████╔╝      ██║       ║"
+        echo "  ║     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝      ╚═══╝       ╚═╝       ║"
+        echo "  ║                                                                   ║"
+        echo "  ║              Installation Complete! Welcome home.                 ║"
+        echo "  ║                                                                   ║"
+        echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+        echo -e "${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Next steps:${RESET}"
+        echo ""
+        echo -e "  ${CYAN}1.${RESET} Start AURA manually:"
+        echo -e "     ${DIM}aura-daemon${RESET}"
+        echo ""
+        if command -v sv &>/dev/null 2>/dev/null; then
+            echo -e "  ${CYAN}2.${RESET} Or enable as a service (auto-start on Termux boot):"
+            echo -e "     ${DIM}sv-enable aura-daemon && sv up aura-daemon${RESET}"
+            echo ""
+        fi
+        echo -e "  ${CYAN}3.${RESET} Open Telegram and message your bot to verify connection."
+        echo ""
+        echo -e "  ${BOLD}Important:${RESET} Keep Termux running with wakelock to prevent Android"
+        echo -e "  from killing the daemon. Swipe down → hold Termux notification → Wakelock."
+        echo ""
+        echo -e "  ${DIM}Logs:   $AURA_LOGS_DIR/${RESET}"
+        echo -e "  ${DIM}Config: $AURA_CONFIG_FILE${RESET}"
+        echo -e "  ${DIM}Model:  $AURA_MODELS_DIR/${RESET}"
         echo ""
     else
-        echo -e "    ${CYAN}# Status / Stop:${RESET}"
-        echo -e "    pgrep -x aura-daemon && echo running || echo stopped"
-        echo -e "    pkill -x aura-daemon"
+        echo -e "${RED}${BOLD}"
+        echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+        echo "  ║       Installation completed with warnings — see above.           ║"
+        echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+        echo -e "${RESET}"
+        echo ""
+        echo -e "  Some components may be missing. Re-run with ${CYAN}--repair <phase>${RESET}"
+        echo -e "  to fix specific phases, or check the install log:"
+        echo -e "  ${DIM}$INSTALL_LOG${RESET}"
         echo ""
     fi
-    echo -e "    ${CYAN}# View logs:${RESET}"
-    echo -e "    tail -f $AURA_LOGS_DIR/current"
-    echo ""
-    echo -e "    ${CYAN}# Repair a specific phase (e.g. re-download model):${RESET}"
-    echo -e "    bash install.sh --repair model"
-    echo ""
-    echo -e "${BOLD}  Paths:${RESET}"
-    printf "    %-12s %s\n" "Config:"  "$AURA_CONFIG_FILE"
-    printf "    %-12s %s\n" "Models:"  "$AURA_MODELS_DIR"
-    printf "    %-12s %s\n" "Logs:"    "$AURA_LOGS_DIR"
-    printf "    %-12s %s\n" "DB:"      "$AURA_DB_DIR"
-    [ -n "${INSTALL_LOG:-}" ] && [ -f "${INSTALL_LOG}" ] && \
-        printf "    %-12s %s\n" "Install log:" "$INSTALL_LOG"
-    echo ""
-    echo -e "  ${DIM}Telegram: open the bot you created and send /start${RESET}"
-    echo -e "  ${DIM}Update: bash install.sh --update${RESET}"
-    echo ""
 }
 
 # =============================================================================
@@ -1586,28 +1551,27 @@ print_success_banner() {
 
 run_repair() {
     local phase="$1"
-    log_info "Repair mode: re-running phase '$phase'"
+    setup_colors
+    log_header "Repair Mode · Phase: $phase"
+
     case "$phase" in
-        preflight)  phase_preflight ;;
-        packages)   phase_packages  ;;
-        rust)       phase_rust      ;;
-        source)     phase_source    ;;
-        model)      phase_model     ;;
-        build)      phase_build     ;;
-        purge)      phase_purge_build_tools ;;
-        config)
-            # Re-running config in repair mode always overwrites
-            OPT_UPDATE=1
-            phase_config
-            ;;
-        service)    phase_service   ;;
-        verify)     phase_verify    ;;
+        preflight)   phase_preflight ;;
+        packages)    phase_packages ;;
+        rust)        phase_rust ;;
+        source)      phase_source ;;
+        model)       phase_model ;;
+        build)       phase_build ;;
+        purge)       phase_purge_build_tools ;;
+        config)      phase_config ;;
+        service)     phase_service ;;
+        verify)      phase_verify ;;
         *)
             die "Unknown repair phase: $phase" \
-                "Valid phases: preflight packages rust source model build purge config service verify"
+                "Valid phases: preflight|packages|rust|source|model|build|purge|config|service|verify"
             ;;
     esac
-    log_step "Repair phase '$phase' complete"
+
+    log_step "Repair phase '$phase' complete."
 }
 
 # =============================================================================
@@ -1618,43 +1582,45 @@ main() {
     parse_args "$@"
     setup_colors
 
-    mkdir -p "$(dirname "$INSTALL_LOG")"
-    exec > >(tee -a "$INSTALL_LOG") 2>&1
-
-    echo ""
-    echo -e "${BOLD}${CYAN}  AURA v4 Installer${RESET} ${DIM}(${AURA_VERSION})${RESET}"
-    echo -e "${DIM}  Channel: $OPT_CHANNEL | Install log: $INSTALL_LOG${RESET}"
-    [ "$OPT_DRY_RUN" = "1" ] && echo -e "${YELLOW}  DRY RUN — no changes will be made${RESET}"
-    [ -n "$OPT_REPAIR" ]     && echo -e "${YELLOW}  REPAIR MODE: phase '${OPT_REPAIR}'${RESET}"
-    echo ""
-
-    # ── Repair mode: single phase only ──────────────────────────────────────
+    # ── Repair mode ───────────────────────────────────────────────────────────
     if [ -n "$OPT_REPAIR" ]; then
-        # shellcheck source=/dev/null
-        [ -f "$CARGO_HOME/env" ] && source "$CARGO_HOME/env" 2>/dev/null || true
-        export PATH="$CARGO_HOME/bin:$PATH"
         run_repair "$OPT_REPAIR"
         exit 0
     fi
 
-    # ── Full install ─────────────────────────────────────────────────────────
-    # STAGE A: Interactive (front-loaded — all user input before long operations)
+    # ── Full install ──────────────────────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${BLUE}"
+    echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+    echo "  ║                    AURA v4 Installer                              ║"
+    echo "  ║                 Enterprise Termux Edition                         ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+    echo -e "${RESET}"
+    echo -e "  ${DIM}Version:  ${AURA_VERSION}${RESET}"
+    echo -e "  ${DIM}Channel:  ${OPT_CHANNEL}${RESET}"
+    echo -e "  ${DIM}Log:      ${INSTALL_LOG}${RESET}"
+    echo ""
+
+    # Tee output to log file (while preserving interactivity via /dev/tty reads)
+    exec > >(tee -a "$INSTALL_LOG") 2>&1
+
+    # ── Interactive phases (front-loaded) ─────────────────────────────────────
     phase_preflight
     phase_space_budget
-    phase_hardware_and_model     # Phase 1: model selection (interactive)
-    phase_telegram_wizard        # Phase 2: Telegram bot (interactive)
-    phase_vault_setup            # Phase 3: PIN + name (interactive)
+    phase_hardware_and_model
+    phase_telegram_wizard
+    phase_vault_setup
 
-    # STAGE B: Unattended (long-running — safe to lock screen with wakelock)
-    phase_packages               # Phase 4
-    phase_rust                   # Phase 5
-    phase_source                 # Phase 6
-    phase_model                  # Phase 7
-    phase_build                  # Phase 8
-    phase_purge_build_tools      # Phase 9
-    phase_config                 # Phase 10
-    phase_service                # Phase 11
-    phase_verify                 # Phase 12
+    # ── Unattended phases ─────────────────────────────────────────────────────
+    phase_packages
+    phase_rust
+    phase_source
+    phase_model
+    phase_build
+    phase_purge_build_tools
+    phase_config
+    phase_service
+    phase_verify
 }
 
 main "$@"

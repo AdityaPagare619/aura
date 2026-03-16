@@ -124,6 +124,8 @@ dependencies = [
  "aura-types",
  "bincode",
  "jni",
+ "libc",
+ "log",
  "lz4",
  "ogg",
  "rand 0.8.5",

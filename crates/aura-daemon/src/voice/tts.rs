@@ -339,6 +339,12 @@ impl Drop for ESpeakTts {
 // Unified TextToSpeech
 // ---------------------------------------------------------------------------
 
+// Logging helper — works on all platforms (Android and host alike).
+// Uses `tracing::warn!` so messages route through AURA's log pipeline.
+macro_rules! tts_warn {
+    ($($arg:tt)*) => { ::tracing::warn!($($arg)*) };
+}
+
 pub struct TextToSpeech {
     primary: Option<PiperTts>,
     fallback: Option<ESpeakTts>,
@@ -458,15 +464,6 @@ pub struct SynthesizedAudio {
 pub enum TtsEngine {
     Piper,
     ESpeak,
-}
-
-// Logging stub for non-Android
-#[cfg(not(target_os = "android"))]
-mod log {
-    macro_rules! tts_warn {
-        ($($arg:tt)*) => { eprintln!("[WARN] {}", format!($($arg)*)) };
-    }
-    pub(crate) use tts_warn;
 }
 
 // ---------------------------------------------------------------------------

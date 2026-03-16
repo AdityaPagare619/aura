@@ -29,9 +29,55 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait after sending SIGTERM before escalating to SIGKILL.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// On Android, the neocortex binary is packaged as a shared library.
+/// On Android APK mode, the neocortex binary is packaged as a shared library.
 #[cfg(target_os = "android")]
 const ANDROID_NEOCORTEX_PATH: &str = "/data/data/dev.aura/lib/libaura_neocortex.so";
+
+// ─── Path resolution ────────────────────────────────────────────────────────
+
+/// Resolve the neocortex binary path for the current platform.
+///
+/// Resolution order:
+/// 1. `AURA_NEOCORTEX_BIN` environment variable (explicit override)
+/// 2. `$PREFIX/bin/aura-neocortex` (Termux convention)
+/// 3. Platform default:
+///    - Android APK: `/data/data/dev.aura/lib/libaura_neocortex.so`
+///    - Host: `aura-neocortex` (relies on PATH)
+fn resolve_neocortex_path() -> PathBuf {
+    // 1. Explicit env override.
+    if let Ok(path) = std::env::var("AURA_NEOCORTEX_BIN") {
+        let p = PathBuf::from(&path);
+        if p.exists() {
+            info!(path = %p.display(), "neocortex binary from AURA_NEOCORTEX_BIN");
+            return p;
+        }
+        warn!(
+            path = %path,
+            "AURA_NEOCORTEX_BIN set but file not found — trying other paths"
+        );
+    }
+
+    // 2. Termux: $PREFIX/bin/aura-neocortex.
+    if let Ok(prefix) = std::env::var("PREFIX") {
+        let termux_path = PathBuf::from(&prefix).join("bin").join("aura-neocortex");
+        if termux_path.exists() {
+            info!(path = %termux_path.display(), "neocortex binary from $PREFIX/bin");
+            return termux_path;
+        }
+    }
+
+    // 3. Platform default.
+    #[cfg(target_os = "android")]
+    {
+        PathBuf::from(ANDROID_NEOCORTEX_PATH)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        // On host, assume it's on PATH or in the same directory.
+        PathBuf::from("aura-neocortex")
+    }
+}
 
 // ─── NeocortexProcess ───────────────────────────────────────────────────────
 
@@ -124,7 +170,18 @@ impl NeocortexProcess {
         })
     }
 
-    /// Create a `NeocortexProcess` that uses the default Android path.
+    /// Create a `NeocortexProcess` using automatic path resolution.
+    ///
+    /// Checks (in order):
+    /// 1. `AURA_NEOCORTEX_BIN` env var
+    /// 2. `$PREFIX/bin/aura-neocortex` (Termux)
+    /// 3. Platform default (Android APK path or `aura-neocortex` on PATH)
+    pub async fn spawn_auto() -> Result<Self, IpcError> {
+        let path = resolve_neocortex_path();
+        Self::spawn(&path).await
+    }
+
+    /// Create a `NeocortexProcess` that uses the default Android APK path.
     ///
     /// Only available on Android targets.
     #[cfg(target_os = "android")]
@@ -150,13 +207,13 @@ impl NeocortexProcess {
                 self.child = None;
                 self.started_at = None;
                 false
-            },
+            }
             Ok(None) => true,
             Err(e) => {
                 warn!(error = %e, "failed to check neocortex process status");
                 // Assume still running on error to avoid premature restart.
                 true
-            },
+            }
         }
     }
 
@@ -204,10 +261,10 @@ impl NeocortexProcess {
         match wait_result {
             Ok(Ok(status)) => {
                 info!(pid, status = %status, "neocortex exited gracefully");
-            },
+            }
             Ok(Err(e)) => {
                 warn!(pid, error = %e, "error waiting for neocortex");
-            },
+            }
             Err(_elapsed) => {
                 warn!(pid, "graceful shutdown timed out — killing");
                 if let Err(e) = child.kill().await {
@@ -217,7 +274,7 @@ impl NeocortexProcess {
                     ))));
                 }
                 info!(pid, "neocortex killed");
-            },
+            }
         }
 
         self.child = None;
@@ -304,7 +361,7 @@ impl NeocortexProcess {
                         "neocortex is ready"
                     );
                     return Ok(());
-                },
+                }
                 Err(_) => {
                     if Instant::now() >= deadline {
                         return Err(IpcError::Timeout {
@@ -312,7 +369,7 @@ impl NeocortexProcess {
                         });
                     }
                     tokio::time::sleep(poll_interval).await;
-                },
+                }
             }
         }
     }
@@ -349,7 +406,7 @@ mod tests {
         match result {
             Err(IpcError::ProcessDied { reason }) => {
                 assert!(reason.contains("spawn failed"), "got: {reason}");
-            },
+            }
             other => panic!("expected ProcessDied, got: {other:?}"),
         }
     }
@@ -456,5 +513,12 @@ mod tests {
             ANDROID_NEOCORTEX_PATH,
             "/data/data/dev.aura/lib/libaura_neocortex.so"
         );
+    }
+
+    #[test]
+    fn resolve_neocortex_path_returns_something() {
+        // Should not panic regardless of env vars.
+        let path = resolve_neocortex_path();
+        assert!(!path.as_os_str().is_empty());
     }
 }

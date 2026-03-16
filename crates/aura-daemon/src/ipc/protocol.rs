@@ -194,7 +194,7 @@ pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), Ipc
 pub async fn connect_stream() -> Result<IpcStream, IpcError> {
     // Android: abstract Unix domain socket.
     // On target_os = "android", SocketAddrExt lives in std::os::android::net
-    // (NOT std::os::linux — Android has its own target triple).
+    // (NOT std::os::linux -- Android has its own target triple).
     #[cfg(target_os = "android")]
     {
         use std::os::android::net::SocketAddrExt;

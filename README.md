@@ -23,6 +23,22 @@ Powered by [Qwen-3](https://huggingface.co/Qwen/Qwen3-8B) via [llama.cpp](https:
 
 ---
 
+### 📱 Quick Install (Android)
+
+> **Prerequisites:** Android 8.0+, ARM64 phone, 4 GB+ RAM, 8 GB free storage.
+>
+> 1. Install **[Termux from F-Droid](https://f-droid.org/en/packages/com.termux/)** (NOT Google Play)
+> 2. Open Termux and run:
+> ```bash
+> termux-setup-storage && curl -fsSL https://raw.githubusercontent.com/AdityaPagare619/aura/main/install.sh -o install.sh && bash install.sh
+> ```
+> 3. Follow the prompts (model selection, Telegram bot token, vault PIN)
+> 4. Done! Open Telegram → message your bot → start chatting with AURA
+>
+> **[Detailed step-by-step guide ↓](#step-by-step-installation)** · **[Troubleshooting ↓](#troubleshooting)**
+
+---
+
 ## Table of Contents
 
 - [Install on Android](#install-on-android)

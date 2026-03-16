@@ -90,9 +90,9 @@ impl NeocortexProcess {
         // Android: abstract Unix socket @aura_ipc_v4
         // Host:    TCP 127.0.0.1:19400
         #[cfg(target_os = "android")]
-        let socket_arg = "@aura_ipc_v4";
+        let socket_arg = protocol::SOCKET_ADDR;
         #[cfg(not(target_os = "android"))]
-        let socket_arg = "127.0.0.1:19400";
+        let socket_arg = format!("{}:{}", protocol::TCP_FALLBACK_ADDR, protocol::TCP_FALLBACK_PORT);
 
         let child = Command::new(binary_path)
             .arg("--socket")

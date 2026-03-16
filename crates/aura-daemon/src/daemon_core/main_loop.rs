@@ -101,7 +101,6 @@ use crate::{
         spawn_bridge,
         system_api::{SystemBridge, SystemCommand, SystemResult},
         telegram_bridge::TelegramBridge,
-        voice_bridge::VoiceBridge,
     },
     daemon_core::{
         channels::{
@@ -151,8 +150,9 @@ use crate::{
     routing::{classifier::RouteClassifier, system1::System1, system2::System2},
     screen::{detect_app_state, extract_screen_summary, AppState, ScreenCache},
     telegram::TelegramConfig,
-    voice::VoiceEngine,
 };
+#[cfg(feature = "voice")]
+use crate::{bridge::voice_bridge::VoiceBridge, voice::VoiceEngine};
 
 /// Maximum IPC payload size we'll accept for outbound writes (256 KB).
 const MAX_IPC_PAYLOAD_BYTES: usize = 256 * 1024;
@@ -1400,6 +1400,7 @@ pub async fn run(mut state: DaemonState) {
     let router = ResponseRouter::new(response_rx);
 
     // Register voice and telegram bridges with the router.
+    #[cfg(feature = "voice")]
     let voice_bridge_rx = match router.register("voice").await {
         Ok(rx) => Some(rx),
         Err(e) => {
@@ -1421,6 +1422,7 @@ pub async fn run(mut state: DaemonState) {
     tracing::info!("response router spawned");
 
     // Spawn voice bridge (non-critical — runs in degraded mode if init fails).
+    #[cfg(feature = "voice")]
     if let Some(voice_rx) = voice_bridge_rx {
         let voice_engine = VoiceEngine::default();
         let voice_bridge = VoiceBridge::new(voice_engine, state.cancel_flag.clone());

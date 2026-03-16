@@ -51,8 +51,9 @@ impl Args {
             match args[i].as_str() {
                 "--config" | "-c" => {
                     i += 1;
-                    config_path =
-                        Some(PathBuf::from(args.get(i).ok_or("--config requires a value")?));
+                    config_path = Some(PathBuf::from(
+                        args.get(i).ok_or("--config requires a value")?,
+                    ));
                 },
                 "--help" | "-h" => {
                     print_usage();

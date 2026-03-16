@@ -207,13 +207,13 @@ impl NeocortexProcess {
                 self.child = None;
                 self.started_at = None;
                 false
-            }
+            },
             Ok(None) => true,
             Err(e) => {
                 warn!(error = %e, "failed to check neocortex process status");
                 // Assume still running on error to avoid premature restart.
                 true
-            }
+            },
         }
     }
 
@@ -261,10 +261,10 @@ impl NeocortexProcess {
         match wait_result {
             Ok(Ok(status)) => {
                 info!(pid, status = %status, "neocortex exited gracefully");
-            }
+            },
             Ok(Err(e)) => {
                 warn!(pid, error = %e, "error waiting for neocortex");
-            }
+            },
             Err(_elapsed) => {
                 warn!(pid, "graceful shutdown timed out — killing");
                 if let Err(e) = child.kill().await {
@@ -274,7 +274,7 @@ impl NeocortexProcess {
                     ))));
                 }
                 info!(pid, "neocortex killed");
-            }
+            },
         }
 
         self.child = None;
@@ -361,7 +361,7 @@ impl NeocortexProcess {
                         "neocortex is ready"
                     );
                     return Ok(());
-                }
+                },
                 Err(_) => {
                     if Instant::now() >= deadline {
                         return Err(IpcError::Timeout {
@@ -369,7 +369,7 @@ impl NeocortexProcess {
                         });
                     }
                     tokio::time::sleep(poll_interval).await;
-                }
+                },
             }
         }
     }
@@ -406,7 +406,7 @@ mod tests {
         match result {
             Err(IpcError::ProcessDied { reason }) => {
                 assert!(reason.contains("spawn failed"), "got: {reason}");
-            }
+            },
             other => panic!("expected ProcessDied, got: {other:?}"),
         }
     }

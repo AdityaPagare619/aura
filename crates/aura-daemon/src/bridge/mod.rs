@@ -19,6 +19,7 @@
 pub mod router;
 pub mod system_api;
 pub mod telegram_bridge;
+#[cfg(feature = "voice")]
 pub mod voice_bridge;
 
 use async_trait::async_trait;

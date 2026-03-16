@@ -137,35 +137,49 @@ jobs:
           echo "llama.cpp submodule verified OK"
 
       # ----------------------------------------------------------
-      # 8. Cross-compile
+      # 8. Cross-compile: cdylib (libaura_core.so) + neocortex binary
+      # NOTE: We build --lib for aura-daemon to produce the cdylib only.
+      # The [[bin]] target is NOT built here because it would pull in
+      # voice FFI symbols that require native libs not available during
+      # cross-compilation. The daemon binary for Termux is built in the
+      # release workflow with voice feature disabled.
       # ----------------------------------------------------------
-      - name: Build aura-daemon and aura-neocortex for aarch64-linux-android
-        run: cargo build --release -p aura-daemon -p aura-neocortex --target aarch64-linux-android
+      - name: Build aura-daemon cdylib (libaura_core.so)
+        run: cargo build --release --lib -p aura-daemon --target aarch64-linux-android
+
+      - name: Build aura-neocortex binary
+        run: cargo build --release -p aura-neocortex --target aarch64-linux-android
 
       # ----------------------------------------------------------
-      # 9. Strip binary (reduces size significantly for on-device use)
+      # 9. Strip binaries (reduces size significantly for on-device use)
       # ----------------------------------------------------------
       - name: Strip binaries
         run: |
           STRIP="$TOOLCHAIN/llvm-strip"
-          for BIN in aura-daemon aura-neocortex; do
-            BINARY="target/aarch64-linux-android/release/$BIN"
-            if [ -f "$BINARY" ]; then
-              echo "Stripping $BIN: $(du -sh $BINARY | cut -f1) before"
-              $STRIP "$BINARY"
-              echo "Stripped $BIN: $(du -sh $BINARY | cut -f1) after"
-            fi
-          done
+          # Strip the cdylib
+          CDYLIB="target/aarch64-linux-android/release/libaura_core.so"
+          if [ -f "$CDYLIB" ]; then
+            echo "Stripping libaura_core.so: $(du -sh $CDYLIB | cut -f1) before"
+            $STRIP "$CDYLIB"
+            echo "Stripped libaura_core.so: $(du -sh $CDYLIB | cut -f1) after"
+          fi
+          # Strip neocortex binary
+          NEO="target/aarch64-linux-android/release/aura-neocortex"
+          if [ -f "$NEO" ]; then
+            echo "Stripping aura-neocortex: $(du -sh $NEO | cut -f1) before"
+            $STRIP "$NEO"
+            echo "Stripped aura-neocortex: $(du -sh $NEO | cut -f1) after"
+          fi
 
       # ----------------------------------------------------------
-      # 10. Upload artifact
+      # 10. Upload artifacts
       # ----------------------------------------------------------
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: aura-binaries-aarch64-linux-android
           path: |
-            target/aarch64-linux-android/release/aura-daemon
+            target/aarch64-linux-android/release/libaura_core.so
             target/aarch64-linux-android/release/aura-neocortex
           retention-days: 30
           if-no-files-found: error

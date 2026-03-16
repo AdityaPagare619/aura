@@ -45,6 +45,7 @@ pub mod routing;
 pub mod screen;
 pub mod telegram;
 pub mod telemetry;
+#[cfg(feature = "voice")]
 pub mod voice;
 
 // Re-export key types at crate root for convenience.

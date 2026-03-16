@@ -11,10 +11,12 @@
 //! Usage:
 //!   aura-daemon --config <path/to/config.toml>
 
-use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 /// Print usage information.
@@ -51,18 +53,18 @@ impl Args {
                     i += 1;
                     config_path =
                         Some(PathBuf::from(args.get(i).ok_or("--config requires a value")?));
-                }
+                },
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
-                }
+                },
                 "--version" | "-V" => {
                     println!("aura-daemon {}", env!("CARGO_PKG_VERSION"));
                     std::process::exit(0);
-                }
+                },
                 other => {
                     return Err(format!("unknown argument: {other}"));
-                }
+                },
             }
             i += 1;
         }
@@ -91,10 +93,7 @@ fn main() {
         .compact()
         .init();
 
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "aura-daemon starting"
-    );
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "aura-daemon starting");
 
     // Parse CLI args.
     let args = match Args::parse() {
@@ -103,7 +102,7 @@ fn main() {
             tracing::error!(error = %e, "failed to parse arguments");
             print_usage();
             std::process::exit(1);
-        }
+        },
     };
 
     tracing::info!(config = %args.config_path.display(), "loading configuration");
@@ -114,7 +113,7 @@ fn main() {
         Err(e) => {
             tracing::error!(error = %e, path = %args.config_path.display(), "failed to load config");
             std::process::exit(1);
-        }
+        },
     };
 
     // Set up SIGTERM/SIGINT handler for graceful shutdown.
@@ -129,12 +128,12 @@ fn main() {
 
     rt.block_on(async {
         // Phase 1-8: Startup.
-        let (mut state, report) = match aura_daemon::startup(config) {
+        let (state, report) = match aura_daemon::startup(config) {
             Ok(result) => result,
             Err(e) => {
                 tracing::error!(error = %e, "startup failed");
                 std::process::exit(1);
-            }
+            },
         };
 
         tracing::info!(

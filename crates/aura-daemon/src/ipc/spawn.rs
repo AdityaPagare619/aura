@@ -92,7 +92,11 @@ impl NeocortexProcess {
         #[cfg(target_os = "android")]
         let socket_arg = protocol::SOCKET_ADDR;
         #[cfg(not(target_os = "android"))]
-        let socket_arg = format!("{}:{}", protocol::TCP_FALLBACK_ADDR, protocol::TCP_FALLBACK_PORT);
+        let socket_arg = format!(
+            "{}:{}",
+            protocol::TCP_FALLBACK_ADDR,
+            protocol::TCP_FALLBACK_PORT
+        );
 
         let child = Command::new(binary_path)
             .arg("--socket")

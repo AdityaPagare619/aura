@@ -321,9 +321,10 @@ fn capture_tree_jni() -> Result<ScreenTree, ScreenError> {
     let buf = crate::platform::jni_bridge::jni_get_screen_tree()
         .map_err(|_| ScreenError::TreeUnavailable)?;
 
-    // Deserialize with bincode.
-    let raw_nodes: Vec<crate::screen::tree::RawA11yNode> =
-        bincode::deserialize(&buf).map_err(|_| ScreenError::TreeUnavailable)?;
+    // Deserialize with bincode RC3 API.
+    let (raw_nodes, _): (Vec<crate::screen::tree::RawA11yNode>, _) =
+        bincode::serde::decode_from_slice(&buf, bincode::config::standard())
+            .map_err(|_| ScreenError::TreeUnavailable)?;
 
     Ok(crate::screen::tree::parse_tree(&raw_nodes))
 }

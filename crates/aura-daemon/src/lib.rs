@@ -1,3 +1,4 @@
+#![feature(once_cell_try)]
 //! `aura-daemon` — the always-on core of AURA v4.
 //!
 //! Compiles as `cdylib` (`libaura_core.so`) loaded by the Android Kotlin

@@ -178,7 +178,7 @@ mod inner {
 
         match crate::startup(config) {
             Ok((state, report)) => {
-                info!(channels = report.channels_created, "daemon started via JNI");
+                info!("daemon started via JNI; startup took {}ms", report.total_ms);
                 Box::into_raw(Box::new(state)) as jlong
             },
             Err(e) => {
@@ -250,7 +250,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "performTap",
                 "(II)Z",
@@ -272,7 +272,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "performSwipe",
                 "(IIIII)Z",
@@ -297,7 +297,7 @@ mod inner {
             .new_string(text)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "typeText",
                 "(Ljava/lang/String;)Z",
@@ -313,21 +313,21 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getScreenTree", "()[B", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getScreenTree", "()[B", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getScreenTree: {e}")))?;
         check_jni_exception(&mut env, "getScreenTree")?;
 
         let obj = result
             .l()
             .map_err(|e| PlatformError::JniFailed(format!("getScreenTree result: {e}")))?;
-        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let byte_arr: jni::objects::JByteArray = obj.into();
         let len = env
-            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .get_array_length(&byte_arr)
             .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
             as usize;
 
         let mut buf = vec![0i8; len];
-        env.get_byte_array_region(byte_array, 0, &mut buf)
+        env.get_byte_array_region(&byte_arr, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
 
         // SAFETY: i8 → u8 is always valid for raw bytes.
@@ -359,7 +359,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "getForegroundPackage",
                 "()Ljava/lang/String;",
@@ -389,7 +389,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getBatteryLevel", "()I", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getBatteryLevel", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getBatteryLevel: {e}")))?;
         check_jni_exception(&mut env, "getBatteryLevel")?;
         let level = result.i().unwrap_or(50) as u8;
@@ -413,7 +413,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getThermalStatus", "()F", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getThermalStatus", "()F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getThermalStatus: {e}")))?;
         check_jni_exception(&mut env, "getThermalStatus")?;
         let temp = result.f().unwrap_or(35.0);
@@ -434,7 +434,7 @@ mod inner {
         let j_tag = env
             .new_string(tag)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
-        env.call_static_method(
+        env.call_static_method::<&jni::objects::JObject<'_>, _, _>(
             cls.as_ref(),
             "acquireWakelock",
             "(Ljava/lang/String;J)V",
@@ -449,7 +449,7 @@ mod inner {
     pub fn jni_release_wakelock() -> Result<(), PlatformError> {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
-        env.call_static_method(cls.as_ref(), "releaseWakelock", "()V", &[])
+        env.call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "releaseWakelock", "()V", &[])
             .map_err(|e| PlatformError::JniFailed(format!("releaseWakelock: {e}")))?;
         check_jni_exception(&mut env, "releaseWakelock")?;
         Ok(())
@@ -471,7 +471,7 @@ mod inner {
         let j_name = env
             .new_string(name)
             .map_err(|e| PlatformError::JniFailed(format!("new_string name: {e}")))?;
-        env.call_static_method(
+        env.call_static_method::<&jni::objects::JObject<'_>, _, _>(
             cls.as_ref(),
             "registerNotificationChannel",
             "(Ljava/lang/String;Ljava/lang/String;I)V",
@@ -501,7 +501,7 @@ mod inner {
         let j_body = env
             .new_string(body)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
-        env.call_static_method(
+        env.call_static_method::<&jni::objects::JObject<'_>, _, _>(
             cls.as_ref(),
             "postNotification",
             "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V",
@@ -522,7 +522,7 @@ mod inner {
     pub fn jni_cancel_notification(id: i32) -> Result<(), PlatformError> {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
-        env.call_static_method(
+        env.call_static_method::<&jni::objects::JObject<'_>, _, _>(
             cls.as_ref(),
             "cancelNotification",
             "(I)V",
@@ -540,7 +540,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getAvailableMemoryMb", "()J", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getAvailableMemoryMb", "()J", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getAvailableMemoryMb: {e}")))?;
         Ok(result.j().unwrap_or(512))
     }
@@ -574,7 +574,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), method, "()Z", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), method, "()Z", &[])
             .map_err(|e| PlatformError::JniFailed(format!("{method}: {e}")))?;
         // AND-CRIT-007: Clear any pending exception before reading the result.
         check_jni_exception(&mut env, method)?;
@@ -588,7 +588,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getAccelerometer", "()[F", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getAccelerometer", "()[F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getAccelerometer: {e}")))?;
         let arr = result
             .l()
@@ -605,7 +605,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getLightLevel", "()F", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getLightLevel", "()F", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getLightLevel: {e}")))?;
         Ok(result.f().unwrap_or(100.0))
     }
@@ -620,7 +620,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getStepCount", "()I", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getStepCount", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getStepCount: {e}")))?;
         Ok(result.i().unwrap_or(0) as u32)
     }
@@ -632,7 +632,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getNetworkType", "()Ljava/lang/String;", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getNetworkType", "()Ljava/lang/String;", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getNetworkType: {e}")))?;
         let jstr: JString = result
             .l()
@@ -655,7 +655,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "getWifiRssi", "()I", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "getWifiRssi", "()I", &[])
             .map_err(|e| PlatformError::JniFailed(format!("getWifiRssi: {e}")))?;
         Ok(result.i().unwrap_or(-100))
     }
@@ -678,7 +678,7 @@ mod inner {
             .new_string(package)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "launchApp",
                 "(Ljava/lang/String;)Z",
@@ -698,7 +698,7 @@ mod inner {
             .new_string(url)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "openUrl",
                 "(Ljava/lang/String;)Z",
@@ -721,7 +721,7 @@ mod inner {
             .new_string(body)
             .map_err(|e| PlatformError::JniFailed(format!("new_string body: {e}")))?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "sendSms",
                 "(Ljava/lang/String;Ljava/lang/String;)Z",
@@ -741,7 +741,7 @@ mod inner {
             .new_string(label)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "setAlarm",
                 "(IILjava/lang/String;)Z",
@@ -762,7 +762,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "queryCalendar",
                 "(JJ)[B",
@@ -772,13 +772,13 @@ mod inner {
         let obj = result
             .l()
             .map_err(|e| PlatformError::JniFailed(format!("queryCalendar result: {e}")))?;
-        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let byte_arr: jni::objects::JByteArray = obj.into();
         let len = env
-            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .get_array_length(&byte_arr)
             .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
             as usize;
         let mut buf = vec![0i8; len];
-        env.get_byte_array_region(byte_array, 0, &mut buf)
+        env.get_byte_array_region(&byte_arr, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
         Ok(buf.into_iter().map(|b| b as u8).collect())
     }
@@ -793,7 +793,7 @@ mod inner {
             .new_string(query)
             .map_err(|e| PlatformError::JniFailed(format!("new_string: {e}")))?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "queryContacts",
                 "(Ljava/lang/String;)[B",
@@ -803,13 +803,13 @@ mod inner {
         let obj = result
             .l()
             .map_err(|e| PlatformError::JniFailed(format!("queryContacts result: {e}")))?;
-        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let byte_arr: jni::objects::JByteArray = obj.into();
         let len = env
-            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .get_array_length(&byte_arr)
             .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
             as usize;
         let mut buf = vec![0i8; len];
-        env.get_byte_array_region(byte_array, 0, &mut buf)
+        env.get_byte_array_region(&byte_arr, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
         Ok(buf.into_iter().map(|b| b as u8).collect())
     }
@@ -821,18 +821,18 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(cls.as_ref(), "queryNotifications", "()[B", &[])
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(cls.as_ref(), "queryNotifications", "()[B", &[])
             .map_err(|e| PlatformError::JniFailed(format!("queryNotifications: {e}")))?;
         let obj = result
             .l()
             .map_err(|e| PlatformError::JniFailed(format!("queryNotifications result: {e}")))?;
-        let byte_array = obj.into_raw() as jni::sys::jbyteArray;
+        let byte_arr: jni::objects::JByteArray = obj.into();
         let len = env
-            .get_array_length(&unsafe { JObject::from_raw(byte_array as _) })
+            .get_array_length(&byte_arr)
             .map_err(|e| PlatformError::JniFailed(format!("array length: {e}")))?
             as usize;
         let mut buf = vec![0i8; len];
-        env.get_byte_array_region(byte_array, 0, &mut buf)
+        env.get_byte_array_region(&byte_arr, 0, &mut buf)
             .map_err(|e| PlatformError::JniFailed(format!("copy bytes: {e}")))?;
         Ok(buf.into_iter().map(|b| b as u8).collect())
     }
@@ -846,7 +846,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "setBrightness",
                 "(F)Z",
@@ -868,7 +868,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "toggleWifi",
                 "(Z)Z",
@@ -885,7 +885,7 @@ mod inner {
         let mut env = jni_env()?;
         let cls = bridge_class(&mut env)?;
         let result = env
-            .call_static_method(
+            .call_static_method::<&jni::objects::JObject<'_>, _, _>(
                 cls.as_ref(),
                 "getDeviceManufacturer",
                 "()Ljava/lang/String;",

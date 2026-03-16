@@ -195,9 +195,8 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
     // Android: abstract Unix domain socket
     #[cfg(target_os = "android")]
     {
+        use std::os::linux::net::SocketAddrExt;
         use std::os::unix::net::SocketAddr as StdSocketAddr;
-
-        use tokio::net::UnixStream;
 
         let addr = StdSocketAddr::from_abstract_name(b"aura_ipc_v4").map_err(|e| {
             IpcError::Io(std::io::Error::new(
@@ -206,12 +205,16 @@ pub async fn connect_stream() -> Result<IpcStream, IpcError> {
             ))
         })?;
 
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect_addr(&addr))
-            .await
-            .map_err(|_| IpcError::Timeout {
-                context: format!("connect to {SOCKET_ADDR} timed out after {CONNECT_TIMEOUT:?}"),
-            })?
-            .map_err(IpcError::Io)?;
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            let std_stream = std::os::unix::net::UnixStream::connect_addr(&addr)?;
+            std_stream.set_nonblocking(true)?;
+            tokio::net::UnixStream::from_std(std_stream)
+        })
+        .await
+        .map_err(|_| IpcError::Timeout {
+            context: format!("connect to {SOCKET_ADDR} timed out after {CONNECT_TIMEOUT:?}"),
+        })?
+        .map_err(IpcError::Io)?;
 
         Ok(stream)
     }

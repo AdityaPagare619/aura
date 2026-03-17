@@ -94,7 +94,7 @@ use crate::health::{HealthMonitor, HealthStatus};
 use crate::{
     arc::{
         proactive::{ProactiveAction, ProactiveEngine},
-        ArcManager, ContextMode,
+        ArcManager, ContextMode, CronScheduler,
     },
     bridge::{
         router::ResponseRouter,
@@ -172,8 +172,10 @@ const SCREEN_CACHE_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// Screen cache TTL (2 seconds — screens change fast on mobile).
 const SCREEN_CACHE_TTL_MS: u64 = 2_000;
 
-/// Cron tick interval in seconds (fires periodic maintenance jobs).
-const CRON_TICK_INTERVAL_SECS: u64 = 60;
+/// Cron tick interval in seconds — how often we poll the CronScheduler.
+/// Set to 30s so even the fastest jobs (60s medication_check) get polled
+/// with at most ~30s latency.
+const CRON_TICK_INTERVAL_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
 // SandboxConfirmation — pending user-approval for restricted actions
@@ -1346,31 +1348,49 @@ async fn ensure_ipc_connected(neocortex: &mut NeocortexClient) -> bool {
 // Background producer tasks
 // ---------------------------------------------------------------------------
 
-/// Spawn the cron scheduler — emits [`CronTick`] at a fixed interval so that
-/// `handle_cron_tick` runs periodic maintenance (dreaming, memory consolidation,
-/// goal staleness checks, proactive dispatch, etc.).
+/// Spawn the cron scheduler — polls [`CronScheduler::with_defaults()`] at a
+/// fixed interval and emits a [`CronTick`] for each due job so that
+/// `handle_cron_tick` runs the correct maintenance handler.
 fn spawn_cron_scheduler(
     cron_tx: CronTickTx,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut scheduler = CronScheduler::with_defaults();
         let mut ticker = interval(Duration::from_secs(CRON_TICK_INTERVAL_SECS));
         ticker.tick().await; // consume immediate first tick
-        let mut job_counter: u32 = 0;
+
         loop {
             ticker.tick().await;
             if cancel_flag.load(Ordering::Acquire) {
                 break;
             }
-            job_counter = job_counter.wrapping_add(1);
-            let tick = CronTick {
-                job_id: job_counter,
-                job_name: format!("periodic_{job_counter}"),
-                scheduled_at_ms: now_ms(),
-            };
-            if cron_tx.send(tick).await.is_err() {
-                tracing::warn!("cron scheduler: channel closed — exiting");
-                break;
+
+            let now = now_ms() as i64 / 1000; // CronScheduler works in epoch seconds
+
+            // Collect all due jobs based on power tier and context mode.
+            // We use P0Always + Active to let the handler decide skipping.
+            let due = scheduler.tick(now, PowerTier::P0Always, ContextMode::Active);
+
+            for job_id in due {
+                // Look up the human-readable name for dispatch matching.
+                let job_name = scheduler
+                    .jobs()
+                    .iter()
+                    .find(|j| j.id == job_id)
+                    .map(|j| j.name.clone())
+                    .unwrap_or_else(|| format!("{job_id:?}"));
+
+                let tick = CronTick {
+                    job_id: job_id as u8 as u32,
+                    job_name,
+                    scheduled_at_ms: now_ms(),
+                };
+                if cron_tx.send(tick).await.is_err() {
+                    tracing::warn!("cron scheduler: channel closed — exiting");
+                    return;
+                }
+                scheduler.mark_run(job_id, now);
             }
         }
         tracing::info!("cron scheduler exited");

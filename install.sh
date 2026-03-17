@@ -47,7 +47,7 @@ set -euo pipefail
 # CONSTANTS
 # =============================================================================
 
-AURA_VERSION="4.0.0-alpha.3"
+AURA_VERSION="4.0.0-alpha.4"
 AURA_REPO="${AURA_REPO:-https://github.com/AdityaPagare619/aura.git}"
 AURA_STABLE_TAG="v4.0.0-alpha.3"
 AURA_NIGHTLY_TAG="main"
@@ -55,31 +55,31 @@ AURA_NIGHTLY_TAG="main"
 # ── Model registry ────────────────────────────────────────────────────────────
 # Tier selection: RAM < 4 GB → 1.5b, 4–6 GB → 4b, 6–10 GB → 8b, ≥10 GB → 14b
 
-MODEL_QWEN3_1_5B_NAME="qwen3-1.7b-q4_k_m.gguf"
-MODEL_QWEN3_1_5B_URL="https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/qwen3-1.7b-q4_k_m.gguf"
+MODEL_QWEN3_1_5B_NAME="Qwen3-1.7B-Q8_0.gguf"
+MODEL_QWEN3_1_5B_URL="https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf"
 MODEL_QWEN3_1_5B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_1b"
 MODEL_QWEN3_1_5B_SIZE_GB=2
-MODEL_QWEN3_1_5B_RAM_MIN_GB=2
-MODEL_QWEN3_1_5B_LABEL="Qwen3-1.7B Q4_K_M (brainstem / <4 GB RAM)"
+MODEL_QWEN3_1_5B_RAM_MIN_GB=3
+MODEL_QWEN3_1_5B_LABEL="Qwen3-1.7B Q8_0 (brainstem / <4 GB RAM)"
 
-MODEL_QWEN3_4B_NAME="qwen3-4b-q4_k_m.gguf"
-MODEL_QWEN3_4B_URL="https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/qwen3-4b-q4_k_m.gguf"
+MODEL_QWEN3_4B_NAME="Qwen3-4B-Q4_K_M.gguf"
+MODEL_QWEN3_4B_URL="https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
 MODEL_QWEN3_4B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_4b"
 MODEL_QWEN3_4B_SIZE_GB=3
 MODEL_QWEN3_4B_RAM_MIN_GB=4
 MODEL_QWEN3_4B_LABEL="Qwen3-4B Q4_K_M (standard / 4–6 GB RAM)"
 
-MODEL_QWEN3_8B_NAME="qwen3-8b-q4_k_m.gguf"
-MODEL_QWEN3_8B_URL="https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-q4_k_m.gguf"
+MODEL_QWEN3_8B_NAME="Qwen3-8B-Q4_K_M.gguf"
+MODEL_QWEN3_8B_URL="https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
 MODEL_QWEN3_8B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_8b"
 MODEL_QWEN3_8B_SIZE_GB=5
 MODEL_QWEN3_8B_RAM_MIN_GB=6
 MODEL_QWEN3_8B_LABEL="Qwen3-8B Q4_K_M (full / 6–10 GB RAM)"
 
-MODEL_QWEN3_14B_NAME="qwen3-14b-q4_k_m.gguf"
-MODEL_QWEN3_14B_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/qwen3-14b-q4_k_m.gguf"
+MODEL_QWEN3_14B_NAME="Qwen3-14B-Q4_K_M.gguf"
+MODEL_QWEN3_14B_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf"
 MODEL_QWEN3_14B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_14b"
-MODEL_QWEN3_14B_SIZE_GB=10
+MODEL_QWEN3_14B_SIZE_GB=9
 MODEL_QWEN3_14B_RAM_MIN_GB=10
 MODEL_QWEN3_14B_LABEL="Qwen3-14B Q4_K_M (extended / ≥10 GB RAM)"
 
@@ -405,10 +405,10 @@ phase_space_budget() {
     echo -e "  ${DIM}──────────────────────────────────────────────────────────────────${RESET}"
     printf "  ${BOLD}%-18s %-12s %-12s %-22s${RESET}\n" "Model" "Model Size" "Min RAM" "Recommended For"
     echo -e "  ${DIM}──────────────────────────────────────────────────────────────────${RESET}"
-    printf "  %-18s %-12s %-12s %-22s\n" "qwen3-1.5b"  "~2 GB"   "2 GB"    "Very low RAM devices"
-    printf "  %-18s %-12s %-12s %-22s\n" "qwen3-4b"   "~3 GB"   "4 GB"    "Budget / mid-range"
-    printf "  %-18s %-12s %-12s %-22s\n" "qwen3-8b"   "~5 GB"   "6 GB"    "Flagship phones"
-    printf "  %-18s %-12s %-12s %-22s\n" "qwen3-14b"  "~10 GB"  "10 GB"   "Tablets / high-RAM"
+    printf "  %-18s %-12s %-12s %-22s\n" "Qwen3-1.7B Q8"  "~2 GB"   "3 GB"    "Very low RAM devices"
+    printf "  %-18s %-12s %-12s %-22s\n" "Qwen3-4B Q4_K_M" "~3 GB"   "4 GB"    "Budget / mid-range"
+    printf "  %-18s %-12s %-12s %-22s\n" "Qwen3-8B Q4_K_M" "~5 GB"   "6 GB"    "Flagship phones"
+    printf "  %-18s %-12s %-12s %-22s\n" "Qwen3-14B Q4_K_M" "~9 GB"  "10 GB"   "Tablets / high-RAM"
     echo -e "  ${DIM}──────────────────────────────────────────────────────────────────${RESET}"
     echo ""
     echo -e "  ${DIM}Additional: ~4 GB for Rust toolchain + build (purged after build unless --keep-build-tools)${RESET}"
@@ -895,6 +895,7 @@ phase_model() {
     log_info "This will take a while. Download is resumable — re-run if interrupted."
 
     local curl_args=(
+        --fail
         --location
         --continue-at -
         --progress-bar
@@ -920,6 +921,33 @@ phase_model() {
         fi
         attempt=$(( attempt + 1 ))
     done
+
+    # ── Post-download GGUF validation ──────────────────────────────────────
+    if [ ! -f "$model_path" ]; then
+        die "Model file missing after download: $model_path"
+    fi
+
+    local file_size
+    file_size=$(stat -c%s "$model_path" 2>/dev/null || stat -f%z "$model_path" 2>/dev/null || echo 0)
+    if [ "$file_size" -lt 104857600 ]; then
+        log_info "Downloaded file is only $(( file_size / 1024 )) KB — likely an error page, not a model."
+        rm -f "$model_path"
+        die "Download produced a tiny file (<100 MB). The URL may have returned a 404 error page." \
+            "Verify model URL: $model_url" \
+            "If using a private/gated model, set HF_TOKEN=your_token and retry."
+    fi
+
+    # Verify GGUF magic bytes (first 4 bytes = 0x47475546 = "GGUF")
+    local magic
+    magic=$(head -c4 "$model_path" | od -A n -t x1 | tr -d ' \n')
+    if [ "$magic" != "47475546" ]; then
+        log_info "File does not start with GGUF magic bytes (got: $magic)"
+        rm -f "$model_path"
+        die "Downloaded file is not a valid GGUF model." \
+            "Expected GGUF header, got garbage — likely an HTML error page." \
+            "Verify model URL: $model_url"
+    fi
+    log_info "GGUF magic bytes verified ✓"
 
     log_info "Verifying checksum..."
     if ! verify_checksum "$model_path" "$model_sha256"; then

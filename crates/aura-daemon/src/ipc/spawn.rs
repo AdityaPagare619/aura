@@ -101,6 +101,11 @@ pub struct NeocortexProcess {
 
     /// Maximum allowed restarts before [`restart`](Self::restart) refuses.
     max_restarts: u32,
+
+    /// Optional path to the directory containing GGUF model files.
+    /// Passed as `--model-dir` to the neocortex binary if present.
+    /// Respects `AURA_MODEL_DIR` env var override from the call site.
+    model_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for NeocortexProcess {
@@ -127,7 +132,7 @@ impl NeocortexProcess {
     /// - [`IpcError::Io`] if the binary cannot be found or executed.
     /// - [`IpcError::ProcessDied`] if the process exits immediately.
     #[instrument(name = "neocortex_spawn", skip_all, fields(path = %binary_path.display()))]
-    pub async fn spawn(binary_path: &Path) -> Result<Self, IpcError> {
+    pub async fn spawn(binary_path: &Path, model_dir: Option<&Path>) -> Result<Self, IpcError> {
         info!(path = %binary_path.display(), "spawning neocortex process");
 
         // Pass the platform-appropriate socket address so the neocortex server
@@ -144,19 +149,23 @@ impl NeocortexProcess {
             protocol::TCP_FALLBACK_PORT
         );
 
-        let child = Command::new(binary_path)
-            .arg("--socket")
+        let mut cmd = Command::new(binary_path);
+        cmd.arg("--socket")
             .arg(socket_arg)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                error!(error = %e, path = %binary_path.display(), "failed to spawn neocortex");
-                IpcError::ProcessDied {
-                    reason: format!("spawn failed: {e}"),
-                }
-            })?;
+            .kill_on_drop(true);
+
+        if let Some(dir) = model_dir {
+            cmd.arg("--model-dir").arg(dir.to_str().unwrap_or("."));
+        }
+
+        let child = cmd.spawn().map_err(|e| {
+            error!(error = %e, path = %binary_path.display(), "failed to spawn neocortex");
+            IpcError::ProcessDied {
+                reason: format!("spawn failed: {e}"),
+            }
+        })?;
 
         let pid = child.id().unwrap_or(0);
         info!(pid, "neocortex process spawned");
@@ -167,6 +176,7 @@ impl NeocortexProcess {
             started_at: Some(Instant::now()),
             restart_count: 0,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            model_dir: model_dir.map(|p| p.to_path_buf()),
         })
     }
 
@@ -176,17 +186,17 @@ impl NeocortexProcess {
     /// 1. `AURA_NEOCORTEX_BIN` env var
     /// 2. `$PREFIX/bin/aura-neocortex` (Termux)
     /// 3. Platform default (Android APK path or `aura-neocortex` on PATH)
-    pub async fn spawn_auto() -> Result<Self, IpcError> {
+    pub async fn spawn_auto(model_dir: Option<&Path>) -> Result<Self, IpcError> {
         let path = resolve_neocortex_path();
-        Self::spawn(&path).await
+        Self::spawn(&path, model_dir).await
     }
 
     /// Create a `NeocortexProcess` that uses the default Android APK path.
     ///
     /// Only available on Android targets.
     #[cfg(target_os = "android")]
-    pub async fn spawn_android() -> Result<Self, IpcError> {
-        Self::spawn(Path::new(ANDROID_NEOCORTEX_PATH)).await
+    pub async fn spawn_android(model_dir: Option<&Path>) -> Result<Self, IpcError> {
+        Self::spawn(Path::new(ANDROID_NEOCORTEX_PATH), model_dir).await
     }
 
     /// Whether the child process is believed to be running.
@@ -316,7 +326,7 @@ impl NeocortexProcess {
         tokio::time::sleep(RESTART_DELAY).await;
 
         let binary_path = self.binary_path.clone();
-        let mut new = Self::spawn(&binary_path).await?;
+        let mut new = Self::spawn(&binary_path, self.model_dir.as_deref()).await?;
 
         self.child = new.child.take();
         self.started_at = new.started_at.take();

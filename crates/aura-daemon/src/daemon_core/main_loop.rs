@@ -111,7 +111,7 @@ use crate::{
         proactive_dispatcher::{
             arc_trigger_to_ipc, should_dispatch, trigger_to_ipc, AlertDirection, ProactiveTrigger,
         },
-        react,
+        react::{self, ReactEngine},
         startup::DaemonState,
     },
     execution::{
@@ -130,7 +130,7 @@ use crate::{
         tracker::GoalTracker,
     },
     identity::{affective::MoodEvent, IdentityEngine},
-    ipc::NeocortexClient,
+    ipc::{NeocortexClient, NeocortexProcess},
     memory::{consolidate, AuraMemory, ConsolidationLevel},
     outcome_bus::OutcomeBus,
     persistence::{CriticalVault, DataTier},
@@ -148,8 +148,8 @@ use crate::{
     },
     reaction::ReactionDetector,
     routing::{classifier::RouteClassifier, system1::System1, system2::System2},
-    screen::{detect_app_state, extract_screen_summary, AppState, ScreenCache},
-    telegram::TelegramConfig,
+    screen::{actions::AndroidScreenProvider, detect_app_state, extract_screen_summary, AppState, ScreenCache},
+    telegram::{queue::MessageQueue, reqwest_backend::ReqwestHttpBackend, TelegramConfig, TelegramEngine},
 };
 #[cfg(feature = "voice")]
 use crate::{bridge::voice_bridge::VoiceBridge, voice::VoiceEngine};
@@ -346,6 +346,18 @@ struct LoopSubsystems {
     /// Initialised to the daemon start time and updated on every
     /// `user_command_rx` message.
     last_interaction_ms: u64,
+
+    /// Neocortex child process handle — manages lifecycle of the inference binary.
+    /// `None` if spawn failed or not yet attempted. The daemon will retry spawning
+    /// periodically via `ensure_neocortex_running()`.
+    neocortex_process: Option<NeocortexProcess>,
+
+    /// ReactEngine — the real action executor.
+    ///
+    /// Uses `deny_by_default` policy gate and real `AndroidScreenProvider`.
+    /// All 6 `execute_task` call sites route through this engine instead of the
+    /// standalone free function which always fails in production (standalone mode).
+    react_engine: ReactEngine,
 }
 
 impl LoopSubsystems {
@@ -526,6 +538,8 @@ impl LoopSubsystems {
             boundary_reasoner: BoundaryReasoner::new(),
             recent_denial_count: 0,
             last_interaction_ms: now_ms(),
+            neocortex_process: None, // Spawned asynchronously after loop starts
+            react_engine: ReactEngine::with_defaults(Box::new(AndroidScreenProvider::new())),
         }
     }
 }
@@ -1500,6 +1514,53 @@ pub async fn run(mut state: DaemonState) {
     state.subsystems.response_router = Some(router_handle);
     tracing::info!("response router spawned");
 
+    // ─── Spawn Neocortex Process ───────────────────────────────────────────────
+    // The neocortex is the LLM inference backend. Without it, all System2 (AI)
+    // paths are dead. We spawn it early so the IPC socket is ready when bridges
+    // start sending requests.
+    //
+    // Model directory resolution order (developer freedom):
+    //   1. AURA_MODEL_DIR env var (power-user / CI override)
+    //   2. Derived from db_path: $HOME/.local/share/aura/models/
+    let neocortex_model_dir = std::env::var("AURA_MODEL_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::path::Path::new(&state.config.sqlite.db_path)
+                .parent()  // .../aura/db/
+                .and_then(|p| p.parent())  // .../aura/
+                .map(|p| p.join("models"))
+        });
+    tracing::debug!(
+        model_dir = ?neocortex_model_dir,
+        "resolved neocortex model directory"
+    );
+
+    let neocortex_process = match NeocortexProcess::spawn_auto(neocortex_model_dir.as_deref()).await {
+        Ok(mut proc) => {
+            // Wait for the process to start listening before proceeding.
+            match proc.wait_ready().await {
+                Ok(()) => {
+                    tracing::info!("neocortex process spawned and ready");
+                    Some(proc)
+                },
+                Err(e) => {
+                    tracing::error!(error = %e, "neocortex spawned but failed readiness check — running without LLM");
+                    // Process may still be starting; keep the handle for retry.
+                    Some(proc)
+                },
+            }
+        },
+        Err(e) => {
+            tracing::error!(error = %e, "failed to spawn neocortex process — running without LLM");
+            tracing::warn!(
+                "AURA will operate in degraded mode: System1 cache only, no AI reasoning. \
+                 Ensure aura-neocortex binary is installed at $PREFIX/bin/aura-neocortex"
+            );
+            None
+        },
+    };
+
     // Spawn voice bridge (non-critical — runs in degraded mode if init fails).
     #[cfg(feature = "voice")]
     if let Some(voice_rx) = voice_bridge_rx {
@@ -1510,7 +1571,7 @@ pub async fn run(mut state: DaemonState) {
         state.subsystems.voice_bridge = Some(handle);
     }
 
-    // Spawn telegram bridge (non-critical — runs in degraded mode if init fails).
+    // Spawn telegram bridge + engine (non-critical — runs in degraded mode if init fails).
     if let Some(telegram_rx) = telegram_bridge_rx {
         let tg_cfg = &state.config.telegram;
         let telegram_config = TelegramConfig {
@@ -1518,7 +1579,65 @@ pub async fn run(mut state: DaemonState) {
             allowed_chat_ids: tg_cfg.allowed_chat_ids.clone(),
             ..TelegramConfig::default()
         };
-        let telegram_bridge = TelegramBridge::new(telegram_config, state.cancel_flag.clone(), None);
+
+        // ── GAP-T2 FIX: Wire MessageQueue + TelegramEngine ──
+        //
+        // TelegramBridge enqueues outbound responses into a SQLite queue.
+        // TelegramEngine flushes that queue AND long-polls for inbound messages.
+        // Both are required for bidirectional Telegram communication.
+        let tg_data_dir = std::path::Path::new(&state.config.sqlite.db_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let queue_db_path = tg_data_dir.join("telegram_queue.db");
+
+        // Connection #1 — MessageQueue for TelegramBridge (enqueue side).
+        let telegram_queue = match rusqlite::Connection::open(&queue_db_path)
+            .map_err(|e| format!("telegram queue DB open: {e}"))
+            .and_then(|conn| MessageQueue::open(conn).map_err(|e| format!("queue init: {e}")))
+        {
+            Ok(q) => Some(q),
+            Err(e) => {
+                tracing::error!(error = %e, "failed to open telegram message queue — responses will be logged only");
+                None
+            }
+        };
+
+        // Connection #2 — TelegramEngine (polls inbound + flushes outbound).
+        if !tg_cfg.bot_token.is_empty() {
+            match rusqlite::Connection::open(&queue_db_path) {
+                Ok(engine_conn) => {
+                    let http = ReqwestHttpBackend::new(&tg_cfg.bot_token);
+                    match TelegramEngine::new(
+                        telegram_config.clone(),
+                        engine_conn,
+                        Box::new(http),
+                        now_ms(),
+                        state.cancel_flag.clone(),
+                    ) {
+                        Ok(mut engine) => {
+                            engine.set_user_command_tx(bridge_cmd_tx.clone());
+                            engine.set_aura_config(state.config.clone());
+                            tokio::spawn(async move {
+                                if let Err(e) = engine.run().await {
+                                    tracing::error!(error = %e, "telegram engine exited with error");
+                                }
+                            });
+                            tracing::info!("telegram engine spawned (polling + queue flush)");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "failed to create telegram engine — no inbound/outbound");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to open engine DB connection for telegram");
+                }
+            }
+        } else {
+            tracing::warn!("telegram bot_token is empty — engine not started");
+        }
+
+        let telegram_bridge = TelegramBridge::new(telegram_config, state.cancel_flag.clone(), telegram_queue);
         let handle = spawn_bridge(
             Box::new(telegram_bridge),
             bridge_cmd_tx.clone(),
@@ -1530,6 +1649,7 @@ pub async fn run(mut state: DaemonState) {
 
     // Drop the bridge_cmd_tx clone we hold so the channel closes when
     // all bridges exit (each bridge holds its own clone via spawn_bridge).
+    // NOTE: TelegramEngine already holds its own clone via set_user_command_tx().
     drop(bridge_cmd_tx);
 
     // Build subsystems.
@@ -1556,6 +1676,17 @@ pub async fn run(mut state: DaemonState) {
         std::mem::replace(&mut state.subsystems.memory, placeholder)
     };
     let mut subs = LoopSubsystems::new(response_tx, data_dir, loop_memory);
+
+    // Assign the neocortex process handle spawned earlier.
+    subs.neocortex_process = neocortex_process;
+
+    // If neocortex spawned successfully, try to connect the IPC client.
+    if subs.neocortex_process.is_some() {
+        match subs.neocortex.reconnect().await {
+            Ok(()) => tracing::info!("IPC client connected to neocortex"),
+            Err(e) => tracing::warn!(error = %e, "IPC client failed to connect — will retry on demand"),
+        }
+    }
 
     // ── FIX 1: Provision vault encryption key before any vault operations ──
     //
@@ -2479,17 +2610,14 @@ async fn handle_user_command(
                                         // the user's explicit approval.
                                         BoundaryGateResult::Allow
                                         | BoundaryGateResult::NeedConfirmation { .. } => {
-                                            let mut policy_ctx = react::PolicyContext {
-                                                gate: &mut subs.policy_gate,
-                                                audit: &mut subs.audit_log,
-                                            };
-                                            let (outcome, session) = react::execute_task(
-                                                conf.task_summary.clone(),
-                                                conf.priority,
-                                                None,
-                                                Some(&mut policy_ctx),
-                                            )
-                                            .await;
+                                            let (outcome, session) = subs
+                                                .react_engine
+                                                .execute_task(
+                                                    conf.task_summary.clone(),
+                                                    conf.priority,
+                                                    None,
+                                                )
+                                                .await;
 
                                             // Update goal status based on execution outcome.
                                             if let Some(goal) = state
@@ -3384,17 +3512,14 @@ async fn handle_user_command(
                         }
                     },
                     BoundaryGateResult::Allow => {
-                        let mut policy_ctx = react::PolicyContext {
-                            gate: &mut subs.policy_gate,
-                            audit: &mut subs.audit_log,
-                        };
-                        let (outcome, session) = react::execute_task(
-                            description.clone(),
-                            clamped_priority,
-                            None,
-                            Some(&mut policy_ctx),
-                        )
-                        .await;
+                        let (outcome, session) = subs
+                            .react_engine
+                            .execute_task(
+                                description.clone(),
+                                clamped_priority,
+                                None,
+                            )
+                            .await;
 
                         // Update goal status.
                         if let Some(goal) =
@@ -4077,17 +4202,14 @@ async fn dispatch_system1(
                     ));
                 },
                 BoundaryGateResult::Allow => {
-                    let mut policy_ctx = react::PolicyContext {
-                        gate: &mut subs.policy_gate,
-                        audit: &mut subs.audit_log,
-                    };
-                    let (outcome, _session) = react::execute_task(
-                        scored.parsed.content.clone(),
-                        5, // default priority
-                        Some(plan.clone()),
-                        Some(&mut policy_ctx),
-                    )
-                    .await;
+                    let (outcome, _session) = subs
+                        .react_engine
+                        .execute_task(
+                            scored.parsed.content.clone(),
+                            5, // default priority
+                            Some(plan.clone()),
+                        )
+                        .await;
 
                     match outcome {
                         react::TaskOutcome::Success { .. } => {
@@ -4789,17 +4911,14 @@ async fn handle_ipc_inbound(
                         flush_outcome_bus(subs).await;
                     },
                     BoundaryGateResult::Allow => {
-                        let mut policy_ctx = react::PolicyContext {
-                            gate: &mut subs.policy_gate,
-                            audit: &mut subs.audit_log,
-                        };
-                        let (outcome, session) = react::execute_task(
-                            plan.goal_description.clone(),
-                            5, // default priority for neocortex plans
-                            Some(plan),
-                            Some(&mut policy_ctx),
-                        )
-                        .await;
+                        let (outcome, session) = subs
+                            .react_engine
+                            .execute_task(
+                                plan.goal_description.clone(),
+                                5, // default priority for neocortex plans
+                                Some(plan),
+                            )
+                            .await;
 
                         tracing::info!(
                             session_id = session.session_id,
@@ -5240,17 +5359,14 @@ async fn handle_ipc_inbound(
                         flush_outcome_bus(subs).await;
                     },
                     BoundaryGateResult::Allow => {
-                        let mut policy_ctx = react::PolicyContext {
-                            gate: &mut subs.policy_gate,
-                            audit: &mut subs.audit_log,
-                        };
-                        let (outcome, _session) = react::execute_task(
-                            "composed script".to_string(),
-                            5,
-                            Some(plan),
-                            Some(&mut policy_ctx),
-                        )
-                        .await;
+                        let (outcome, _session) = subs
+                            .react_engine
+                            .execute_task(
+                                "composed script".to_string(),
+                                5,
+                                Some(plan),
+                            )
+                            .await;
                         tracing::debug!(?outcome, "composed script execution complete");
                     }, // end BoundaryGateResult::Allow arm
                 } // end match boundary_result (Site 5: ComposedScript)
@@ -6313,17 +6429,14 @@ async fn cron_handle_proactive(
                                         flush_outcome_bus(subs).await;
                                     },
                                     BoundaryGateResult::Allow => {
-                                        let mut policy_ctx = react::PolicyContext {
-                                            gate: &mut subs.policy_gate,
-                                            audit: &mut subs.audit_log,
-                                        };
-                                        let (_outcome, _session) = react::execute_task(
-                                            desc,
-                                            7,
-                                            None,
-                                            Some(&mut policy_ctx),
-                                        )
-                                        .await;
+                                        let (_outcome, _session) = subs
+                                            .react_engine
+                                            .execute_task(
+                                                desc,
+                                                7,
+                                                None,
+                                            )
+                                            .await;
                                     },
                                 }
                             }

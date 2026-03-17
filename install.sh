@@ -47,9 +47,9 @@ set -euo pipefail
 # CONSTANTS
 # =============================================================================
 
-AURA_VERSION="4.0.0-alpha.2"
+AURA_VERSION="4.0.0-alpha.3"
 AURA_REPO="${AURA_REPO:-https://github.com/AdityaPagare619/aura.git}"
-AURA_STABLE_TAG="v4.0.0-alpha.2"
+AURA_STABLE_TAG="v4.0.0-alpha.3"
 AURA_NIGHTLY_TAG="main"
 
 # ── Model registry ────────────────────────────────────────────────────────────

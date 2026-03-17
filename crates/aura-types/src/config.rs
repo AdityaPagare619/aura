@@ -55,7 +55,7 @@ pub struct DaemonConfig {
 }
 
 fn default_daemon_version() -> String {
-    "4.0.0-alpha.2".to_string()
+    "4.0.0-alpha.3".to_string()
 }
 fn default_daemon_log_level() -> String {
     "info".to_string()

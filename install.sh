@@ -47,9 +47,9 @@ set -euo pipefail
 # CONSTANTS
 # =============================================================================
 
-AURA_VERSION="4.0.0-alpha.1"
+AURA_VERSION="4.0.0-alpha.2"
 AURA_REPO="${AURA_REPO:-https://github.com/AdityaPagare619/aura.git}"
-AURA_STABLE_TAG="v4.0.0-alpha.1"
+AURA_STABLE_TAG="v4.0.0-alpha.2"
 AURA_NIGHTLY_TAG="main"
 
 # ── Model registry ────────────────────────────────────────────────────────────
@@ -1159,7 +1159,7 @@ phase_config() {
 # =============================================================================
 
 [daemon]
-socket_path             = "${AURA_SOCK}"
+data_dir                = "${AURA_DATA_DIR}"
 log_level               = "info"
 checkpoint_interval_s   = 300
 rss_warning_mb          = 28
@@ -1170,24 +1170,23 @@ rss_ceiling_mb          = 30
 # =============================================================================
 
 [telegram]
+enabled         = true
 bot_token       = "${COLLECTED_BOT_TOKEN}"
-owner_user_id   = ${COLLECTED_OWNER_ID}
-# Additional user IDs allowed to interact (leave empty to restrict to owner only)
-allowed_user_ids = [${COLLECTED_OWNER_ID}]
-# webhook_mode: false = long-polling (Termux), true = webhook (server)
-webhook_mode    = false
+allowed_chat_ids = [${COLLECTED_OWNER_ID}]
+poll_interval_ms = 2000
 
 # =============================================================================
 #  § 3. Neocortex — LLM Inference
 # =============================================================================
 
 [neocortex]
-model_dir          = "${AURA_MODELS_DIR}"
-model_file         = "${model_name}"
-default_n_ctx      = ${n_ctx}
-n_threads          = ${n_threads}
-max_memory_mb      = 2048
-inference_timeout_ms = 60000
+model_dir              = "${AURA_MODELS_DIR}"
+default_model_name     = "${model_name}"
+default_model_path     = "${model_path}"
+default_n_ctx          = ${n_ctx}
+n_threads              = ${n_threads}
+max_memory_mb          = 2048
+inference_timeout_ms   = 60000
 
 # =============================================================================
 #  § 4. LLaMA.cpp Parameters
@@ -1366,7 +1365,9 @@ multi_language_enabled     = false
 debug_mode                 = false
 TOML_EOF
 
-    log_step "Configuration written: $AURA_CONFIG_FILE"
+    # Restrict config file permissions — contains bot token in plaintext.
+    chmod 600 "$AURA_CONFIG_FILE"
+    log_step "Configuration written: $AURA_CONFIG_FILE (mode 600)"
 }
 
 # =============================================================================

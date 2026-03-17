@@ -1492,7 +1492,12 @@ pub async fn run(mut state: DaemonState) {
 
     // Spawn telegram bridge (non-critical — runs in degraded mode if init fails).
     if let Some(telegram_rx) = telegram_bridge_rx {
-        let telegram_config = TelegramConfig::default();
+        let tg_cfg = &state.config.telegram;
+        let telegram_config = TelegramConfig {
+            bot_token: tg_cfg.bot_token.clone(),
+            allowed_chat_ids: tg_cfg.allowed_chat_ids.clone(),
+            ..TelegramConfig::default()
+        };
         let telegram_bridge = TelegramBridge::new(telegram_config, state.cancel_flag.clone(), None);
         let handle = spawn_bridge(
             Box::new(telegram_bridge),

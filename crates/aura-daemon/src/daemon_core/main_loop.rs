@@ -4380,7 +4380,9 @@ async fn dispatch_system1(
                                 subs.system1.cache_plan(text, plan, 1.0, now_ms());
                                 tracing::debug!("System1 plan cached after success");
                             },
-                            react::TaskOutcome::Failed { reason, total_ms, .. } => {
+                            react::TaskOutcome::Failed {
+                                reason, total_ms, ..
+                            } => {
                                 tracing::warn!(
                                     reason = %reason,
                                     "System1 plan execution failed (Site 3)"

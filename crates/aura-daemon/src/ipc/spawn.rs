@@ -411,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_nonexistent_binary_returns_error() {
-        let result = NeocortexProcess::spawn(Path::new("/nonexistent/binary")).await;
+        let result = NeocortexProcess::spawn(Path::new("/nonexistent/binary"), None).await;
         assert!(result.is_err());
         match result {
             Err(IpcError::ProcessDied { reason }) => {
@@ -430,6 +430,7 @@ mod tests {
             started_at: None,
             restart_count: 0,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            model_dir: None,
         };
         let result = proc.shutdown().await;
         assert!(result.is_ok());
@@ -443,6 +444,7 @@ mod tests {
             started_at: None,
             restart_count: 0,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            model_dir: None,
         };
         assert!(!proc.is_running());
     }
@@ -455,6 +457,7 @@ mod tests {
             started_at: None,
             restart_count: 0,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            model_dir: None,
         };
         assert_eq!(proc.uptime_ms(), 0);
     }
@@ -467,6 +470,7 @@ mod tests {
             started_at: Some(Instant::now()),
             restart_count: 0,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            model_dir: None,
         };
         // Should be very small but non-negative.
         assert!(proc.uptime_ms() < 1000);
@@ -480,6 +484,7 @@ mod tests {
             started_at: None,
             restart_count: 5,
             max_restarts: 5,
+            model_dir: None,
         };
         let result = proc.restart().await;
         assert!(matches!(
@@ -496,6 +501,7 @@ mod tests {
             started_at: None,
             restart_count: 0,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            model_dir: None,
         };
         proc.set_max_restarts(10);
         assert_eq!(proc.max_restarts, 10);
@@ -509,6 +515,7 @@ mod tests {
             started_at: None,
             restart_count: 2,
             max_restarts: 5,
+            model_dir: None,
         };
         let dbg = format!("{proc:?}");
         assert!(dbg.contains("NeocortexProcess"));

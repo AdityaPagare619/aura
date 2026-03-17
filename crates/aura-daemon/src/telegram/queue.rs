@@ -5,6 +5,8 @@
 //! dequeued in priority order and sent. Messages with the same `coalesce_key`
 //! are merged (newer replaces older) to avoid spamming status updates.
 
+use std::sync::Mutex;
+
 use aura_types::errors::AuraError;
 use bincode::config::standard as bincode_config;
 use rusqlite::{params, Connection};
@@ -99,10 +101,14 @@ pub struct QueuedMessage {
 
 /// Offline message queue backed by SQLite.
 ///
+/// The inner connection is wrapped in a [`Mutex`] so that `MessageQueue` is
+/// `Send + Sync`, allowing it to live inside types that are spawned onto
+/// the Tokio runtime (e.g. `TelegramEngine`, `TelegramBridge`).
+///
 /// All SQLite operations are synchronous. Callers should wrap them in
 /// `tokio::task::spawn_blocking` when called from async contexts.
 pub struct MessageQueue {
-    db: Connection,
+    db: Mutex<Connection>,
 }
 
 impl MessageQueue {
@@ -136,7 +142,9 @@ impl MessageQueue {
         })?;
 
         debug!("telegram message queue initialized");
-        Ok(Self { db })
+        Ok(Self {
+            db: Mutex::new(db),
+        })
     }
 
     /// Enqueue a new message. If a `coalesce_key` is set and a pending message
@@ -161,34 +169,33 @@ impl MessageQueue {
             })?;
 
         let now = unix_timestamp();
+        let db = self.db.lock().expect("queue mutex poisoned");
 
         // Coalesce: delete existing pending messages with the same key.
         if let Some(key) = coalesce_key {
-            self.db
-                .execute(
-                    "DELETE FROM telegram_queue WHERE coalesce_key = ?1 AND status = 'pending'",
-                    params![key],
-                )
-                .map_err(db_err)?;
-        }
-
-        self.db
-            .execute(
-                "INSERT INTO telegram_queue (chat_id, content, priority, created_at, ttl_seconds, max_retries, coalesce_key, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
-                params![
-                    chat_id,
-                    content_bytes,
-                    priority as i32,
-                    now as i64,
-                    ttl_seconds as i32,
-                    max_retries as i32,
-                    coalesce_key,
-                ],
+            db.execute(
+                "DELETE FROM telegram_queue WHERE coalesce_key = ?1 AND status = 'pending'",
+                params![key],
             )
             .map_err(db_err)?;
+        }
 
-        Ok(self.db.last_insert_rowid())
+        db.execute(
+            "INSERT INTO telegram_queue (chat_id, content, priority, created_at, ttl_seconds, max_retries, coalesce_key, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
+            params![
+                chat_id,
+                content_bytes,
+                priority as i32,
+                now as i64,
+                ttl_seconds as i32,
+                max_retries as i32,
+                coalesce_key,
+            ],
+        )
+        .map_err(db_err)?;
+
+        Ok(db.last_insert_rowid())
     }
 
     /// Dequeue a batch of pending messages, ordered by priority (highest first),
@@ -197,30 +204,49 @@ impl MessageQueue {
     /// Marks dequeued messages as `sending`.
     #[instrument(skip(self))]
     pub fn dequeue_batch(&self, limit: usize) -> Result<Vec<QueuedMessage>, AuraError> {
-        let mut stmt = self
-            .db
-            .prepare(
-                "SELECT id, chat_id, content, priority, created_at, ttl_seconds, retry_count, max_retries, coalesce_key
+        let db = self.db.lock().expect("queue mutex poisoned");
+        let mut messages = Vec::new();
+        let mut ids_to_mark = Vec::new();
+
+        {
+            let mut stmt = db
+                .prepare(
+                    "SELECT id, chat_id, content, priority, created_at, ttl_seconds, retry_count, max_retries, coalesce_key
                  FROM telegram_queue
                  WHERE status = 'pending'
                  ORDER BY priority DESC, created_at ASC
                  LIMIT ?1",
-            )
-            .map_err(db_err)?;
+                )
+                .map_err(db_err)?;
 
-        let rows = stmt
-            .query_map(params![limit as i64], |row| {
-                let id: i64 = row.get(0)?;
-                let chat_id: i64 = row.get(1)?;
-                let content_bytes: Vec<u8> = row.get(2)?;
-                let priority: i32 = row.get(3)?;
-                let created_at: i64 = row.get(4)?;
-                let ttl_seconds: i32 = row.get(5)?;
-                let retry_count: i32 = row.get(6)?;
-                let max_retries: i32 = row.get(7)?;
-                let coalesce_key: Option<String> = row.get(8)?;
+            let rows = stmt
+                .query_map(params![limit as i64], |row| {
+                    let id: i64 = row.get(0)?;
+                    let chat_id: i64 = row.get(1)?;
+                    let content_bytes: Vec<u8> = row.get(2)?;
+                    let priority: i32 = row.get(3)?;
+                    let created_at: i64 = row.get(4)?;
+                    let ttl_seconds: i32 = row.get(5)?;
+                    let retry_count: i32 = row.get(6)?;
+                    let max_retries: i32 = row.get(7)?;
+                    let coalesce_key: Option<String> = row.get(8)?;
 
-                Ok((
+                    Ok((
+                        id,
+                        chat_id,
+                        content_bytes,
+                        priority,
+                        created_at,
+                        ttl_seconds,
+                        retry_count,
+                        max_retries,
+                        coalesce_key,
+                    ))
+                })
+                .map_err(db_err)?;
+
+            for row_result in rows {
+                let (
                     id,
                     chat_id,
                     content_bytes,
@@ -230,57 +256,39 @@ impl MessageQueue {
                     retry_count,
                     max_retries,
                     coalesce_key,
-                ))
-            })
-            .map_err(db_err)?;
+                ) = row_result.map_err(db_err)?;
 
-        let mut messages = Vec::new();
-        let mut ids_to_mark = Vec::new();
+                let content: MessageContent =
+                    match bincode::serde::decode_from_slice(&content_bytes, bincode_config()) {
+                        Ok((c, _)) => c,
+                        Err(e) => {
+                            warn!(id, "failed to deserialize queued message: {e}");
+                            continue;
+                        }
+                    };
 
-        for row_result in rows {
-            let (
-                id,
-                chat_id,
-                content_bytes,
-                priority,
-                created_at,
-                ttl_seconds,
-                retry_count,
-                max_retries,
-                coalesce_key,
-            ) = row_result.map_err(db_err)?;
-
-            let content: MessageContent =
-                match bincode::serde::decode_from_slice(&content_bytes, bincode_config()) {
-                    Ok((c, _)) => c,
-                    Err(e) => {
-                        warn!(id, "failed to deserialize queued message: {e}");
-                        continue;
-                    },
-                };
-
-            ids_to_mark.push(id);
-            messages.push(QueuedMessage {
-                id,
-                chat_id,
-                content,
-                priority: priority as u8,
-                created_at: created_at as u64,
-                ttl_seconds: ttl_seconds as u32,
-                retry_count: retry_count as u8,
-                max_retries: max_retries as u8,
-                coalesce_key,
-            });
-        }
+                ids_to_mark.push(id);
+                messages.push(QueuedMessage {
+                    id,
+                    chat_id,
+                    content,
+                    priority: priority as u8,
+                    created_at: created_at as u64,
+                    ttl_seconds: ttl_seconds as u32,
+                    retry_count: retry_count as u8,
+                    max_retries: max_retries as u8,
+                    coalesce_key,
+                });
+            }
+        } // stmt dropped here, releasing borrow on db
 
         // Mark as sending.
         for id in &ids_to_mark {
-            self.db
-                .execute(
-                    "UPDATE telegram_queue SET status = 'sending' WHERE id = ?1",
-                    params![id],
-                )
-                .map_err(db_err)?;
+            db.execute(
+                "UPDATE telegram_queue SET status = 'sending' WHERE id = ?1",
+                params![id],
+            )
+            .map_err(db_err)?;
         }
 
         debug!(count = messages.len(), "dequeued messages");
@@ -290,6 +298,8 @@ impl MessageQueue {
     /// Mark a message as successfully sent.
     pub fn mark_sent(&self, id: i64) -> Result<(), AuraError> {
         self.db
+            .lock()
+            .expect("queue mutex poisoned")
             .execute(
                 "UPDATE telegram_queue SET status = 'sent' WHERE id = ?1",
                 params![id],
@@ -302,6 +312,8 @@ impl MessageQueue {
     /// moves to `failed` status; otherwise back to `pending`.
     pub fn mark_failed(&self, id: i64) -> Result<(), AuraError> {
         self.db
+            .lock()
+            .expect("queue mutex poisoned")
             .execute(
                 "UPDATE telegram_queue
                  SET retry_count = retry_count + 1,
@@ -324,6 +336,8 @@ impl MessageQueue {
         let now = unix_timestamp() as i64;
         let count = self
             .db
+            .lock()
+            .expect("queue mutex poisoned")
             .execute(
                 "UPDATE telegram_queue
                  SET status = 'expired'
@@ -344,6 +358,8 @@ impl MessageQueue {
         let cutoff = unix_timestamp().saturating_sub(retention_secs) as i64;
         let count = self
             .db
+            .lock()
+            .expect("queue mutex poisoned")
             .execute(
                 "DELETE FROM telegram_queue
                  WHERE status IN ('sent', 'failed', 'expired')
@@ -358,6 +374,8 @@ impl MessageQueue {
     pub fn pending_count(&self) -> Result<usize, AuraError> {
         let count: i64 = self
             .db
+            .lock()
+            .expect("queue mutex poisoned")
             .query_row(
                 "SELECT COUNT(*) FROM telegram_queue WHERE status = 'pending'",
                 [],

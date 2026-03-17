@@ -149,17 +149,11 @@ use crate::{
     reaction::ReactionDetector,
     routing::{classifier::RouteClassifier, system1::System1, system2::System2},
     screen::{
-        actions::AndroidScreenProvider,
-        detect_app_state,
-        extract_screen_summary,
-        AppState,
+        actions::AndroidScreenProvider, detect_app_state, extract_screen_summary, AppState,
         ScreenCache,
     },
     telegram::{
-        queue::MessageQueue,
-        reqwest_backend::ReqwestHttpBackend,
-        TelegramConfig,
-        TelegramEngine,
+        queue::MessageQueue, reqwest_backend::ReqwestHttpBackend, TelegramConfig, TelegramEngine,
     },
 };
 #[cfg(feature = "voice")]
@@ -1547,7 +1541,8 @@ pub async fn run(mut state: DaemonState) {
         "resolved neocortex model directory"
     );
 
-    let neocortex_process = match NeocortexProcess::spawn_auto(neocortex_model_dir.as_deref()).await {
+    let neocortex_process = match NeocortexProcess::spawn_auto(neocortex_model_dir.as_deref()).await
+    {
         Ok(mut proc) => {
             // Wait for the process to start listening before proceeding.
             match proc.wait_ready().await {
@@ -1610,7 +1605,7 @@ pub async fn run(mut state: DaemonState) {
             Err(e) => {
                 tracing::error!(error = %e, "failed to open telegram message queue — responses will be logged only");
                 None
-            }
+            },
         };
 
         // Connection #2 — TelegramEngine (polls inbound + flushes outbound).
@@ -1634,21 +1629,22 @@ pub async fn run(mut state: DaemonState) {
                                 }
                             });
                             tracing::info!("telegram engine spawned (polling + queue flush)");
-                        }
+                        },
                         Err(e) => {
                             tracing::error!(error = %e, "failed to create telegram engine — no inbound/outbound");
-                        }
+                        },
                     }
-                }
+                },
                 Err(e) => {
                     tracing::error!(error = %e, "failed to open engine DB connection for telegram");
-                }
+                },
             }
         } else {
             tracing::warn!("telegram bot_token is empty — engine not started");
         }
 
-        let telegram_bridge = TelegramBridge::new(telegram_config, state.cancel_flag.clone(), telegram_queue);
+        let telegram_bridge =
+            TelegramBridge::new(telegram_config, state.cancel_flag.clone(), telegram_queue);
         let handle = spawn_bridge(
             Box::new(telegram_bridge),
             bridge_cmd_tx.clone(),
@@ -1695,7 +1691,9 @@ pub async fn run(mut state: DaemonState) {
     if subs.neocortex_process.is_some() {
         match subs.neocortex.reconnect().await {
             Ok(()) => tracing::info!("IPC client connected to neocortex"),
-            Err(e) => tracing::warn!(error = %e, "IPC client failed to connect — will retry on demand"),
+            Err(e) => {
+                tracing::warn!(error = %e, "IPC client failed to connect — will retry on demand")
+            },
         }
     }
 
@@ -3525,11 +3523,7 @@ async fn handle_user_command(
                     BoundaryGateResult::Allow => {
                         let (outcome, session) = subs
                             .react_engine
-                            .execute_task(
-                                description.clone(),
-                                clamped_priority,
-                                None,
-                            )
+                            .execute_task(description.clone(), clamped_priority, None)
                             .await;
 
                         // Update goal status.
@@ -5372,11 +5366,7 @@ async fn handle_ipc_inbound(
                     BoundaryGateResult::Allow => {
                         let (outcome, _session) = subs
                             .react_engine
-                            .execute_task(
-                                "composed script".to_string(),
-                                5,
-                                Some(plan),
-                            )
+                            .execute_task("composed script".to_string(), 5, Some(plan))
                             .await;
                         tracing::debug!(?outcome, "composed script execution complete");
                     }, // end BoundaryGateResult::Allow arm
@@ -6440,14 +6430,8 @@ async fn cron_handle_proactive(
                                         flush_outcome_bus(subs).await;
                                     },
                                     BoundaryGateResult::Allow => {
-                                        let (_outcome, _session) = subs
-                                            .react_engine
-                                            .execute_task(
-                                                desc,
-                                                7,
-                                                None,
-                                            )
-                                            .await;
+                                        let (_outcome, _session) =
+                                            subs.react_engine.execute_task(desc, 7, None).await;
                                     },
                                 }
                             }

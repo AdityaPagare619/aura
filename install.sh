@@ -23,6 +23,9 @@
 # Environment variables:
 #   HF_TOKEN     HuggingFace token for authenticated downloads (optional)
 #   AURA_REPO    Override git repo URL (default: https://github.com/AdityaPagare619/aura.git)
+#   AURA_ALLOW_UNVERIFIED_ARTIFACTS=1
+#                Emergency override only. Allows install to continue when
+#                SHA256 metadata is missing. NOT recommended for production.
 #
 # Installation phases (all interactive steps front-loaded):
 #   Phase 0:   Pre-flight (arch, Termux, Android version)
@@ -57,28 +60,28 @@ AURA_NIGHTLY_TAG="main"
 
 MODEL_QWEN3_1_5B_NAME="Qwen3-1.7B-Q8_0.gguf"
 MODEL_QWEN3_1_5B_URL="https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf"
-MODEL_QWEN3_1_5B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_1b"
+MODEL_QWEN3_1_5B_SHA256="061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a"
 MODEL_QWEN3_1_5B_SIZE_GB=2
 MODEL_QWEN3_1_5B_RAM_MIN_GB=3
 MODEL_QWEN3_1_5B_LABEL="Qwen3-1.7B Q8_0 (brainstem / <4 GB RAM)"
 
 MODEL_QWEN3_4B_NAME="Qwen3-4B-Q4_K_M.gguf"
 MODEL_QWEN3_4B_URL="https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
-MODEL_QWEN3_4B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_4b"
+MODEL_QWEN3_4B_SHA256="7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
 MODEL_QWEN3_4B_SIZE_GB=3
 MODEL_QWEN3_4B_RAM_MIN_GB=4
 MODEL_QWEN3_4B_LABEL="Qwen3-4B Q4_K_M (standard / 4–6 GB RAM)"
 
 MODEL_QWEN3_8B_NAME="Qwen3-8B-Q4_K_M.gguf"
 MODEL_QWEN3_8B_URL="https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
-MODEL_QWEN3_8B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_8b"
+MODEL_QWEN3_8B_SHA256="d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
 MODEL_QWEN3_8B_SIZE_GB=5
 MODEL_QWEN3_8B_RAM_MIN_GB=6
 MODEL_QWEN3_8B_LABEL="Qwen3-8B Q4_K_M (full / 6–10 GB RAM)"
 
 MODEL_QWEN3_14B_NAME="Qwen3-14B-Q4_K_M.gguf"
 MODEL_QWEN3_14B_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf"
-MODEL_QWEN3_14B_SHA256="PLACEHOLDER_UPDATE_AT_RELEASE_TIME_14b"
+MODEL_QWEN3_14B_SHA256="500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0"
 MODEL_QWEN3_14B_SIZE_GB=9
 MODEL_QWEN3_14B_RAM_MIN_GB=10
 MODEL_QWEN3_14B_LABEL="Qwen3-14B Q4_K_M (extended / ≥10 GB RAM)"
@@ -272,6 +275,8 @@ Options:
 Environment variables:
   HF_TOKEN     HuggingFace token for authenticated model downloads
   AURA_REPO    Override git repository URL
+  AURA_ALLOW_UNVERIFIED_ARTIFACTS=1
+               Emergency override to bypass checksum failures (testing only)
 
 Examples:
   # Standard install (auto-detects model from RAM):
@@ -510,7 +515,11 @@ phase_telegram_wizard() {
             log_info "Telegram already configured in $AURA_CONFIG_FILE — skipping wizard"
             # Read existing values for later use
             COLLECTED_BOT_TOKEN=$(grep 'bot_token' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*= "\(.*\)"/\1/' || echo "")
-            COLLECTED_OWNER_ID=$(grep 'owner_user_id' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*= \([0-9]*\).*/\1/' || echo "0")
+            # Prefer allowed_chat_ids (canonical); fall back to legacy owner_user_id for migration
+            COLLECTED_OWNER_ID=$(grep 'allowed_chat_ids' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | grep -o '[0-9]\+' | head -1 || echo "0")
+            if [ "$COLLECTED_OWNER_ID" = "0" ] || [ -z "$COLLECTED_OWNER_ID" ]; then
+                COLLECTED_OWNER_ID=$(grep 'owner_user_id' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*= \([0-9]*\).*/\1/' || echo "0")
+            fi
             return
         fi
     fi
@@ -958,12 +967,11 @@ phase_model() {
     log_info "GGUF magic bytes verified ✓"
 
     log_info "Verifying checksum..."
-    if ! verify_checksum "$model_path" "$model_sha256"; then
+    if ! verify_checksum "$model_path" "$model_sha256" "$model_url"; then
         local actual_sha
         actual_sha=$(sha256sum "$model_path" | cut -d' ' -f1)
         rm -f "$model_path"
         die "Checksum mismatch — possible supply-chain attack or corruption!" \
-            "Expected: $model_sha256" \
             "Actual:   $actual_sha"
     fi
     log_step "Model downloaded and verified: $model_name"
@@ -972,17 +980,50 @@ phase_model() {
 verify_checksum() {
     local file="$1"
     local expected="$2"
+    local model_url="${3:-}"
 
     if [[ "$expected" == "" || "$expected" == PLACEHOLDER* ]]; then
-        if [[ "$AURA_VERSION" == *alpha* || "$AURA_VERSION" == *beta* ]] || [ "$OPT_CHANNEL" = "nightly" ]; then
-            warn "SHA256 verification skipped — alpha/nightly release has placeholder checksums"
+        # Try fetching sidecar checksum from the model URL first.
+        if [ -n "$model_url" ] && command -v curl &>/dev/null; then
+            local remote_sha_url tmp_sha remote_sha
+            remote_sha_url="${model_url}.sha256"
+            tmp_sha="$(mktemp)"
+            if curl --fail --silent --location --output "$tmp_sha" "$remote_sha_url" 2>/dev/null;
+            then
+                remote_sha=$(cut -d' ' -f1 < "$tmp_sha")
+                if [[ "$remote_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                    expected="$remote_sha"
+                    log_info "Using remote checksum metadata from: $remote_sha_url"
+                else
+                    warn "Remote checksum metadata had invalid format: $remote_sha_url"
+                fi
+            else
+                warn "Could not fetch remote checksum metadata: $remote_sha_url"
+            fi
+            rm -f "$tmp_sha"
+        fi
+
+    fi
+
+    if [[ "$expected" == "" || "$expected" == PLACEHOLDER* ]]; then
+        if [ "${AURA_ALLOW_UNVERIFIED_ARTIFACTS:-0}" = "1" ]; then
+            warn "SHA256 verification bypassed via AURA_ALLOW_UNVERIFIED_ARTIFACTS=1"
             return 0
         else
-            die "SHA256 checksum not set (placeholder). This is a packaging error — report to maintainers."
+            die "SHA256 checksum not set (placeholder). Refusing unverifiable artifact." \
+                "Set real checksums in install.sh for this release, OR use AURA_ALLOW_UNVERIFIED_ARTIFACTS=1 only for emergency testing."
         fi
     fi
 
-    command -v sha256sum &>/dev/null || { warn "sha256sum not found — skipping verification"; return 0; }
+    if ! command -v sha256sum &>/dev/null; then
+        if [ "${AURA_ALLOW_UNVERIFIED_ARTIFACTS:-0}" = "1" ]; then
+            warn "sha256sum not found — verification bypassed via AURA_ALLOW_UNVERIFIED_ARTIFACTS=1"
+            return 0
+        fi
+        die "sha256sum not found — cannot verify artifact integrity." \
+            "Install coreutils (sha256sum) or set AURA_ALLOW_UNVERIFIED_ARTIFACTS=1 for emergency testing only."
+    fi
+
     local actual
     actual=$(sha256sum "$file" | cut -d' ' -f1)
     [ "$actual" = "$expected" ]
@@ -1044,10 +1085,22 @@ phase_build() {
                             "Expected: $exp_sha" "Actual: $act_sha"
                     }
                     log_step "Checksum verified: $artifact"
+                elif [ "${AURA_ALLOW_UNVERIFIED_ARTIFACTS:-0}" = "1" ]; then
+                    warn "sha256sum not found — checksum verification bypassed via AURA_ALLOW_UNVERIFIED_ARTIFACTS=1"
+                else
+                    rm -f "$dest"
+                    die "sha256sum not found; cannot verify release artifact $artifact." \
+                        "Install coreutils (sha256sum) or set AURA_ALLOW_UNVERIFIED_ARTIFACTS=1 for emergency testing only."
                 fi
             else
                 rm -f "$cf"
-                warn "Could not download .sha256 for $artifact — skipping verification"
+                if [ "${AURA_ALLOW_UNVERIFIED_ARTIFACTS:-0}" = "1" ]; then
+                    warn "Could not download .sha256 for $artifact — bypassed via AURA_ALLOW_UNVERIFIED_ARTIFACTS=1"
+                else
+                    rm -f "$dest"
+                    die "Could not download .sha256 for $artifact. Refusing unverifiable binary." \
+                        "Set AURA_ALLOW_UNVERIFIED_ARTIFACTS=1 only for emergency testing."
+                fi
             fi
 
             chmod +x "$dest"

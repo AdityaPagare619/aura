@@ -284,24 +284,22 @@ jitter_ms = 50
 # Format: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ-_abcdefg"
 bot_token = ""
 
-# Your personal Telegram numeric user ID.
-# [REQUIRED] — the owner account always has full access regardless of
-# allowed_user_ids. AURA will refuse to start if this is 0.
-# Example: 987654321
-owner_user_id = 0
+# Telegram chat IDs allowed to interact with AURA.
+# [REQUIRED] — AURA denies messages from any chat not listed here.
+# The FIRST entry is treated as the primary/owner chat.
+#
+# To find your numeric chat ID:
+#   1. Open Telegram → search for @userinfobot
+#   2. Send any message → it replies with your numeric ID
+#
+# Example: allowed_chat_ids = [987654321, 111222333]
+# Empty list = deny all messages (AURA will be unreachable via Telegram).
+allowed_chat_ids = []
 
-# Additional Telegram user IDs that may interact with AURA.
-# The owner (above) is always implicitly allowed — do not repeat it here.
-# Empty list = only the owner can interact.
-# Example: allowed_user_ids = [111222333, 444555666]
-allowed_user_ids = []
-
-# Polling mode.
-# false = long-polling (recommended for Termux — no open port required)
-# true  = webhook (for server deployments with a public HTTPS endpoint)
-# Changing this to true requires additional webhook_url and webhook_port config
-# that is not yet implemented. Leave false for Termux.
-webhook_mode = false
+# Polling interval in milliseconds.
+# Lower = more responsive, higher = less battery usage on mobile.
+# Default: 2000 (2 seconds). Recommended range: 1000–5000.
+poll_interval_ms = 2000
 
 # =============================================================================
 #  § 11. Contextor — Memory Enrichment

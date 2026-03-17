@@ -241,6 +241,9 @@ struct LoopSubsystems {
     memory: AuraMemory,
     response_tx: DaemonResponseTx,
     /// Rule-based + rate-limited policy gate for action safety checks.
+    /// Currently unused — policy checks route through `identity.policy_gate`.
+    /// Retained as scaffolding for GAP-S1 (deny-by-default hardening).
+    #[allow(dead_code)]
     policy_gate: PolicyGate,
     /// Append-only, hash-chained audit log for policy decisions.
     audit_log: AuditLog,

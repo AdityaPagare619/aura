@@ -142,9 +142,7 @@ impl MessageQueue {
         })?;
 
         debug!("telegram message queue initialized");
-        Ok(Self {
-            db: Mutex::new(db),
-        })
+        Ok(Self { db: Mutex::new(db) })
     }
 
     /// Enqueue a new message. If a `coalesce_key` is set and a pending message
@@ -264,7 +262,7 @@ impl MessageQueue {
                         Err(e) => {
                             warn!(id, "failed to deserialize queued message: {e}");
                             continue;
-                        }
+                        },
                     };
 
                 ids_to_mark.push(id);

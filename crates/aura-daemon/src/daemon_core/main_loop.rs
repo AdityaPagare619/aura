@@ -104,8 +104,8 @@ use crate::{
     },
     daemon_core::{
         channels::{
-            CronTick, CronTickTx, DaemonResponse, DaemonResponseTx, DbWriteRequest, HealthEventTx,
-            InputSource, IpcOutbound, UserCommand,
+            CronTick, CronTickTx, DaemonResponse, DaemonResponseTx, DbWriteRequest, InputSource,
+            IpcOutbound, UserCommand,
         },
         checkpoint::save_checkpoint,
         proactive_dispatcher::{
@@ -1365,7 +1365,7 @@ fn spawn_cron_scheduler(
             job_counter = job_counter.wrapping_add(1);
             let tick = CronTick {
                 job_id: job_counter,
-                job_name: format!("periodic_{}", job_counter),
+                job_name: format!("periodic_{job_counter}"),
                 scheduled_at_ms: now_ms(),
             };
             if cron_tx.send(tick).await.is_err() {

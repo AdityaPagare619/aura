@@ -871,7 +871,15 @@ phase_model() {
 
     if [ -f "$model_path" ]; then
         log_info "Model file found: $model_path"
-        if verify_checksum "$model_path" "$model_sha256"; then
+        # Quick GGUF header check — catch files from previous botched downloads
+        local existing_magic
+        existing_magic=$(head -c4 "$model_path" 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+        local existing_size
+        existing_size=$(stat -c%s "$model_path" 2>/dev/null || stat -f%z "$model_path" 2>/dev/null || echo 0)
+        if [ "$existing_magic" != "47475546" ] || [ "$existing_size" -lt 104857600 ]; then
+            warn "Existing model is invalid (bad magic or <100MB) — removing and re-downloading."
+            rm -f "$model_path"
+        elif verify_checksum "$model_path" "$model_sha256"; then
             log_step "Model verified — skipping download"
             return
         else

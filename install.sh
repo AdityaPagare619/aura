@@ -515,7 +515,11 @@ phase_telegram_wizard() {
             log_info "Telegram already configured in $AURA_CONFIG_FILE — skipping wizard"
             # Read existing values for later use
             COLLECTED_BOT_TOKEN=$(grep 'bot_token' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*= "\(.*\)"/\1/' || echo "")
-            COLLECTED_OWNER_ID=$(grep 'owner_user_id' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*= \([0-9]*\).*/\1/' || echo "0")
+            # Prefer allowed_chat_ids (canonical); fall back to legacy owner_user_id for migration
+            COLLECTED_OWNER_ID=$(grep 'allowed_chat_ids' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | grep -o '[0-9]\+' | head -1 || echo "0")
+            if [ "$COLLECTED_OWNER_ID" = "0" ] || [ -z "$COLLECTED_OWNER_ID" ]; then
+                COLLECTED_OWNER_ID=$(grep 'owner_user_id' "$AURA_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*= \([0-9]*\).*/\1/' || echo "0")
+            fi
             return
         fi
     fi

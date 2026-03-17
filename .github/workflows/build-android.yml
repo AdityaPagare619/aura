@@ -137,14 +137,14 @@ jobs:
           echo "llama.cpp submodule verified OK"
 
       # ----------------------------------------------------------
-      # 8. Cross-compile: cdylib (libaura_core.so) + neocortex binary
+      # 8. Cross-compile: cdylib (libaura_daemon.so) + neocortex binary
       # NOTE: We build --lib for aura-daemon to produce the cdylib only.
       # The [[bin]] target is NOT built here because it would pull in
       # voice FFI symbols that require native libs not available during
       # cross-compilation. The daemon binary for Termux is built in the
       # release workflow with voice feature disabled.
       # ----------------------------------------------------------
-      - name: Build aura-daemon cdylib (libaura_core.so)
+      - name: Build aura-daemon cdylib (libaura_daemon.so)
         run: cargo build --release --lib -p aura-daemon --target aarch64-linux-android
 
       - name: Build aura-neocortex binary
@@ -157,11 +157,11 @@ jobs:
         run: |
           STRIP="$TOOLCHAIN/llvm-strip"
           # Strip the cdylib
-          CDYLIB="target/aarch64-linux-android/release/libaura_core.so"
+          CDYLIB="target/aarch64-linux-android/release/libaura_daemon.so"
           if [ -f "$CDYLIB" ]; then
-            echo "Stripping libaura_core.so: $(du -sh $CDYLIB | cut -f1) before"
+            echo "Stripping libaura_daemon.so: $(du -sh $CDYLIB | cut -f1) before"
             $STRIP "$CDYLIB"
-            echo "Stripped libaura_core.so: $(du -sh $CDYLIB | cut -f1) after"
+            echo "Stripped libaura_daemon.so: $(du -sh $CDYLIB | cut -f1) after"
           fi
           # Strip neocortex binary
           NEO="target/aarch64-linux-android/release/aura-neocortex"
@@ -179,7 +179,7 @@ jobs:
         with:
           name: aura-binaries-aarch64-linux-android
           path: |
-            target/aarch64-linux-android/release/libaura_core.so
+            target/aarch64-linux-android/release/libaura_daemon.so
             target/aarch64-linux-android/release/aura-neocortex
           retention-days: 30
           if-no-files-found: error

@@ -916,11 +916,9 @@ fn check_task_policy_gate(subs: &mut LoopSubsystems, task_desc: &str) -> Result<
     };
 
     if let Some(blocked) = policy_ctx.check_action(task_desc) {
-        return Err(
-            blocked
-                .error
-                .unwrap_or_else(|| "policy blocked task execution".to_string()),
-        );
+        return Err(blocked
+            .error
+            .unwrap_or_else(|| "policy blocked task execution".to_string()));
     }
 
     Ok(())
@@ -2665,8 +2663,7 @@ async fn handle_user_command(
                                         // the user's explicit approval.
                                         BoundaryGateResult::Allow
                                         | BoundaryGateResult::NeedConfirmation { .. } => {
-                                            match check_task_policy_gate(subs, &conf.task_summary)
-                                            {
+                                            match check_task_policy_gate(subs, &conf.task_summary) {
                                                 Ok(()) => {
                                                     let (outcome, session) = subs
                                                         .react_engine
@@ -2677,7 +2674,8 @@ async fn handle_user_command(
                                                         )
                                                         .await;
 
-                                                    // Update goal status based on execution outcome.
+                                                    // Update goal status based on execution
+                                                    // outcome.
                                                     if let Some(goal) = state
                                                         .checkpoint
                                                         .goals
@@ -2697,9 +2695,7 @@ async fn handle_user_command(
                                                                     "confirmed task completed successfully"
                                                                 );
                                                             },
-                                                            react::TaskOutcome::Failed {
-                                                                reason, ..
-                                                            }
+                                                            react::TaskOutcome::Failed { reason, .. }
                                                             | react::TaskOutcome::CycleAborted {
                                                                 cycle_reason: reason,
                                                                 ..
@@ -2714,8 +2710,11 @@ async fn handle_user_command(
                                                                     "confirmed task execution failed"
                                                                 );
                                                             },
-                                                            react::TaskOutcome::Cancelled { .. } => {
-                                                                // Treat cancellation as a pause — goal
+                                                            react::TaskOutcome::Cancelled {
+                                                                ..
+                                                            } => {
+                                                                // Treat cancellation as a pause —
+                                                                // goal
                                                                 // remains active.
                                                                 tracing::info!(
                                                                     goal_id = conf.goal_id,
@@ -2739,23 +2738,26 @@ async fn handle_user_command(
                                                         reason = %policy_reason,
                                                         "task-level PolicyGate blocked confirmed action"
                                                     );
-                                                    subs.outcome_bus.publish(ExecutionOutcome::new(
-                                                        conf.task_summary.clone(),
-                                                        OutcomeResult::PolicyBlocked,
-                                                        0,
-                                                        0.0,
-                                                        RouteKind::System1,
-                                                        now_ms(),
-                                                    ));
+                                                    subs.outcome_bus.publish(
+                                                        ExecutionOutcome::new(
+                                                            conf.task_summary.clone(),
+                                                            OutcomeResult::PolicyBlocked,
+                                                            0,
+                                                            0.0,
+                                                            RouteKind::System1,
+                                                            now_ms(),
+                                                        ),
+                                                    );
                                                     if let Some(goal) = state
                                                         .checkpoint
                                                         .goals
                                                         .iter_mut()
                                                         .find(|g| g.id == conf.goal_id)
                                                     {
-                                                        goal.status = aura_types::goals::GoalStatus::Failed(
-                                                            policy_reason.clone(),
-                                                        );
+                                                        goal.status =
+                                                            aura_types::goals::GoalStatus::Failed(
+                                                                policy_reason.clone(),
+                                                            );
                                                     }
                                                     subs.memory.feedback_loop.record_error(
                                                         "policy_blocked",
@@ -4334,8 +4336,7 @@ async fn dispatch_system1(
                     ));
                 },
                 BoundaryGateResult::Allow => {
-                    if let Err(policy_reason) =
-                        check_task_policy_gate(subs, &scored.parsed.content)
+                    if let Err(policy_reason) = check_task_policy_gate(subs, &scored.parsed.content)
                     {
                         tracing::warn!(
                             target: "SECURITY",
@@ -4376,11 +4377,7 @@ async fn dispatch_system1(
                                 subs.system1.cache_plan(text, plan, 1.0, now_ms());
                                 tracing::debug!("System1 plan cached after success");
                             },
-                            react::TaskOutcome::Failed {
-                                reason,
-                                total_ms,
-                                ..
-                            } => {
+                            react::TaskOutcome::Failed { reason, total_ms, .. } => {
                                 tracing::warn!(
                                     reason = %reason,
                                     "System1 plan execution failed (Site 3)"
@@ -4403,13 +4400,8 @@ async fn dispatch_system1(
                                     .with_input_summary(&scored.parsed.content),
                                 );
                             },
-                            react::TaskOutcome::Cancelled {
-                                total_ms,
-                                ..
-                            } => {
-                                tracing::info!(
-                                    "System1 plan execution cancelled (Site 3)"
-                                );
+                            react::TaskOutcome::Cancelled { total_ms, .. } => {
+                                tracing::info!("System1 plan execution cancelled (Site 3)");
                                 subs.outcome_bus.publish(
                                     ExecutionOutcome::new(
                                         scored.parsed.content.clone(),
@@ -4422,10 +4414,7 @@ async fn dispatch_system1(
                                     .with_input_summary(&scored.parsed.content),
                                 );
                             },
-                            react::TaskOutcome::CycleAborted {
-                                cycle_reason,
-                                ..
-                            } => {
+                            react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
                                 tracing::warn!(
                                     reason = %cycle_reason,
                                     "System1 plan execution cycle-aborted (Site 3)"
@@ -6790,31 +6779,45 @@ async fn cron_handle_proactive(
                                             );
                                             flush_outcome_bus(subs).await;
                                         } else {
-                                            let (outcome, _session) =
-                                                subs.react_engine.execute_task(desc.clone(), 7, None).await;
+                                            let (outcome, _session) = subs
+                                                .react_engine
+                                                .execute_task(desc.clone(), 7, None)
+                                                .await;
 
-                                            let (result_kind, duration_ms, confidence) = match &outcome {
-                                                react::TaskOutcome::Success {
-                                                    total_ms,
-                                                    final_confidence,
-                                                    ..
-                                                } => (OutcomeResult::Success, *total_ms, *final_confidence),
-                                                react::TaskOutcome::Failed { total_ms, .. } => {
-                                                    (OutcomeResult::Failure, *total_ms, 0.0)
-                                                },
-                                                react::TaskOutcome::Cancelled { total_ms, .. } => {
-                                                    (OutcomeResult::UserCancelled, *total_ms, 0.0)
-                                                },
-                                                react::TaskOutcome::CycleAborted { .. } => {
-                                                    (OutcomeResult::Failure, 0, 0.0)
-                                                },
-                                            };
+                                            let (result_kind, duration_ms, confidence) =
+                                                match &outcome {
+                                                    react::TaskOutcome::Success {
+                                                        total_ms,
+                                                        final_confidence,
+                                                        ..
+                                                    } => (
+                                                        OutcomeResult::Success,
+                                                        *total_ms,
+                                                        *final_confidence,
+                                                    ),
+                                                    react::TaskOutcome::Failed {
+                                                        total_ms, ..
+                                                    } => (OutcomeResult::Failure, *total_ms, 0.0),
+                                                    react::TaskOutcome::Cancelled {
+                                                        total_ms,
+                                                        ..
+                                                    } => (
+                                                        OutcomeResult::UserCancelled,
+                                                        *total_ms,
+                                                        0.0,
+                                                    ),
+                                                    react::TaskOutcome::CycleAborted { .. } => {
+                                                        (OutcomeResult::Failure, 0, 0.0)
+                                                    },
+                                                };
 
                                             match &outcome {
-                                                react::TaskOutcome::Success { .. } => tracing::info!(
-                                                    desc = %desc,
-                                                    "proactive action execution succeeded"
-                                                ),
+                                                react::TaskOutcome::Success { .. } => {
+                                                    tracing::info!(
+                                                        desc = %desc,
+                                                        "proactive action execution succeeded"
+                                                    )
+                                                },
                                                 react::TaskOutcome::Failed { reason, .. } => {
                                                     tracing::warn!(
                                                         desc = %desc,
@@ -6828,11 +6831,16 @@ async fn cron_handle_proactive(
                                                         now_ms(),
                                                     );
                                                 },
-                                                react::TaskOutcome::Cancelled { .. } => tracing::info!(
-                                                    desc = %desc,
-                                                    "proactive action execution cancelled"
-                                                ),
-                                                react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
+                                                react::TaskOutcome::Cancelled { .. } => {
+                                                    tracing::info!(
+                                                        desc = %desc,
+                                                        "proactive action execution cancelled"
+                                                    )
+                                                },
+                                                react::TaskOutcome::CycleAborted {
+                                                    cycle_reason,
+                                                    ..
+                                                } => {
                                                     tracing::warn!(
                                                         desc = %desc,
                                                         reason = %cycle_reason,

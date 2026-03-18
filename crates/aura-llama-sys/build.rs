@@ -50,6 +50,11 @@ fn main() {
             let mut cpp_build = cc::Build::new();
             cpp_build
                 .cpp(true)
+                // Android runtime hardening:
+                // Link C++ runtime statically so release binaries do not depend on
+                // libc++_shared.so being present on the target Termux device.
+                // This keeps --skip-build installs self-contained.
+                .cpp_link_stdlib_static(true)
                 .flag("-std=c++17")
                 .flag("-march=armv8-a+fp+simd")
                 .flag("-DGGML_USE_NEON")

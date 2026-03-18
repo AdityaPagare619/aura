@@ -59,3 +59,6 @@ ehthumbs.db
 
 # ---- Docs build artifacts ----
 docs/_build/
+
+# ---- Local release inspection ----
+artifact_inspect/

@@ -47,6 +47,7 @@ AURA_MODELS_DIR="$AURA_DATA_DIR/models"
 AURA_LOGS_DIR="$AURA_DATA_DIR/logs"
 AURA_DB_DIR="$AURA_DATA_DIR/db"
 AURA_BIN="$PREFIX/bin/aura-daemon"
+AURA_NEOCORTEX_BIN="$PREFIX/bin/aura-neocortex"
 AURA_SV_DIR="$PREFIX/var/service/aura-daemon"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -118,6 +119,20 @@ if check_file_exists "$AURA_BIN" "aura-daemon binary"; then
         pass "Binary version: $bin_version"
     else
         warn "Binary version unexpected: $bin_version"
+    fi
+fi
+
+if check_file_exists "$AURA_NEOCORTEX_BIN" "aura-neocortex binary"; then
+    check_file_executable "$AURA_NEOCORTEX_BIN" "aura-neocortex binary"
+
+    # Link/runtime check catches missing shared libs (e.g. libc++_shared.so).
+    neocortex_probe=$("$AURA_NEOCORTEX_BIN" --help 2>&1 || true)
+    if echo "$neocortex_probe" | grep -qi 'CANNOT LINK EXECUTABLE'; then
+        fail "aura-neocortex runtime link failed: $(echo "$neocortex_probe" | head -1)"
+    elif echo "$neocortex_probe" | grep -qi 'aura-neocortex'; then
+        pass "aura-neocortex responds to --help"
+    else
+        warn "aura-neocortex probe output unexpected (check manually with --help)"
     fi
 fi
 

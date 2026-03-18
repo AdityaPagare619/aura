@@ -1105,6 +1105,36 @@ phase_build() {
 
             chmod +x "$dest"
             log_step "Downloaded: $dest"
+
+            # Runtime probe: fail early if the downloaded binary cannot start on
+            # this device (e.g., missing shared runtime dependencies).
+            if [[ "$artifact" == aura-daemon-* ]]; then
+                if daemon_probe_out=$("$dest" --version 2>&1); then
+                    log_step "Runtime probe passed: aura-daemon"
+                else
+                    local daemon_probe_first_line
+                    daemon_probe_first_line=$(printf '%s\n' "$daemon_probe_out" | awk 'NR==1{print; exit}')
+                    rm -f "$dest"
+                    die "Downloaded aura-daemon failed runtime probe (--version)." \
+                        "Probe output: ${daemon_probe_first_line}" \
+                        "This release artifact is not runnable on this device."
+                fi
+            else
+                if neocortex_probe_out=$("$dest" --help 2>&1); then
+                    if printf '%s\n' "$neocortex_probe_out" | grep -q "aura-neocortex"; then
+                        log_step "Runtime probe passed: aura-neocortex"
+                    else
+                        warn "aura-neocortex probe returned unexpected output; continuing"
+                    fi
+                else
+                    local neocortex_probe_first_line
+                    neocortex_probe_first_line=$(printf '%s\n' "$neocortex_probe_out" | awk 'NR==1{print; exit}')
+                    rm -f "$dest"
+                    die "Downloaded aura-neocortex failed runtime probe (--help)." \
+                        "Probe output: ${neocortex_probe_first_line}" \
+                        "Likely missing shared runtime dependency (example: libc++_shared.so)."
+                fi
+            fi
         done
         return
     fi
@@ -1582,6 +1612,25 @@ phase_verify() {
             log_step "Daemon responds: $ver"
         else
             warn "Daemon did not respond to --version"
+            all_ok=0
+        fi
+    fi
+
+    # Neocortex runtime probe — catches dynamic linker failures that pass
+    # executable-bit checks (e.g. libc++_shared.so missing on device).
+    if [ "$OPT_DRY_RUN" != "1" ] && [ -x "$AURA_NEOCORTEX_BIN" ]; then
+        local neocortex_help
+        if neocortex_help=$("$AURA_NEOCORTEX_BIN" --help 2>&1); then
+            if printf '%s\n' "$neocortex_help" | grep -q "aura-neocortex"; then
+                log_step "Neocortex responds to --help"
+            else
+                warn "Neocortex returned unexpected --help output"
+            fi
+        else
+            local neocortex_help_first_line
+            neocortex_help_first_line=$(printf '%s\n' "$neocortex_help" | awk 'NR==1{print; exit}')
+            warn "Neocortex failed runtime probe (--help): ${neocortex_help_first_line}"
+            all_ok=0
         fi
     fi
 

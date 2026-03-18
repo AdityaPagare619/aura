@@ -171,6 +171,39 @@ jobs:
             echo "Stripped aura-neocortex: $(du -sh $NEO | cut -f1) after"
           fi
 
+      - name: Verify Android runtime dependencies
+        run: |
+          set -euo pipefail
+
+          READELF="$TOOLCHAIN/llvm-readelf"
+          if [ ! -x "$READELF" ]; then
+            echo "ERROR: llvm-readelf not found at $READELF"
+            exit 1
+          fi
+
+          inspect_needed() {
+            local bin="$1"
+            echo "Inspecting dynamic deps for: $bin"
+            "$READELF" -d "$bin" | awk '/NEEDED/ {print "  "$0}' || true
+          }
+
+          assert_no_libcpp_shared() {
+            local bin="$1"
+            local needed
+            needed="$($READELF -d "$bin" | awk '/NEEDED/ {print $5}' | tr -d '[]' || true)"
+            if printf '%s\n' "$needed" | grep -Fqx 'libc++_shared.so'; then
+              echo "ERROR: $bin depends on libc++_shared.so"
+              echo "This breaks Termux runtime on devices without that shared library."
+              exit 1
+            fi
+          }
+
+          inspect_needed "target/aarch64-linux-android/release/libaura_daemon.so"
+          inspect_needed "target/aarch64-linux-android/release/aura-neocortex"
+
+          # Enforce self-contained neocortex binary for real-device reliability.
+          assert_no_libcpp_shared "target/aarch64-linux-android/release/aura-neocortex"
+
       # ----------------------------------------------------------
       # 10. Upload artifacts
       # ----------------------------------------------------------

@@ -170,6 +170,41 @@ jobs:
             "$TOOLCHAIN/llvm-strip" "target/aarch64-linux-android/release/$BIN"
           done
 
+      - name: Verify Android runtime dependencies
+        run: |
+          set -euo pipefail
+
+          READELF="$TOOLCHAIN/llvm-readelf"
+          if [ ! -x "$READELF" ]; then
+            echo "ERROR: llvm-readelf not found at $READELF"
+            exit 1
+          fi
+
+          check_needed() {
+            local bin="$1"
+            echo "Inspecting dynamic deps for: $bin"
+
+            local needed
+            needed="$($READELF -d "$bin" | awk '/NEEDED/ {print $5}' | tr -d '[]' || true)"
+
+            if [ -n "$needed" ]; then
+              echo "$needed" | sed 's/^/  NEEDED: /'
+            else
+              echo "  NEEDED: <none>"
+            fi
+
+            # Production invariant for Termux one-line installs:
+            # release binaries must not require libc++_shared.so at runtime.
+            if printf '%s\n' "$needed" | grep -Fqx 'libc++_shared.so'; then
+              echo "ERROR: $bin depends on libc++_shared.so (not guaranteed on target devices)."
+              echo "Fix: link C++ runtime statically for Android release artifacts."
+              exit 1
+            fi
+          }
+
+          check_needed "target/aarch64-linux-android/release/aura-daemon"
+          check_needed "target/aarch64-linux-android/release/aura-neocortex"
+
       # Rename binary to include version tag for the release artifact
       - name: Prepare release artifacts
         run: |
@@ -245,9 +280,10 @@ jobs:
             echo ""
             echo "## Verification"
             echo ""
-            echo "Verify binary integrity with the included \`.sha256\` file:"
+            echo "Verify binary integrity with the included \`.sha256\` files:"
             echo '```sh'
             echo "sha256sum -c aura-daemon-${TAG}-aarch64-linux-android.sha256"
+            echo "sha256sum -c aura-neocortex-${TAG}-aarch64-linux-android.sha256"
             echo '```'
             echo ""
             echo "## Installation"
@@ -257,7 +293,11 @@ jobs:
             echo "curl -fsSL https://raw.githubusercontent.com/\${{ github.repository }}/main/install.sh | bash"
             echo '```'
             echo ""
-            echo "**Binary:** \`aura-daemon-${TAG}-aarch64-linux-android\` — built for ARM64 Android (API 26+, Termux)"
+            echo "**Binaries:**"
+            echo "- \`aura-daemon-${TAG}-aarch64-linux-android\`"
+            echo "- \`aura-neocortex-${TAG}-aarch64-linux-android\`"
+            echo ""
+            echo "Built for ARM64 Android (API 26+, Termux)."
           } > release_notes.md
 
           cat release_notes.md

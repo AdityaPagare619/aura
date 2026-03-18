@@ -15,6 +15,11 @@ fn main() {
 
     // Only compile llama.cpp when targeting Android ARM64
     if target_os == "android" && target_arch == "aarch64" {
+        // Ensure Rust linker can resolve Android libc++ static archive.
+        // cc-rs emits `cargo:rustc-link-lib=static=c++_static`, but rustc
+        // needs an explicit native search path to locate libc++_static.a.
+        emit_android_cpp_runtime_linking();
+
         // Guard: fail with a clear message if the submodule isn't initialized.
         // Wrap in stub-feature check so CI can compile without the submodule.
         #[cfg(not(feature = "stub"))]
@@ -50,12 +55,10 @@ fn main() {
             let mut cpp_build = cc::Build::new();
             cpp_build
                 .cpp(true)
-                // Android runtime hardening:
-                // Use NDK's static C++ runtime archive so release binaries do not
-                // depend on libc++_shared.so being present on target Termux devices.
-                // Keep static-link marker enabled to force archive linkage.
-                .cpp_link_stdlib("c++_static")
-                .cpp_link_stdlib_static(true)
+                // Disable cc-rs automatic C++ stdlib linkage. We emit explicit
+                // link-search + link-lib directives in `emit_android_cpp_runtime_linking`
+                // so rustc can reliably resolve static libc++ in CI cross builds.
+                .cpp_link_stdlib(None)
                 .flag("-std=c++17")
                 .flag("-march=armv8-a+fp+simd")
                 .flag("-DGGML_USE_NEON")
@@ -82,4 +85,96 @@ fn main() {
         println!("cargo:rustc-cfg=llama_stub");
         println!("cargo:stub=true");
     }
+}
+
+fn emit_android_cpp_runtime_linking() {
+    use std::{env, path::PathBuf};
+
+    // Android NDK root can be exposed under multiple conventional names.
+    let ndk_home = env::var("NDK_HOME")
+        .ok()
+        .or_else(|| env::var("ANDROID_NDK_HOME").ok())
+        .or_else(|| env::var("ANDROID_NDK_ROOT").ok());
+
+    let Some(ndk_home) = ndk_home else {
+        println!(
+            "cargo:warning=Android target detected but NDK_HOME/ANDROID_NDK_HOME/ANDROID_NDK_ROOT is not set; c++_static link may fail"
+        );
+        println!("cargo:rustc-link-lib=static=c++_static");
+        return;
+    };
+
+    // Prefer explicit host tag if provided by setup; otherwise use Linux default
+    // (our CI runs on ubuntu-latest).
+    let host_tag = env::var("ANDROID_NDK_HOST_TAG").unwrap_or_else(|_| "linux-x86_64".to_string());
+
+    let mut roots = vec![PathBuf::from(&ndk_home)
+        .join("toolchains")
+        .join("llvm")
+        .join("prebuilt")
+        .join(&host_tag)
+        .join("sysroot")
+        .join("usr")
+        .join("lib")
+        .join("aarch64-linux-android")];
+
+    // Also include the generic sysroot lib dir. Some NDK layouts place
+    // libc++ artifacts there instead of (or in addition to) triple-specific dirs.
+    roots.push(
+        PathBuf::from(&ndk_home)
+            .join("toolchains")
+            .join("llvm")
+            .join("prebuilt")
+            .join(&host_tag)
+            .join("sysroot")
+            .join("usr")
+            .join("lib"),
+    );
+
+    // Some NDK layouts also place API-specific variants under .../<triple>/<api>.
+    // Emit both if present to make rustc static-lib resolution robust.
+    let api_level = env::var("API_LEVEL")
+        .ok()
+        .or_else(|| env::var("CARGO_NDK_ANDROID_PLATFORM").ok())
+        .or_else(|| env::var("ANDROID_PLATFORM").ok());
+    if let Some(api_level) = api_level {
+        if !api_level.is_empty() {
+            roots.push(
+                PathBuf::from(&ndk_home)
+                    .join("toolchains")
+                    .join("llvm")
+                    .join("prebuilt")
+                    .join(&host_tag)
+                    .join("sysroot")
+                    .join("usr")
+                    .join("lib")
+                    .join("aarch64-linux-android")
+                    .join(api_level),
+            );
+        }
+    }
+
+    let mut found_static_archive = false;
+    for path in roots {
+        if path.exists() {
+            let archive = path.join("libc++_static.a");
+            if archive.exists() {
+                found_static_archive = true;
+                println!(
+                    "cargo:warning=Found Android static libc++ archive at {}",
+                    archive.display()
+                );
+            }
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+    }
+
+    if !found_static_archive {
+        println!(
+            "cargo:warning=Did not find libc++_static.a in emitted Android link-search paths; rustc may fail if NDK layout differs"
+        );
+    }
+
+    // Enforce static C++ runtime for self-contained Android release binaries.
+    println!("cargo:rustc-link-lib=static=c++_static");
 }

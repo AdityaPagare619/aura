@@ -176,5 +176,8 @@ fn emit_android_cpp_runtime_linking() {
     }
 
     // Enforce static C++ runtime for self-contained Android release binaries.
+    // NDK splits some exception ABI symbols into libc++abi.a, so link it
+    // explicitly to avoid unresolved __cxa* / __gxx_personality_* symbols.
     println!("cargo:rustc-link-lib=static=c++_static");
+    println!("cargo:rustc-link-lib=static=c++abi");
 }

@@ -107,12 +107,18 @@ jobs:
         run: |
           TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOST_TAG=linux-x86_64" >> $GITHUB_ENV
 
           # Clang binaries for API level 21
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
           echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
           echo "CXX_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
           echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
+
+          # Provide explicit native search roots for rustc final link step.
+          # This prevents "could not find native static library c++_static"
+          # when build.rs requests static libc++ for Android artifacts.
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-L native=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib -L native=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android -L native=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/${API_LEVEL}" >> $GITHUB_ENV
 
           # Add NDK bin to PATH so cc-rs can find tools without full paths
           echo "${TOOLCHAIN}" >> $GITHUB_PATH

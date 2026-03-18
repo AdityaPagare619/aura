@@ -9,7 +9,7 @@
 [![CI](https://github.com/AdityaPagare619/aura/actions/workflows/ci.yml/badge.svg)](https://github.com/AdityaPagare619/aura/actions/workflows/ci.yml)
 [![Android Build](https://github.com/AdityaPagare619/aura/actions/workflows/build-android.yml/badge.svg)](https://github.com/AdityaPagare619/aura/actions/workflows/build-android.yml)
 [![License: Proprietary](https://img.shields.io/badge/license-Proprietary-red.svg)](#license)
-[![Version](https://img.shields.io/badge/version-4.0.0--alpha.1-blue.svg)](#production-status)
+[![Version](https://img.shields.io/badge/version-4.0.0--alpha.6-blue.svg)](#production-status)
 
 </div>
 

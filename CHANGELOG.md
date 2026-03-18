@@ -19,6 +19,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [4.0.0-alpha.6] — 2026-03-18
+
+### Fixed
+- Android `aura-neocortex` linking for release artifacts:
+  - added deterministic Android NDK static libc++ search paths
+  - linked required C++ ABI runtime symbols for static linkage
+- Restored `Build Android` workflow green state on `main` for neocortex + daemon
+- Preserved runtime dependency gate to block `libc++_shared.so` in release artifacts
+
+### Installer / Release Hardening
+- `install.sh --skip-build` now performs runtime probes for downloaded binaries
+  and fails fast if artifacts are not runnable on target device
+- Release pipeline publishes checksum sidecars and includes explicit verification instructions
+
+### Updated
+- Workspace version bumped to `4.0.0-alpha.6`
+- Installer stable channel now targets `v4.0.0-alpha.6`
+- Config defaults updated to `4.0.0-alpha.6`
+- README and architecture metadata updated for alpha.6 pre-release validation
+
+---
+
 ## [4.0.0-alpha.1] — 2026-03-15
 
 ### Overview
@@ -128,5 +150,6 @@ v3 source lives in `../aura-v3/` (parent directory).
 
 ---
 
-[Unreleased]: https://github.com/AdityaPagare619/aura/compare/v4.0.0-alpha.1...HEAD
+[Unreleased]: https://github.com/AdityaPagare619/aura/compare/v4.0.0-alpha.6...HEAD
+[4.0.0-alpha.6]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.6
 [4.0.0-alpha.1]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.1

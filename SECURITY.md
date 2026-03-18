@@ -106,5 +106,6 @@ The following are intentional design choices, not security vulnerabilities:
 | Date | Scope | Auditor | Findings |
 |------|-------|---------|----------|
 | 2026-03-15 | v4.0.0-alpha.1 (self-audit) | Maintainer | See STAGE8-COURTROOM-VERDICTS.md |
+| 2026-03-18 | v4.0.0-alpha.6 (android runtime-linking validation) | Maintainer | Verified static C++ runtime linkage path and Android build/release dependency gates |
 
 External security audits are planned before stable (non-alpha) release.

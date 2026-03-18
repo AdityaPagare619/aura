@@ -106,6 +106,21 @@ Android NDK static C++ runtime requires explicit `c++abi` linkage in addition to
 
 - If unresolved symbols persist with same ABI set, revert E2 and test alternate ABI runtime strategy.
 
-### Status
+### Result
 
-- Pending commit/push and workflow execution.
+- Build Android run `23250189302` (workflow_dispatch on branch `fix/android-static-libcpp-resolution`) passed end-to-end.
+- Key step outcomes:
+  - `Build aura-daemon cdylib (libaura_daemon.so)`: success
+  - `Build aura-neocortex binary`: success
+  - `Verify Android runtime dependencies`: success
+  - `Upload binaries`: success
+
+### Root Cause Confirmed
+
+- E1 solved archive discovery (`libc++_static.a` found) but linker still failed due to unresolved C++ exception ABI symbols.
+- Root issue: static libc++ linkage alone was insufficient; Android NDK C++ ABI runtime symbols required explicit `c++abi` linkage.
+
+### Final Status
+
+- E2 hypothesis confirmed.
+- Android cross-build is now green for neocortex with runtime dependency gate preserved.

@@ -26,10 +26,10 @@
 //!
 //! # Day-1 vs Year-1
 //!
-//! - **Day 1**: Nearly everything is `Unknown` or `CanDiscover`.  AURA is honest about being new
+//! - **Day 1**: Nearly everything is `Unknown` or `Uncertain`.  AURA is honest about being new
 //!   and learning.
-//! - **Month 1**: Many user-preference domains shift to `Believes` as patterns accumulate.
-//! - **Year 1**: Core routines and preferences are `Knows`.  AURA only hedges on genuinely
+//! - **Month 1**: Many user-preference domains shift to `Probable` as patterns accumulate.
+//! - **Year 1**: Core routines and preferences are `Certain`.  AURA only hedges on genuinely
 //!   ambiguous or novel situations.
 
 use std::collections::HashMap;
@@ -41,16 +41,16 @@ use tracing::{debug, info};
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Number of observations required before a domain can reach `Knows`.
+/// Number of observations required before a domain can reach `Certain`.
 const KNOWS_THRESHOLD: u32 = 20;
 
-/// Number of observations required before a domain can reach `Believes`.
-const BELIEVES_THRESHOLD: u32 = 5;
-
-/// Confidence must exceed this for a domain to be `Knows`.
+/// Confidence must exceed this for a domain to be `Certain`.
 const KNOWS_CONFIDENCE: f32 = 0.85;
 
-/// Confidence must exceed this for a domain to be `Believes`.
+/// Number of observations required before a domain can reach `Probable`.
+const BELIEVES_THRESHOLD: u32 = 5;
+
+/// Confidence must exceed this for a domain to be `Probable`.
 const BELIEVES_CONFIDENCE: f32 = 0.50;
 
 /// Maximum number of knowledge domains tracked.
@@ -71,24 +71,36 @@ const MS_PER_DAY: u64 = 24 * 60 * 60 * 1000;
 ///
 /// Ordered from least to most confident. Each level has communication
 /// implications for how AURA phrases its responses.
+///
+/// # Specification Alignment
+///
+/// These levels map to the specification in AURA-V4-IDENTITY-ETHICS-AND-PHILOSOPHY.md §8:
+/// - UNKNOWN: Acknowledged ignorance; refuses to speculate
+/// - UNCERTAIN: Low-confidence assessment; could be wrong
+/// - PROBABLE: Reasonable inference with some uncertainty
+/// - CERTAIN: High-confidence factual knowledge with strong grounding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EpistemicLevel {
     /// AURA has no information and cannot easily obtain it.
     /// Communication: "I don't know and I'm not sure how to find out."
+    /// Maps to spec level: UNKNOWN
     Unknown,
 
     /// AURA doesn't have the info but knows it could get it via device
     /// capabilities (internet search, app data, notifications, etc.).
     /// Communication: "I don't know yet, but I could check for you."
-    CanDiscover,
+    /// Maps to spec level: UNCERTAIN
+    Uncertain,
 
     /// AURA has some signal but not enough to be confident.
     /// Communication: "Based on what I've seen so far, I think..."
-    Believes,
+    /// Maps to spec level: PROBABLE
+    Probable,
 
     /// AURA has strong evidence from multiple observations over time.
     /// Communication: "I'm fairly confident that..."
-    Knows,
+    /// Maps to spec level: CERTAIN
+    Certain,
 }
 
 impl EpistemicLevel {
@@ -97,9 +109,9 @@ impl EpistemicLevel {
     pub fn hedge_phrase(&self) -> &'static str {
         match self {
             EpistemicLevel::Unknown => "I don't have information about this",
-            EpistemicLevel::CanDiscover => "I'm not sure yet, but I could look into it",
-            EpistemicLevel::Believes => "Based on what I've observed, I think",
-            EpistemicLevel::Knows => "I'm fairly confident that",
+            EpistemicLevel::Uncertain => "I'm not sure yet, but I could look into it",
+            EpistemicLevel::Probable => "Based on what I've observed, I think",
+            EpistemicLevel::Certain => "I'm fairly confident that",
         }
     }
 }
@@ -138,7 +150,7 @@ impl KnowledgeDomain {
     #[must_use]
     pub fn new(name: &str, discoverable: bool, now_ms: u64) -> Self {
         let level = if discoverable {
-            EpistemicLevel::CanDiscover
+            EpistemicLevel::Uncertain
         } else {
             EpistemicLevel::Unknown
         };
@@ -208,13 +220,13 @@ impl KnowledgeDomain {
     fn update_level(&mut self) {
         self.level =
             if self.confidence >= KNOWS_CONFIDENCE && self.observation_count >= KNOWS_THRESHOLD {
-                EpistemicLevel::Knows
+                EpistemicLevel::Certain
             } else if self.confidence >= BELIEVES_CONFIDENCE
                 && self.observation_count >= BELIEVES_THRESHOLD
             {
-                EpistemicLevel::Believes
+                EpistemicLevel::Probable
             } else if self.discoverable {
-                EpistemicLevel::CanDiscover
+                EpistemicLevel::Uncertain
             } else {
                 EpistemicLevel::Unknown
             };
@@ -332,16 +344,16 @@ impl EpistemicAwareness {
     /// Generate a summary of AURA's epistemic state.
     #[must_use]
     pub fn summary(&self) -> EpistemicSummary {
-        let mut knows = 0usize;
-        let mut believes = 0usize;
-        let mut can_discover = 0usize;
+        let mut certain = 0usize;
+        let mut probable = 0usize;
+        let mut uncertain = 0usize;
         let mut unknown = 0usize;
 
         for domain in self.domains.values() {
             match domain.level {
-                EpistemicLevel::Knows => knows += 1,
-                EpistemicLevel::Believes => believes += 1,
-                EpistemicLevel::CanDiscover => can_discover += 1,
+                EpistemicLevel::Certain => certain += 1,
+                EpistemicLevel::Probable => probable += 1,
+                EpistemicLevel::Uncertain => uncertain += 1,
                 EpistemicLevel::Unknown => unknown += 1,
             }
         }
@@ -355,9 +367,9 @@ impl EpistemicAwareness {
 
         EpistemicSummary {
             total_domains: self.domains.len(),
-            knows,
-            believes,
-            can_discover,
+            certain,
+            probable,
+            uncertain,
             unknown,
             mean_reliability,
         }
@@ -394,9 +406,9 @@ impl Default for EpistemicAwareness {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpistemicSummary {
     pub total_domains: usize,
-    pub knows: usize,
-    pub believes: usize,
-    pub can_discover: usize,
+    pub certain: usize,
+    pub probable: usize,
+    pub uncertain: usize,
     pub unknown: usize,
     pub mean_reliability: f32,
 }
@@ -417,9 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn test_discoverable_domain_starts_at_can_discover() {
+    fn test_discoverable_domain_starts_at_uncertain() {
         let domain = KnowledgeDomain::new("test", true, 1000);
-        assert_eq!(domain.level, EpistemicLevel::CanDiscover);
+        assert_eq!(domain.level, EpistemicLevel::Uncertain);
     }
 
     #[test]
@@ -433,7 +445,7 @@ mod tests {
             "10 observations should build confidence, got {}",
             domain.confidence
         );
-        assert_eq!(domain.level, EpistemicLevel::Believes);
+        assert_eq!(domain.level, EpistemicLevel::Probable);
     }
 
     #[test]
@@ -442,7 +454,7 @@ mod tests {
         for i in 0..50 {
             domain.record_observation(1000 + i);
         }
-        assert_eq!(domain.level, EpistemicLevel::Knows);
+        assert_eq!(domain.level, EpistemicLevel::Certain);
         assert!(domain.confidence > KNOWS_CONFIDENCE);
     }
 
@@ -466,19 +478,19 @@ mod tests {
     #[test]
     fn test_sustained_contradictions_drop_level() {
         let mut domain = KnowledgeDomain::new("schedule", true, 1000);
-        // Build up to Knows
+        // Build up to Certain
         for i in 0..50 {
             domain.record_observation(1000 + i);
         }
-        assert_eq!(domain.level, EpistemicLevel::Knows);
+        assert_eq!(domain.level, EpistemicLevel::Certain);
 
         // Sustained contradictions should drop level
         for i in 0..20 {
             domain.record_contradiction(2000 + i);
         }
         assert!(
-            domain.level < EpistemicLevel::Knows,
-            "sustained contradictions should drop from Knows"
+            domain.level < EpistemicLevel::Certain,
+            "sustained contradictions should drop from Certain"
         );
     }
 
@@ -506,7 +518,7 @@ mod tests {
             "I don't have information about this"
         );
         assert_eq!(
-            EpistemicLevel::Knows.hedge_phrase(),
+            EpistemicLevel::Certain.hedge_phrase(),
             "I'm fairly confident that"
         );
     }
@@ -519,7 +531,7 @@ mod tests {
             domain.record_observation(1000 + i);
         }
 
-        assert_eq!(awareness.level_for("coffee_time"), EpistemicLevel::Knows);
+        assert_eq!(awareness.level_for("coffee_time"), EpistemicLevel::Certain);
         assert_eq!(awareness.level_for("nonexistent"), EpistemicLevel::Unknown);
     }
 
@@ -543,9 +555,9 @@ mod tests {
 
         let summary = awareness.summary();
         assert_eq!(summary.total_domains, 4);
-        assert_eq!(summary.knows, 1);
-        assert_eq!(summary.believes, 1);
-        assert_eq!(summary.can_discover, 1);
+        assert_eq!(summary.certain, 1);
+        assert_eq!(summary.probable, 1);
+        assert_eq!(summary.uncertain, 1);
         assert_eq!(summary.unknown, 1);
     }
 
@@ -558,6 +570,6 @@ mod tests {
         let json = serde_json::to_string(&awareness).expect("serialize");
         let back: EpistemicAwareness = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.domain_count(), 1);
-        assert_eq!(back.level_for("test"), EpistemicLevel::CanDiscover);
+        assert_eq!(back.level_for("test"), EpistemicLevel::Uncertain);
     }
 }

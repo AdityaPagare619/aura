@@ -572,7 +572,7 @@ impl IdentityEngine {
         }
 
         let lower = response_text.to_ascii_lowercase();
-        let mut weakest_level = epistemic::EpistemicLevel::Knows;
+        let mut weakest_level = epistemic::EpistemicLevel::Certain;
         let mut weakest_domain: Option<&str> = None;
 
         for domain_name in &domains {
@@ -584,8 +584,8 @@ impl IdentityEngine {
             }
         }
 
-        // If all domains are Knows, no marker needed.
-        if weakest_level == epistemic::EpistemicLevel::Knows {
+        // If all domains are Certain, no marker needed.
+        if weakest_level == epistemic::EpistemicLevel::Certain {
             return None;
         }
 
@@ -596,17 +596,17 @@ impl IdentityEngine {
                     || lower.contains("i'm not sure")
                     || lower.contains("i don't have information")
             },
-            epistemic::EpistemicLevel::CanDiscover => {
+            epistemic::EpistemicLevel::Uncertain => {
                 lower.contains("i could check")
                     || lower.contains("let me look")
                     || lower.contains("i could look into")
             },
-            epistemic::EpistemicLevel::Believes => {
+            epistemic::EpistemicLevel::Probable => {
                 lower.contains("i think")
                     || lower.contains("based on what i've seen")
                     || lower.contains("it seems like")
             },
-            epistemic::EpistemicLevel::Knows => true,
+            epistemic::EpistemicLevel::Certain => true,
         };
 
         if already_hedged {

@@ -217,16 +217,16 @@ classify_runtime_failure() {
     local output="${2:-}"
 
     if [ "$exit_code" -eq 139 ] || printf '%s\n' "$output" | grep -qi 'segmentation fault'; then
-        printf '%s' "startup segfault (exit 139)"
+        printf '%s' "F001_STARTUP_SEGFAULT"
         return 0
     fi
 
     if printf '%s\n' "$output" | grep -qi 'CANNOT LINK EXECUTABLE\|library ".*" not found\|dlopen failed'; then
-        printf '%s' "linker missing dependency"
+        printf '%s' "F002_DYNAMIC_LINKER_DEPENDENCY"
         return 0
     fi
 
-    printf '%s' "unknown runtime failure"
+    printf '%s' "F099_UNKNOWN_RUNTIME"
 }
 
 release_tag_to_version() {
@@ -1168,6 +1168,29 @@ phase_build() {
                         "Set AURA_ALLOW_UNVERIFIED_ARTIFACTS=1 only for emergency testing."
                 fi
             fi
+
+            # ── Binary identity check ──────────────────────────────────────────
+            # Validate the downloaded file is a real AArch64 ELF binary before
+            # attempting to execute it. Catches HTML error pages, wrong-arch
+            # artifacts, or truncated downloads that pass SHA256 (if .sha256
+            # was also corrupted at source).
+            local elf_magic elf_machine
+            elf_magic=$(od -A n -N 4 -t x1 "$dest" 2>/dev/null | tr -d ' \n')
+            if [ "$elf_magic" != "7f454c46" ]; then
+                rm -f "$dest"
+                die "Downloaded $artifact is not a valid ELF binary (magic=${elf_magic})." \
+                    "Expected 7f454c46 (ELF). The release artifact may be corrupt or replaced by an error page." \
+                    "Failure class: F_BINARY_CONTRACT_MAGIC"
+            fi
+            # e_machine at offset 18-19, little-endian: b7 00 = EM_AARCH64
+            elf_machine=$(od -A n -j 18 -N 2 -t x1 "$dest" 2>/dev/null | tr -d ' \n')
+            if [ "$elf_machine" != "b700" ]; then
+                rm -f "$dest"
+                die "Downloaded $artifact is not an AArch64 binary (e_machine=${elf_machine})." \
+                    "Expected b700 (EM_AARCH64). Wrong architecture artifact was published." \
+                    "Failure class: F_BINARY_CONTRACT_ARCH"
+            fi
+            log_step "ELF identity verified: AArch64 ELF"
 
             chmod +x "$dest"
             log_step "Downloaded: $dest"

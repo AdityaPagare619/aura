@@ -39,6 +39,9 @@
 #   Phase 6:   Source acquisition (git clone + submodules)
 #   Phase 7:   Model download (resumable, retry-3, progress)
 #   Phase 8:   Build (cargo build --features voice)
+#              NOTE: when --skip-build is used, installer runs Phase 8 before
+#              Phase 7 to fail fast on binary/runtime incompatibility and avoid
+#              wasting multi-GB model downloads.
 #   Phase 9:   Purge build tools (~4 GB saved, unless --keep-build-tools)
 #   Phase 10:  Config finalization (full config.toml with all sections)
 #   Phase 11:  Service setup (termux-services or .bashrc fallback)
@@ -1840,8 +1843,20 @@ main() {
     phase_packages
     phase_rust
     phase_source
-    phase_model
-    phase_build
+
+    # Fast-fail ordering for --skip-build:
+    # validate/download runtime binaries first, then download large model files.
+    # This prevents wasting time/data when release binaries are non-runnable on
+    # the target device.
+    if [ "$OPT_SKIP_BUILD" = "1" ]; then
+        log_info "Skip-build fast-fail mode: validating binaries before model download"
+        phase_build
+        phase_model
+    else
+        phase_model
+        phase_build
+    fi
+
     phase_purge_build_tools
     phase_config
     phase_service

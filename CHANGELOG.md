@@ -34,6 +34,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   - unknown runtime failure
 - Promoted installer phase verification runtime probe failures to hard-fail
   (non-zero exit), preventing false-success installation banners.
+- Reordered unattended phase execution for `--skip-build` to validate/download
+  release binaries before model download, so runtime-incompatible binaries fail
+  fast without wasting multi-GB model transfer time.
 
 ### Verification
 - `verify.sh` now surfaces runtime failure classification summary with explicit

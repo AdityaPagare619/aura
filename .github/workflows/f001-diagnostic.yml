@@ -1,0 +1,231 @@
+# ============================================================
+# AURA F001 — Diagnostic Build Pipeline
+# Purpose: Build unstripped/test binaries to diagnose F001 startup crash
+#
+# Triggers: Manual (workflow_dispatch) only
+# Products: Unstripped aura-daemon binary for on-device testing
+#
+# VARIANTS:
+#   - unstripped: Build without llvm-strip (tests H2)
+#   - old-nightly: Build with nightly-2025-06-01 (tests H5)
+#   - unwind-panic: Build with panic=unwind (tests H6)
+#
+# TOOLCHAIN: Default nightly-2026-03-01 (matches production)
+# SECURITY:  NDK download verified with SHA256 checksum
+# ============================================================
+
+name: "F001 Diagnostic Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Build variant to test F001 hypotheses'
+        required: true
+        default: 'unstripped'
+        type: choice
+        options:
+          - unstripped
+          - old-nightly
+          - unwind-panic
+      notes:
+        description: 'Optional notes for this diagnostic run'
+        required: false
+        default: ''
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: r26b
+  NDK_SHA256: "ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632"
+  API_LEVEL: "26"
+  TARGET: aarch64-linux-android
+
+jobs:
+  # ----------------------------------------------------------------
+  # Build the diagnostic binary
+  # ----------------------------------------------------------------
+  build:
+    name: "Build ${{ inputs.variant }}"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      # ----------------------------------------------------------
+      # Rust toolchain selection based on variant
+      # ----------------------------------------------------------
+      - name: "Install Rust — nightly-2026-03-01 (default)"
+        if: inputs.variant == 'unstripped'
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2026-03-01
+          targets: aarch64-linux-android
+
+      - name: "Install Rust — nightly-2025-06-01 (H5 test: old nightly)"
+        if: inputs.variant == 'old-nightly'
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2025-06-01
+          targets: aarch64-linux-android
+
+      - name: "Install Rust — nightly-2026-03-01 (for unwind-panic)"
+        if: inputs.variant == 'unwind-panic'
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: nightly-2026-03-01
+          targets: aarch64-linux-android
+
+      # ----------------------------------------------------------
+      # Cache NDK
+      # ----------------------------------------------------------
+      - name: Cache Android NDK r26b
+        id: ndk-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/android-ndk-r26b
+          key: ndk-${{ env.NDK_VERSION }}-diag-${{ inputs.variant }}-${{ env.NDK_SHA256 }}
+
+      - name: Download and verify Android NDK r26b
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "Downloading NDK from: $NDK_URL"
+          curl -fsSL "$NDK_URL" -o ndk.zip
+
+          echo "Verifying NDK SHA256 checksum..."
+          ACTUAL_SHA256=$(sha256sum ndk.zip | cut -d' ' -f1)
+          if [ "$ACTUAL_SHA256" != "$NDK_SHA256" ]; then
+            echo "FATAL: NDK checksum mismatch!"
+            echo "Expected: $NDK_SHA256"
+            echo "Actual:   $ACTUAL_SHA256"
+            rm -f ndk.zip
+            exit 1
+          fi
+          echo "NDK checksum verified: $ACTUAL_SHA256"
+
+          unzip -q ndk.zip -d ~
+          rm -f ndk.zip
+
+      - name: Set NDK environment
+        run: echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      # ----------------------------------------------------------
+      # Configure cross-compilation
+      # ----------------------------------------------------------
+      - name: Configure cross-compilation env
+        run: |
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-L native=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android -L native=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/${API_LEVEL}" >> $GITHUB_ENV
+
+      # ----------------------------------------------------------
+      # System build deps
+      # ----------------------------------------------------------
+      - name: Install system build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
+      # ----------------------------------------------------------
+      # Apply panic=unwind patch if variant is unwind-panic
+      # ----------------------------------------------------------
+      - name: "Apply panic=unwind patch (H6 test)"
+        if: inputs.variant == 'unwind-panic'
+        run: |
+          echo "Patching Cargo.toml for panic=unwind..."
+          sed -i 's/^panic = "abort"$//' crates/aura-daemon/Cargo.toml 2>/dev/null || true
+          # Add [profile.release] with panic=unwind
+          if grep -q '\[profile.release\]' crates/aura-daemon/Cargo.toml; then
+            sed -i '/\[profile.release\]/a panic = "unwind"' crates/aura-daemon/Cargo.toml
+          else
+            echo '[profile.release]' >> crates/aura-daemon/Cargo.toml
+            echo 'panic = "unwind"' >> crates/aura-daemon/Cargo.toml
+          fi
+          echo "=== Modified aura-daemon/Cargo.toml ==="
+          cat crates/aura-daemon/Cargo.toml | tail -5
+
+      # ----------------------------------------------------------
+      # Build aura-daemon (THE KEY BINARY)
+      # Note: We build --bin aura-daemon explicitly to get the executable
+      # ----------------------------------------------------------
+      - name: "Build aura-daemon — ${{ inputs.variant }}"
+        run: |
+          echo "=== BUILDING VARIANT: ${{ inputs.variant }} ==="
+          cargo build --release -p aura-daemon --bin aura-daemon --target aarch64-linux-android
+          echo "Build complete."
+
+      # ----------------------------------------------------------
+      # DO NOT STRIP — this is the diagnostic point of H2
+      # ----------------------------------------------------------
+      - name: "Verify: binary is UNSTRIPPED (H2 diagnostic)"
+        if: inputs.variant == 'unstripped'
+        run: |
+          BINARY="target/aarch64-linux-android/release/aura-daemon"
+          echo "Checking if binary is stripped..."
+          if readelf -S "$BINARY" 2>/dev/null | grep -q '.symtab'; then
+            echo "✅ Binary IS UNSTRIPPED (has .symtab section)"
+          else
+            echo "❌ Binary appears to be stripped (no .symtab)"
+          fi
+          echo "Binary size: $(du -sh $BINARY | cut -f1)"
+          echo "Symbols present: $(readelf -S $BINARY | grep -c '.symtab\|\.strtab' 2>/dev/null || echo 0) sections"
+
+      - name: "Log variant info for debugging"
+        run: |
+          BINARY="target/aarch64-linux-android/release/aura-daemon"
+          echo "=== BINARY INFO ==="
+          file "$BINARY"
+          echo ""
+          echo "=== DYNAMIC DEPENDENCIES ==="
+          readelf -d "$BINARY" | grep NEEDED || echo "  (no NEEDED entries)"
+          echo ""
+          echo "=== ELF HEADERS ==="
+          readelf -h "$BINARY" | head -15
+
+      # ----------------------------------------------------------
+      # Upload artifact
+      # ----------------------------------------------------------
+      - name: Upload diagnostic binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "aura-daemon-${{ inputs.variant }}"
+          path: "target/aarch64-linux-android/release/aura-daemon"
+          retention-days: 3
+
+  # ----------------------------------------------------------------
+  # Summary
+  # ----------------------------------------------------------------
+  summary:
+    name: "F001 Diagnostic Summary"
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## F001 Diagnostic Build — ${{ inputs.variant }}"
+          echo ""
+          echo "| Info | Value |"
+          echo "|------|-------|"
+          echo "| Variant | ${{ inputs.variant }} |"
+          echo "| Toolchain | ${{ inputs.variant == 'old-nightly' && 'nightly-2025-06-01' || 'nightly-2026-03-01' }} |"
+          echo "| NDK | r26b (API 26) |"
+          echo "| Stripped | ${{ inputs.variant == 'unstripped' && 'NO (diagnostic)' || 'YES' }} |"
+          echo "| panic mode | ${{ inputs.variant == 'unwind-panic' && 'unwind' || 'abort (default)' }} |"
+          echo ""
+          echo "### Next Steps"
+          echo ""
+          echo "1. Download the artifact: \`aura-daemon-${{ inputs.variant }}\`"
+          echo "2. Transfer to Android device"
+          echo "3. Run: \`chmod +x aura-daemon && ./aura-daemon --version\`"
+          echo "4. Report result: if it outputs version number → hypothesis CONFIRMED"
+          echo ""
+          if [ -n "${{ inputs.notes }}" ]; then
+            echo "### Notes"
+            echo "${{ inputs.notes }}"
+          fi

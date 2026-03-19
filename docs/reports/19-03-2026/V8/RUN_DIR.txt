@@ -1,0 +1,1 @@
+RUN_DIR=/data/data/com.termux/files/home/storage/downloads/aura-alpha8-forensics-20260319-161657

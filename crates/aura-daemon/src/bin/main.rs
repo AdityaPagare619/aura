@@ -84,7 +84,39 @@ impl Args {
 }
 
 fn main() {
-    // Initialize tracing early.
+    // ── Step 1: Parse CLI args BEFORE tracing init ─────────────────────────
+    // This ensures --version/--help exit cleanly with no tracing pollution.
+    // Tracing is intentionally NOT initialized here so that --version/--help
+    // output is clean and the runtime probe in install.sh gets reliable output.
+    let args = match Args::parse() {
+        Ok(a) => a,
+        Err(e) => {
+            // Use eprintln! since tracing is not yet initialized.
+            eprintln!("error: {e}");
+            print_usage();
+            std::process::exit(1);
+        },
+    };
+
+    // ── Step 2: Install panic hook ──────────────────────────────────────────
+    // Set a global panic hook BEFORE any subsystem can panic.
+    // This ensures panic messages are logged even with panic="abort" in release.
+    std::panic::set_hook(Box::new(|panic_info| {
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        let location = panic_info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        eprintln!("FATAL PANIC at {location}: {msg}");
+    }));
+
+    // ── Step 3: Initialize tracing ─────────────────────────────────────────
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -95,16 +127,6 @@ fn main() {
         .init();
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "aura-daemon starting");
-
-    // Parse CLI args.
-    let args = match Args::parse() {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to parse arguments");
-            print_usage();
-            std::process::exit(1);
-        },
-    };
 
     tracing::info!(config = %args.config_path.display(), "loading configuration");
 

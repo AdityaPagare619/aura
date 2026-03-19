@@ -1,6 +1,6 @@
 # AURA v4 System Architecture
 
-> **Version:** 4.0.0-alpha.6 | **Edition:** Rust 2021 | **Target:** Android (aarch64) | **Status:** Living Document
+> **Version:** 4.0.0-alpha.7 | **Edition:** Rust 2021 | **Target:** Android (aarch64) | **Status:** Living Document
 >
 > This document is the comprehensive architecture reference for AURA v4. It is intended for senior engineers who will build, maintain, and extend the system. Every claim maps to source code in the `aura-v4/crates/` workspace.
 

@@ -107,5 +107,6 @@ The following are intentional design choices, not security vulnerabilities:
 |------|-------|---------|----------|
 | 2026-03-15 | v4.0.0-alpha.1 (self-audit) | Maintainer | See STAGE8-COURTROOM-VERDICTS.md |
 | 2026-03-18 | v4.0.0-alpha.6 (android runtime-linking validation) | Maintainer | Verified static C++ runtime linkage path and Android build/release dependency gates |
+| 2026-03-19 | v4.0.0-alpha.7 (installer runtime contract hardening) | Maintainer | Added strict skip-build binary validation and hard-fail runtime probes to block false-success installs |
 
 External security audits are planned before stable (non-alpha) release.

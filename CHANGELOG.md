@@ -19,6 +19,33 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [4.0.0-alpha.7] — 2026-03-19
+
+### Fixed
+- Hardened `install.sh --skip-build` existing-binary reuse policy:
+  - existing binaries are now reused only after runtime probe success
+  - daemon version must match target release version before reuse
+  - mismatches and failed probes force release re-download
+
+### Installer / Runtime Contract
+- Added runtime failure classification in installer verification paths:
+  - startup segfault (exit 139)
+  - linker missing dependency
+  - unknown runtime failure
+- Promoted installer phase verification runtime probe failures to hard-fail
+  (non-zero exit), preventing false-success installation banners.
+
+### Verification
+- `verify.sh` now surfaces runtime failure classification summary with explicit
+  failure codes (`F001_STARTUP_SEGFAULT`, `F002_DYNAMIC_LINKER_DEPENDENCY`,
+  `F099_UNKNOWN_RUNTIME`) for faster incident triage.
+
+### Updated
+- Workspace version bumped to `4.0.0-alpha.7`
+- Installer stable channel now targets `v4.0.0-alpha.7`
+
+---
+
 ## [4.0.0-alpha.6] — 2026-03-18
 
 ### Fixed
@@ -150,6 +177,7 @@ v3 source lives in `../aura-v3/` (parent directory).
 
 ---
 
-[Unreleased]: https://github.com/AdityaPagare619/aura/compare/v4.0.0-alpha.6...HEAD
+[Unreleased]: https://github.com/AdityaPagare619/aura/compare/v4.0.0-alpha.7...HEAD
+[4.0.0-alpha.7]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.7
 [4.0.0-alpha.6]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.6
 [4.0.0-alpha.1]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.1

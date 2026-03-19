@@ -16,7 +16,7 @@
 checkpoint_interval_s = 300
 rss_warning_mb        = 28
 rss_ceiling_mb        = 30
-version               = "4.0.0-alpha.6"
+version               = "4.0.0-alpha.7"
 log_level             = "info"
 data_dir              = "/data/data/com.aura/files"
 

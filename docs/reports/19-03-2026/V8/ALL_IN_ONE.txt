@@ -1,0 +1,95 @@
+===== RUN_DIR =====
+RUN_DIR=/data/data/com.termux/files/home/storage/downloads/aura-alpha8-mobile-20260319-164234
+
+===== 00_installer_tag_check.log =====
+56:AURA_VERSION="4.0.0-alpha.8"
+58:AURA_STABLE_TAG="v4.0.0-alpha.8"
+
+===== 01_pre_snapshot.log =====
+=== PRE SNAPSHOT ===
+Thu Mar 19 16:42:34 IST 2026
+PREFIX=/data/data/com.termux/files/usr
+HOME=/data/data/com.termux/files/home
+
+[which]
+true
+true
+
+[files]
+
+[file]
+
+[sha256]
+
+===== 02_repair_build_only.log =====
+
+━━━ Repair Mode · Phase: build ━━━
+
+━━━ Phase 8 · Build ━━━
+  → Skipping build (--skip-build)
+  → Downloading pre-built binaries from GitHub Releases...
+  → Downloading: https://github.com/AdityaPagare619/aura/releases/download/v4.0.0-alpha.8/aura-daemon-v4.0.0-alpha.8-aarch64-linux-android
+##O#-                                                 #=#=#                                                 ###=#                                                 ##O#-#                                                -##=#  #                                                                                                1.4%#                                                 4.1%###                                               6.8%####                                              9.5%#####                                            11.9%#######                                          15.0%########                                         18.4%#########                                        19.9%##########                                       23.3%#############                                    28.1%###############                                  33.2%##################                               39.3%#####################                            45.1%########################                         51.7%###########################                      58.5%###############################                  66.7%###################################              74.5%#######################################          84.4%############################################     94.9%############################################### 100.0%
+  ✓ Checksum verified: aura-daemon-v4.0.0-alpha.8-aarch64-linux-android
+  ✓ Downloaded: /data/data/com.termux/files/usr/bin/aura-daemon
+
+  ✗ ERROR: Downloaded aura-daemon failed runtime probe (--version).
+    Fix: Failure class: startup segfault (exit 139)
+    Fix: Probe output: 
+    Fix: This release artifact is not runnable on this device.
+
+build_gate_rc=1
+
+===== 03_daemon_baseline.log =====
+aura-daemon missing at /data/data/com.termux/files/usr/bin/aura-daemon (installer removes failed binary by design)
+rc=127
+
+===== 04_daemon_no_preload.log =====
+aura-daemon missing at /data/data/com.termux/files/usr/bin/aura-daemon
+rc=127
+
+===== 05_daemon_min_env.log =====
+aura-daemon missing at /data/data/com.termux/files/usr/bin/aura-daemon
+rc=127
+
+===== 06_neocortex_help.log =====
+aura-neocortex missing at /data/data/com.termux/files/usr/bin/aura-neocortex (installer removes failed binary by design)
+rc=127
+
+===== 07_readelf_dynamic.log =====
+=== READELF daemon ===
+missing: /data/data/com.termux/files/usr/bin/aura-daemon
+
+=== READELF neocortex ===
+missing: /data/data/com.termux/files/usr/bin/aura-neocortex
+
+===== 08_logcat_filtered.log =====
+grep: true: No such file or directory
+
+===== 09_rc_summary.log =====
+=== RC SUMMARY ===
+build_gate_rc=1
+==> /data/data/com.termux/files/home/storage/downloads/aura-alpha8-mobile-20260319-164234/03_daemon_baseline.log <==
+rc=127
+==> /data/data/com.termux/files/home/storage/downloads/aura-alpha8-mobile-20260319-164234/04_daemon_no_preload.log <==
+rc=127
+==> /data/data/com.termux/files/home/storage/downloads/aura-alpha8-mobile-20260319-164234/05_daemon_min_env.log <==
+rc=127
+==> /data/data/com.termux/files/home/storage/downloads/aura-alpha8-mobile-20260319-164234/06_neocortex_help.log <==
+rc=127
+
+===== 10_manifest.log =====
+total 120K
+-rw-rw----. 1 u0_a319 media_rw   68 Mar 19 16:42 00_installer_tag_check.log
+-rw-rw----. 1 u0_a319 media_rw  173 Mar 19 16:42 01_pre_snapshot.log
+-rw-rw----. 1 u0_a319 media_rw 2.1K Mar 19 16:42 02_repair_build_only.log
+-rw-rw----. 1 u0_a319 media_rw  122 Mar 19 16:42 03_daemon_baseline.log
+-rw-rw----. 1 u0_a319 media_rw   78 Mar 19 16:42 04_daemon_no_preload.log
+-rw-rw----. 1 u0_a319 media_rw   78 Mar 19 16:42 05_daemon_min_env.log
+-rw-rw----. 1 u0_a319 media_rw  128 Mar 19 16:42 06_neocortex_help.log
+-rw-rw----. 1 u0_a319 media_rw  167 Mar 19 16:42 07_readelf_dynamic.log
+-rw-rw----. 1 u0_a319 media_rw   38 Mar 19 16:42 08_logcat_filtered.log
+-rw-rw----. 1 u0_a319 media_rw  531 Mar 19 16:42 09_rc_summary.log
+-rw-rw----. 1 u0_a319 media_rw    0 Mar 19 16:42 10_manifest.log
+-rw-rw----. 1 u0_a319 media_rw   94 Mar 19 16:42 RUN_DIR.txt
+-rw-rw----. 1 u0_a319 media_rw  74K Mar 19 16:42 install.sh

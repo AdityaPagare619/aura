@@ -1,0 +1,1 @@
+RUN_DIR=/data/data/com.termux/files/home/storage/downloads/aura-alpha7-reinstall-20260319-150725

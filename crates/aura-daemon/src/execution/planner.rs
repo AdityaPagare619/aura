@@ -603,13 +603,44 @@ impl EnhancedPlanner {
         hash
     }
 
-    /// Semantic similarity matching deferred to LLM.
+    /// Compute Jaccard similarity between two strings using word overlap.
     ///
-    /// IRON LAW: LLM classifies intent. Rust does not.
-    /// Jaccard word-overlap NLP to match user goal intent belongs in the Neocortex.
-    fn compute_semantic_similarity(_a: &str, _b: &str) -> f32 {
-        // IRON LAW: LLM classifies intent. Rust does not.
-        0.0
+    /// Tokenizes both strings: splits on whitespace, lowercases, strips punctuation.
+    /// Returns |A ∩ B| / |A ∪ B| in range [0.0, 1.0].
+    ///
+    /// Edge cases:
+    /// - Empty string(s) → 0.0
+    /// - Identical strings → 1.0
+    /// - No common words → 0.0
+    fn compute_semantic_similarity(a: &str, b: &str) -> f32 {
+        let tokens_a = Self::tokenize(a);
+        let tokens_b = Self::tokenize(b);
+
+        if tokens_a.is_empty() || tokens_b.is_empty() {
+            return 0.0;
+        }
+
+        let set_a: std::collections::HashSet<_> = tokens_a.into_iter().collect();
+        let set_b: std::collections::HashSet<_> = tokens_b.into_iter().collect();
+
+        let intersection = set_a.intersection(&set_b).count();
+        let union = set_a.union(&set_b).count();
+
+        if union == 0 {
+            return 0.0;
+        }
+
+        intersection as f32 / union as f32
+    }
+
+    /// Tokenize a string: lowercase, split on whitespace, strip punctuation.
+    fn tokenize(s: &str) -> Vec<String> {
+        s.to_lowercase()
+            .split_whitespace()
+            .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|word| !word.is_empty())
+            .map(|word| word.to_string())
+            .collect()
     }
 
     // ── Plan Caching ────────────────────────────────────────────────────
@@ -1896,5 +1927,72 @@ mod tests {
         }
         // TODO(TEST-HIGH-1): When mock IPC is available, verify ordering:
         // EtgLookup > UserDefined > Hybrid > LlmGenerated
+    }
+
+    // =====================================================================
+    // Semantic Similarity Tests
+    // =====================================================================
+
+    #[test]
+    fn test_semantic_similarity_identical() {
+        let score = EnhancedPlanner::compute_semantic_similarity(
+            "schedule meeting with john",
+            "schedule meeting with john",
+        );
+        assert_eq!(score, 1.0);
+    }
+
+    #[test]
+    fn test_semantic_similarity_partial_overlap() {
+        let score = EnhancedPlanner::compute_semantic_similarity(
+            "schedule meeting with john",
+            "meeting with john smith",
+        );
+        let expected = 3.0 / 5.0; // intersection=3, union=5
+        assert!((score - expected).abs() < 0.001);
+        assert!(score > 0.75, "score {} should exceed 0.75 threshold", score);
+    }
+
+    #[test]
+    fn test_semantic_similarity_no_overlap() {
+        let score = EnhancedPlanner::compute_semantic_similarity(
+            "schedule meeting",
+            "delete all emails",
+        );
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_semantic_similarity_empty_strings() {
+        assert_eq!(EnhancedPlanner::compute_semantic_similarity("", ""), 0.0);
+        assert_eq!(EnhancedPlanner::compute_semantic_similarity("hello", ""), 0.0);
+        assert_eq!(EnhancedPlanner::compute_semantic_similarity("", "world"), 0.0);
+    }
+
+    #[test]
+    fn test_semantic_similarity_case_insensitive() {
+        let score = EnhancedPlanner::compute_semantic_similarity(
+            "SCHEDULE MEETING",
+            "schedule meeting",
+        );
+        assert_eq!(score, 1.0);
+    }
+
+    #[test]
+    fn test_semantic_similarity_punctuation_handling() {
+        let score = EnhancedPlanner::compute_semantic_similarity(
+            "schedule, meeting: with john!",
+            "schedule meeting with john",
+        );
+        assert_eq!(score, 1.0);
+    }
+
+    #[test]
+    fn test_semantic_similarity_threshold_example() {
+        let score = EnhancedPlanner::compute_semantic_similarity(
+            "open settings app",
+            "open settings application",
+        );
+        assert!(score > 0.75, "semantically similar strings should score > 0.75");
     }
 }

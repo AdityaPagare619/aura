@@ -164,7 +164,7 @@ mod policy_ethics_tests {
     fn test_truth_framework_detects_deception() {
         let tf = TruthFramework::new();
         let validation = tf.validate_response("Trust me, I guarantee this is 100% certain safe.");
-        assert!(validation.truthful < 1.0);
+        assert!(validation.trustworthy < 1.0);
         assert!(!validation.notes.is_empty());
     }
 
@@ -188,7 +188,7 @@ mod policy_ethics_tests {
     fn test_truth_framework_short_response_fails_relevance() {
         let tf = TruthFramework::new();
         let validation = tf.validate_response("OK.");
-        assert!(validation.relevant < 1.0);
+        assert!(validation.reliable < 1.0);
     }
 
     // =========================================================================

@@ -144,39 +144,34 @@ impl PolicyGate {
 
     /// Check an action with trust-aware policy adjustment.
     ///
-    /// Trust thresholds:
-    /// - τ < 0.3 (low trust): Tighten rules — Audit verdicts become Block
-    /// - 0.3 ≤ τ ≤ 0.6 (medium trust): Standard behavior (same as check_action)
-    /// - τ > 0.6 (high trust): Loosen slightly — Audit verdicts become Allow
+    /// Trust thresholds (aligned with relationship.rs trust tiers):
+    /// - τ < 0.15 (STRANGER): Tighten rules — Audit verdicts become Block
+    /// - 0.15 ≤ τ < 0.35 (ACQUAINTANCE): Standard behavior
+    /// - 0.35 ≤ τ < 0.60 (FRIEND): Standard behavior
+    /// - τ ≥ 0.60 (CLOSEFRIEND/SOULMATE): Standard behavior — NO bypass
     ///
-    /// **Block verdicts are never downgraded regardless of trust.**
+    /// **IMPORTANT: Layer 2 ethics are NEVER bypassable regardless of trust.**
+    /// Block and Audit verdicts remain unchanged at all trust levels.
+    /// The 7 Iron Laws require that trust NEVER override ethics verdicts.
     #[tracing::instrument(skip(self))]
     pub fn check_with_trust(&self, package: &str, action: &str, trust: f32) -> PolicyVerdict {
         let trust = trust.clamp(0.0, 1.0);
         let base_verdict = self.check_action(package, action);
 
         match (&base_verdict, trust) {
-            // Low trust: escalate Audit → Block
-            (PolicyVerdict::Audit { reason }, t) if t < 0.3 => {
+            // Low trust: escalate Audit → Block (STRANGER tier: τ < 0.15)
+            (PolicyVerdict::Audit { reason }, t) if t < 0.15 => {
                 tracing::warn!(
                     trust = t,
                     reason = reason.as_str(),
-                    "low trust — escalating audit to block"
+                    "low trust (STRANGER) — escalating audit to block"
                 );
                 PolicyVerdict::Block {
                     reason: format!("{} (escalated: trust={:.2})", reason, t),
                 }
             },
-            // High trust: downgrade Audit → Allow
-            (PolicyVerdict::Audit { reason }, t) if t > 0.6 => {
-                tracing::info!(
-                    trust = t,
-                    reason = reason.as_str(),
-                    "high trust — downgrading audit to allow"
-                );
-                PolicyVerdict::Allow
-            },
-            // Medium trust or Block/Allow: no change
+            // Medium/high trust (ACQUAINTANCE, FRIEND, CLOSEFRIEND, SOULMATE): no change
+            // Audit verdicts stand as-is — trust NEVER bypasses ethics
             _ => base_verdict,
         }
     }
@@ -297,34 +292,35 @@ impl PolicyGate {
 // TRUTH Framework
 // ---------------------------------------------------------------------------
 
-/// The five TRUTH principles: Truthful, Relevant, Unbiased, Transparent, Helpful.
+/// The five TRUTH principles: Trustworthy, Reliable, Unbiased, Transparent, Honest.
+/// Aligned with documentation in AURA-V4-IDENTITY-ETHICS-AND-PHILOSOPHY.md Section 4.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TruthFramework {
-    /// Weight for the Truthful principle.
-    pub truthful_weight: f32,
-    /// Weight for the Relevant principle.
-    pub relevant_weight: f32,
+    /// Weight for the Trustworthy principle.
+    pub trustworthy_weight: f32,
+    /// Weight for the Reliable principle.
+    pub reliable_weight: f32,
     /// Weight for the Unbiased principle.
     pub unbiased_weight: f32,
     /// Weight for the Transparent principle.
     pub transparent_weight: f32,
-    /// Weight for the Helpful principle.
-    pub helpful_weight: f32,
+    /// Weight for the Honest principle.
+    pub honest_weight: f32,
 }
 
 /// Per-principle compliance scores and overall result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TruthValidation {
-    /// Truthful score (0.0–1.0).  Higher = more compliant.
-    pub truthful: f32,
-    /// Relevant score (0.0–1.0).
-    pub relevant: f32,
+    /// Trustworthy score (0.0–1.0). Higher = more compliant.
+    pub trustworthy: f32,
+    /// Reliable score (0.0–1.0).
+    pub reliable: f32,
     /// Unbiased score (0.0–1.0).
     pub unbiased: f32,
     /// Transparent score (0.0–1.0).
     pub transparent: f32,
-    /// Helpful score (0.0–1.0).
-    pub helpful: f32,
+    /// Honest score (0.0–1.0).
+    pub honest: f32,
     /// Weighted average across all principles.
     pub overall: f32,
     /// Whether the response passes the minimum threshold (≥ 0.5).
@@ -361,11 +357,11 @@ impl TruthFramework {
     /// Create with default equal weights.
     pub fn new() -> Self {
         Self {
-            truthful_weight: 1.0,
-            relevant_weight: 1.0,
+            trustworthy_weight: 1.0,
+            reliable_weight: 1.0,
             unbiased_weight: 1.0,
             transparent_weight: 1.0,
-            helpful_weight: 1.0,
+            honest_weight: 1.0,
         }
     }
 
@@ -377,23 +373,23 @@ impl TruthFramework {
         let lower = text.to_ascii_lowercase();
         let mut notes = Vec::new();
 
-        // Truthful: penalise deceptive patterns.
-        let mut truthful = 1.0_f32;
+        // Trustworthy: penalise deceptive patterns.
+        let mut trustworthy = 1.0_f32;
         for pat in DECEPTIVE_PATTERNS {
             if lower.contains(pat) {
-                truthful -= 0.20;
-                notes.push(format!("Truthful: detected deceptive pattern '{}'", pat));
+                trustworthy -= 0.20;
+                notes.push(format!("Trustworthy: detected deceptive pattern '{}'", pat));
             }
         }
-        truthful = truthful.clamp(0.0, 1.0);
+        trustworthy = trustworthy.clamp(0.0, 1.0);
 
-        // Relevant: penalise very short or very long responses.
+        // Reliable: penalise very short or very long responses.
         let word_count = text.split_whitespace().count();
-        let relevant = if word_count < 3 {
-            notes.push("Relevant: response too short to be substantive".into());
+        let reliable = if word_count < 3 {
+            notes.push("Reliable: response too short to be substantive".into());
             0.3
         } else if word_count > 2000 {
-            notes.push("Relevant: response excessively long".into());
+            notes.push("Reliable: response excessively long".into());
             0.6
         } else {
             1.0
@@ -419,33 +415,33 @@ impl TruthFramework {
         }
         transparent = transparent.clamp(0.0, 1.0);
 
-        // Helpful: penalise purely negative / refusal without alternatives.
+        // Honest: penalise purely negative / refusal without alternatives.
         let refusal_indicators = ["i can't do that", "i refuse", "not possible", "i won't"];
-        let mut helpful = 1.0_f32;
+        let mut honest = 1.0_f32;
         for pat in &refusal_indicators {
             if lower.contains(pat) {
-                helpful -= 0.15;
-                notes.push(format!("Helpful: detected bare refusal '{}'", pat));
+                honest -= 0.15;
+                notes.push(format!("Honest: detected bare refusal '{}'", pat));
             }
         }
         // Bonus: if response contains suggestions ("instead", "alternatively").
         if lower.contains("instead") || lower.contains("alternatively") || lower.contains("try") {
-            helpful = (helpful + 0.1).min(1.0);
+            honest = (honest + 0.1).min(1.0);
         }
-        helpful = helpful.clamp(0.0, 1.0);
+        honest = honest.clamp(0.0, 1.0);
 
         // Weighted average.
-        let total_weight = self.truthful_weight
-            + self.relevant_weight
+        let total_weight = self.trustworthy_weight
+            + self.reliable_weight
             + self.unbiased_weight
             + self.transparent_weight
-            + self.helpful_weight;
+            + self.honest_weight;
         let overall = if total_weight > 0.0 {
-            (truthful * self.truthful_weight
-                + relevant * self.relevant_weight
+            (trustworthy * self.trustworthy_weight
+                + reliable * self.reliable_weight
                 + unbiased * self.unbiased_weight
                 + transparent * self.transparent_weight
-                + helpful * self.helpful_weight)
+                + honest * self.honest_weight)
                 / total_weight
         } else {
             0.0
@@ -453,11 +449,11 @@ impl TruthFramework {
         let passes = overall >= 0.5;
 
         TruthValidation {
-            truthful,
-            relevant,
+            trustworthy,
+            reliable,
             unbiased,
             transparent,
-            helpful,
+            honest,
             overall,
             passes,
             notes,
@@ -506,7 +502,7 @@ impl TruthFramework {
                         ));
                     }
                 },
-                super::epistemic::EpistemicLevel::CanDiscover => {
+                super::epistemic::EpistemicLevel::Uncertain => {
                     // AURA doesn't know but COULD find out
                     let has_hedge = lower.contains("i could check")
                         || lower.contains("let me look")
@@ -514,12 +510,12 @@ impl TruthFramework {
                     if !has_hedge {
                         validation.transparent -= 0.15;
                         validation.notes.push(format!(
-                            "Transparent: domain '{}' is CanDiscover — consider offering to check",
+                            "Transparent: domain '{}' is Uncertain — consider offering to check",
                             domain_name
                         ));
                     }
                 },
-                super::epistemic::EpistemicLevel::Believes => {
+                super::epistemic::EpistemicLevel::Probable => {
                     // AURA has some evidence but not strong — mild penalty
                     // without hedge language
                     let has_hedge = lower.contains("i think")
@@ -528,12 +524,12 @@ impl TruthFramework {
                     if !has_hedge {
                         validation.transparent -= 0.10;
                         validation.notes.push(format!(
-                            "Transparent: domain '{}' is Believes — consider epistemic hedging",
+                            "Transparent: domain '{}' is Probable — consider epistemic hedging",
                             domain_name
                         ));
                     }
                 },
-                super::epistemic::EpistemicLevel::Knows => {
+                super::epistemic::EpistemicLevel::Certain => {
                     // Full confidence — no penalty needed
                 },
             }
@@ -549,12 +545,12 @@ impl TruthFramework {
         ];
         for domain_name in relevant_domains {
             let level = epistemic.level_for(domain_name);
-            if level < super::epistemic::EpistemicLevel::Knows {
+            if level < super::epistemic::EpistemicLevel::Certain {
                 for pat in &overclaim_patterns {
                     if lower.contains(pat) {
-                        validation.truthful -= 0.25;
+                        validation.trustworthy -= 0.25;
                         validation.notes.push(format!(
-                            "Truthful: overclaiming '{}' on domain '{}' (level: {:?})",
+                            "Trustworthy: overclaiming '{}' on domain '{}' (level: {:?})",
                             pat, domain_name, level
                         ));
                     }
@@ -564,19 +560,19 @@ impl TruthFramework {
 
         // Reclamp and recalculate
         validation.transparent = validation.transparent.clamp(0.0, 1.0);
-        validation.truthful = validation.truthful.clamp(0.0, 1.0);
+        validation.trustworthy = validation.trustworthy.clamp(0.0, 1.0);
 
-        let total_weight = self.truthful_weight
-            + self.relevant_weight
+        let total_weight = self.trustworthy_weight
+            + self.reliable_weight
             + self.unbiased_weight
             + self.transparent_weight
-            + self.helpful_weight;
+            + self.honest_weight;
         validation.overall = if total_weight > 0.0 {
-            (validation.truthful * self.truthful_weight
-                + validation.relevant * self.relevant_weight
+            (validation.trustworthy * self.trustworthy_weight
+                + validation.reliable * self.reliable_weight
                 + validation.unbiased * self.unbiased_weight
                 + validation.transparent * self.transparent_weight
-                + validation.helpful * self.helpful_weight)
+                + validation.honest * self.honest_weight)
                 / total_weight
         } else {
             0.0
@@ -909,13 +905,12 @@ mod tests {
     }
 
     #[test]
-    fn test_check_with_trust_high_downgrades_audit() {
+    fn test_check_with_trust_high_trust_no_bypass() {
         let gate = PolicyGate::new();
         let v = gate.check_with_trust("com.example", "show password reset", 0.8);
-        assert_eq!(
-            v,
-            PolicyVerdict::Allow,
-            "high trust should downgrade audit to allow"
+        assert!(
+            matches!(v, PolicyVerdict::Audit { .. }),
+            "high trust should NOT bypass audit verdicts — ethics are non-bypassable"
         );
     }
 
@@ -1009,7 +1004,7 @@ mod tests {
     fn test_truth_framework_deceptive_response() {
         let tf = TruthFramework::new();
         let v = tf.validate_response("Trust me, I guarantee this is 100% certain safe.");
-        assert!(v.truthful < 1.0, "should detect deceptive patterns");
+        assert!(v.trustworthy < 1.0, "should detect deceptive patterns");
         assert!(
             !v.notes.is_empty(),
             "should have notes about deceptive patterns"

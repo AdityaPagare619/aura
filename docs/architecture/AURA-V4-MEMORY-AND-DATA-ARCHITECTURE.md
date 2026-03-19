@@ -115,10 +115,10 @@ graph TD
         AR["Tier 4: Archive\n──────────────────\nStorage: LZ4 SQLite (ZSTD available)\nCapacity: ~4MB/year (compressed)\nLatency: 50–200ms\nPersistence: Long-term\nCompression: LZ4 (default)"]
     end
 
-    WM -->|"Hot consolidation\nevery 5 min"| EM
-    EM -->|"Warm consolidation\nevery 1 hour"| SM
-    EM -->|"Cold consolidation\nevery 1 day\n(importance < 0.2)"| AR
-    SM -->|"Deep consolidation\nevery 1 week"| AR
+    WM -->|"Micro consolidation\n≤60s"| EM
+    EM -->|"Light consolidation\n≤60s [planned: LLM fact extraction]"| SM
+    EM -->|"Deep consolidation\n≤30min\n(importance < 0.2, age > 30d)"| AR
+    SM -->|"Deep consolidation\n≤30min\nsemantic snapshot"| AR
 
     style WM fill:#ff6b6b,color:#fff
     style EM fill:#ffa94d,color:#fff
@@ -172,7 +172,7 @@ Episodic memory is the biographical record of AURA's interactions with the user.
 
 **WAL mode significance:** WAL allows concurrent reads while a write is in progress, which matters for AURA's architecture where consolidation (write path) and inference (read path) can overlap. WAL also provides crash safety: uncommitted WAL entries are replayed or discarded on startup, never leaving the database in a partially-written state.
 
-**Retention:** Episodic memories with importance score below 0.2 after 30 days are promoted to the archive tier during cold consolidation.
+**Retention:** Episodic memories with importance score below 0.2 after 30 days are promoted to the archive tier during Deep consolidation.
 
 ### 2.4 Tier 3: Semantic Memory
 
@@ -192,14 +192,14 @@ RRF score = Σ 1 / (k + rank_i)
 
 Where `k = 60` (a smoothing constant that reduces the impact of high-variance rank differences) and `rank_i` is the position of a result in each ranked list. RRF is used because it is robust to differences in score magnitude between retrieval methods — a document ranked 1st in vector search and 5th in keyword search gets a higher combined score than one ranked 10th in both.
 
-**Capacity:** Approximately 50MB per year. Semantic memory grows faster than episodic because it accumulates structured facts extracted from many episodes during warm consolidation.
+**Capacity:** Approximately 50MB per year. Semantic memory grows faster than episodic because it accumulates structured facts extracted from many episodes during Light consolidation (planned LLM-assisted extraction).
 
 **Contents:**
 
 - Stated facts ("I'm allergic to penicillin")
 - Learned preferences ("prefers concise responses")
 - User profile data (name, timezone, language, etc.)
-- World knowledge updates absorbed during warm consolidation
+- World knowledge updates absorbed during Light consolidation (planned LLM-assisted extraction)
 
 **Access latency:** 5–15ms, reflecting the cost of both an FTS5 query and an HNSW traversal plus the RRF merge step.
 
@@ -275,17 +275,17 @@ importance = w1 × emotional_weight
 
 The weights `w1`–`w5` sum to 1.0 and are tunable system parameters. The default distribution emphasizes recency and goal relevance for active sessions, while recall frequency and emotional weight carry more weight for long-term retention decisions.
 
-**Emotional weight assessment:** The `emotional_weight` component requires LLM inference — the episodic text is passed to the neocortex with a prompt asking for an emotional significance rating. This happens asynchronously during warm consolidation, not on the hot path. Until the LLM assessment arrives, `emotional_weight` defaults to 0.5 (neutral).
+**Emotional weight assessment:** The `emotional_weight` component requires LLM inference — the episodic text is passed to the neocortex with a prompt asking for an emotional significance rating. This happens asynchronously during Deep consolidation (via the neocortex), not on the hot path. Until the LLM assessment arrives, `emotional_weight` defaults to 0.5 (neutral).
 
 ### 3.2 Promotion Thresholds
 
 | Transition | Condition | Timing |
 |---|---|---|
-| Working → Episodic | All working memory events | Every 5 minutes (hot consolidation) |
-| Episodic → Archive | `importance < 0.2` AND `age > 30 days` | Daily (cold consolidation) |
-| Episodic → Semantic | LLM-extracted facts from episodes | Hourly (warm consolidation) |
-| Semantic → Archive | Periodic snapshot during deep consolidation | Weekly |
-| Archive: pruned | Duplicate detection during deep consolidation | Weekly |
+| Working → Episodic | All working memory events | Every ≤60s (Micro consolidation) |
+| Episodic → Archive | `importance < 0.2` AND `age > 30 days` | Every ≤30min (Deep consolidation) |
+| Episodic → Semantic | LLM-extracted facts from episodes | Every ≤60s (Light consolidation) — **planned, not yet implemented** |
+| Semantic → Archive | Periodic snapshot during Deep consolidation | Every ≤30min (Deep consolidation) |
+| Archive: pruned | Duplicate detection during Deep consolidation | Every ≤30min (Deep consolidation) |
 
 **Importance floor:** A memory's importance score can never drop below 0.05 if it has been recalled more than 10 times. Frequently accessed memories are never silently discarded, regardless of age.
 
@@ -466,50 +466,56 @@ Consolidation is the process by which memories move between tiers, are synthesiz
 
 ### 7.1 Consolidation Levels
 
-**Level 1: Hot Consolidation (every 5 minutes)**
+The code uses descriptive tier names (`Micro`/`Light`/`Deep`/`Emergency`) that map to data characteristics and urgency rather than metaphorical temperatures. Documentation uses these same names for consistency with the implementation in `memory/consolidation.rs`.
 
-Hot consolidation flushes events from working memory to episodic memory. Working memory holds raw, high-frequency events (every assistant response, every screen state change, every user input). Hot consolidation batches these into episodic entries and writes them to the SQLite episodic tier.
+**Level 1: Micro Consolidation (≤60s)**
 
-This is a simple append operation with minimal processing: the raw text is stored, a TF-IDF embedding is computed (neural embedding is requested asynchronously), and the entry is written to the episodic SQLite.
+Micro consolidation promotes high-importance working memory slots to episodic memory and reinforces matching semantic entries. It runs as part of every Light, Deep, and Micro consolidation pass.
 
-Hot consolidation must be lightweight and non-blocking — it runs while AURA is still actively interacting with the user.
+Specifically:
+1. Sweep expired working memory slots (TTL expired)
+2. Promote working slots with `importance ≥ 0.7` to episodic memory
+3. Reinforce semantic entries that match working memory content (similarity ≥ 0.6)
+4. Record promotion and reinforcement patterns
 
-**Level 2: Warm Consolidation (every 1 hour)**
+Micro consolidation must be lightweight and non-blocking — it runs while AURA is still actively interacting with the user.
 
-Warm consolidation is where raw episodic data is distilled into semantic knowledge. The process:
+**Level 2: Light Consolidation (≤60s)**
 
-1. Query episodic tier for all entries since last warm consolidation run
-2. Batch episodes into groups by topic (using embedding clustering)
-3. Send each batch to neocortex with a semantic extraction prompt
-4. Parse LLM response for extracted facts and preferences
-5. Write extracted facts to semantic memory tier
-6. Update importance scores for episodic entries that contributed facts
+Light consolidation runs the Micro level plus targeted semantic reinforcement. It is the standard periodic pass that keeps working and episodic tiers synchronized.
 
-This step is LLM-assisted and therefore requires the neocortex to be running. If neocortex is unavailable, warm consolidation is skipped and retried on the next scheduled run. No data is lost — episodic entries accumulate until consolidation can run.
+The Light level does **not** currently include LLM-assisted semantic extraction (fact distillation from episodes into structured semantic knowledge). This was described as a warm consolidation feature in the v3 spec but is **not yet implemented**. Tracking: TODO — implement LLM-assisted fact extraction as part of Light consolidation.
 
-**Level 3: Cold Consolidation (every 1 day)**
+> **Note:** The following is the planned design for LLM-assisted extraction (not yet implemented):
+> 1. Query episodic tier for all entries since last consolidation run
+> 2. Batch episodes into groups by topic (using embedding clustering)
+> 3. Send each batch to neocortex with a semantic extraction prompt
+> 4. Parse LLM response for extracted facts and preferences
+> 5. Write extracted facts to semantic memory tier
+> 6. Update importance scores for episodic entries that contributed facts
+>
+> This step is LLM-assisted and therefore requires the neocortex to be running. If neocortex is unavailable, this step is skipped and retried on the next scheduled run. No data is lost — episodic entries accumulate until consolidation can run.
 
-Cold consolidation manages the lifecycle of episodic memories, archiving those that are no longer active.
+**Level 3: Deep Consolidation (≤30min)**
 
-1. Query all episodic entries where `importance < 0.2 AND age > 30 days`
-2. Compress and write matching entries to the archive tier
-3. Delete the original entries from the episodic tier
+Deep consolidation generalizes from episode clusters into semantic knowledge and archives old episodic entries.
+
+1. Run k-means clustering on episode embeddings to discover natural topic clusters
+2. Generalize each cluster into a semantic entry (LLM-assisted when neocortex is available; TF-IDF fallback otherwise)
+3. Archive episodic entries where `importance < 0.2 AND age > 30 days`
 4. Trigger a HNSW index rebuild for the episodic tier
 
-Cold consolidation is a maintenance operation that keeps the episodic tier from growing unboundedly.
-
-**Level 4: Deep Consolidation (every 1 week)**
-
-Deep consolidation is the most expensive and least frequent operation. It is performed during a maintenance window (ideally when the device is idle and charging).
-
-1. Compress archive tier: rebuild ZSTD compression for accumulated archive writes
-2. Rebuild all indexes: HNSW for episodic and semantic tiers
-3. Prune duplicates: identify semantically near-duplicate memories and merge/remove them
-4. Snapshot semantic memory: write a compressed semantic snapshot to archive for long-term history
-5. Decay co-occurrence weights: apply Hebbian decay factor to all association weights
-6. Vacuum SQLite: reclaim space from deleted entries
-
 Deep consolidation can take several seconds to minutes depending on data volume. It should not run while AURA is in active use.
+
+**Level 4: Emergency Consolidation (<5s)**
+
+Emergency consolidation is triggered when memory pressure is critical. It aggressively frees 2.8–3.6 MB by:
+
+1. Sweeping ALL expired working memory slots
+2. Removing low-importance working slots (`importance < 0.3`)
+3. Archiving episodic entries with relaxed thresholds: `importance < 0.5 AND age > 7 days`
+
+Emergency consolidation is a last-resort operation and should not be triggered during normal operation.
 
 ### 7.2 Consolidation Flow Diagram
 
@@ -521,16 +527,16 @@ flowchart TD
     AR["Archive\n(ZSTD SQLite)"]
     NEO["Neocortex\n(LLM inference)"]
 
-    WM -->|"Level 1: Hot\nevery 5 min\nappend events"| EP
+    WM -->|"Level 1: Micro\n≤60s\npromote high-importance\nslots to episodic"| EP
 
-    EP -->|"Level 2: Warm\nevery 1 hour\nextract facts"| NEO
+    EP -->|"Level 2: Light\n≤60s\nreinforce semantic\nentries [planned: extract facts via LLM]"| NEO
     NEO -->|"extracted facts\nand preferences"| SM
 
-    EP -->|"Level 3: Cold\nevery 1 day\nimportance < 0.2\nage > 30 days"| AR
+    EP -->|"Level 3: Deep\n≤30min\ncluster + generalize\narchive old episodes"| AR
 
-    SM -->|"Level 4: Deep\nevery 1 week\nsemantic snapshot"| AR
+    SM -->|"Level 3: Deep\n≤30min\nsemantic snapshot"| AR
 
-    AR -->|"Level 4: Deep\nrebuild + prune\nduplicates removed"| AR
+    AR -->|"Level 3: Deep\nrebuild + prune\nduplicates removed"| AR
 
     style WM fill:#ff6b6b,color:#fff
     style EP fill:#ffa94d,color:#fff
@@ -541,7 +547,7 @@ flowchart TD
 
 ### 7.3 LLM-Assisted Semantic Extraction
 
-The warm consolidation step is the most cognitively sophisticated part of the consolidation pipeline. It uses the LLM not for generation but for extraction — transforming raw conversational episodes into structured semantic facts.
+The Light consolidation level is where raw episodic data is distilled into semantic knowledge via the LLM. This feature is **planned but not yet implemented**. It uses the LLM not for generation but for extraction — transforming raw conversational episodes into structured semantic facts.
 
 **Prompt pattern:**
 ```
@@ -569,16 +575,16 @@ CORRECTION | previous belief about timezone was wrong | 0.91
 
 Extracted facts are written to semantic memory with the LLM-assigned confidence score mapped to the initial importance score.
 
-**If neocortex is unavailable:** Warm consolidation is deferred. Episodic entries accumulate. When neocortex comes back online, a backfill consolidation run processes all deferred episodes. This can produce a larger-than-normal batch, but the system handles this gracefully.
+**If neocortex is unavailable:** The LLM-assisted extraction step within Light consolidation is skipped. Episodic entries accumulate until consolidation can run. When neocortex comes back online, a backfill consolidation run processes all deferred episodes. This can produce a larger-than-normal batch, but the system handles this gracefully.
 
 ### 7.4 Consolidation Timing Table
 
-| Level | Name | Frequency | Trigger | Duration | LLM required |
-|---|---|---|---|---|---|
-| 1 | Hot | Every 5 minutes | Timer | <100ms | No |
-| 2 | Warm | Every 1 hour | Timer | 1–10s | Yes |
-| 3 | Cold | Every 1 day | Timer | 1–5s | No |
-| 4 | Deep | Every 1 week | Timer + idle | 10–120s | No |
+| Level | Name | Frequency | Duration | LLM required |
+|---|---|---|---|---|
+| 1 | Micro | Every ≤60s | <1ms | No |
+| 2 | Light | Every ≤60s | 1–10s | Planned (not yet implemented) |
+| 3 | Deep | Every ≤30min | 1–5s | No (fallback) / Yes (with neocortex) |
+| 4 | Emergency | On-demand (<5s) | <5s | No |
 
 ---
 
@@ -598,7 +604,7 @@ User signals: "that's wrong", "no that's not right", "you're mistaken about that
 1. The memory or set of memories associated with the incorrect response are identified (via the retrieval context from that turn)
 2. Each associated memory receives an importance penalty: `importance *= 0.8` per correction
 3. A `correction_count` counter on the memory entry is incremented
-4. If `correction_count >= 3`, the memory is flagged for review during the next warm consolidation run
+4. If `correction_count >= 3`, the memory is flagged for review during the next Light consolidation run
 5. The correct information (as stated by the user) is written as a new high-importance semantic fact
 
 **Positive feedback — confirmations:**
@@ -613,7 +619,7 @@ User signals: "yes exactly", "that's right", "correct", explicit confirmations.
 
 When a memory reaches `correction_count = 3`, it enters the correction cascade:
 1. Flagged in semantic memory as `needs_review = true`
-2. During the next warm consolidation, sent to LLM with all correction context
+2. During the next Light consolidation, sent to LLM with all correction context
 3. LLM either confirms the correction, synthesizes the correct fact, or marks the memory as contradicted
 4. Contradicted memories are archived with a `contradicted = true` flag (not deleted, for auditability)
 
@@ -630,7 +636,7 @@ Increment correction_count
      ↓
 correction_count ≥ 3?
      ├── No: continue normal operation
-     └── Yes: flag needs_review → warm consolidation handles it
+      └── Yes: flag needs_review → Light consolidation handles it
                     ↓
           LLM synthesizes correct fact
                     ↓
@@ -966,7 +972,7 @@ Based on assumed usage patterns (average user, ~50 interactions per day, mixed q
 | Year 2 | +18MB | ~36MB | ~90MB | +8MB | ~134MB |
 | Year 3 | +18MB | ~54MB | ~120MB | +12MB | ~186MB |
 
-Note: Episodic tier does not grow unboundedly — cold consolidation archives memories past their retention threshold. In steady state after 3+ years, the episodic tier stabilizes at roughly 18–36MB (2 years of rolling window).
+Note: Episodic tier does not grow unboundedly — Deep consolidation archives memories past their retention threshold. In steady state after 3+ years, the episodic tier stabilizes at roughly 18–36MB (2 years of rolling window).
 
 ---
 

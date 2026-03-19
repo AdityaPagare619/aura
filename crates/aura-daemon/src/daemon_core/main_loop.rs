@@ -6663,7 +6663,17 @@ async fn cron_handle_proactive(
             "proactive consent check (profile + ConsentTracker)"
         );
 
-        match proactive.tick(now_ms(), power_tier, context_mode, proactive_allowed) {
+        let battery_percent = state.checkpoint.power_budget.battery_percent;
+        let temperature_c = state.checkpoint.power_budget.skin_temp_c as f32;
+
+        match proactive.tick(
+            now_ms(),
+            power_tier,
+            context_mode,
+            proactive_allowed,
+            battery_percent,
+            temperature_c,
+        ) {
             Ok(actions) => {
                 tracing::info!(
                     action_count = actions.len(),
@@ -7645,7 +7655,7 @@ async fn cron_handle_patterns(
                 daily_budget_reset_secs = reset_secs,
                 "daily budget reset using configured elapsed seconds"
             );
-            arc.proactive.regenerate_initiative(reset_secs);
+            arc.proactive.regenerate_initiative(reset_secs, 100, 30.0);
             tracing::info!(
                 budget = arc.proactive.budget(),
                 daily_suggestions = arc.proactive.daily_suggestions(),

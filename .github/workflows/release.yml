@@ -5,8 +5,9 @@
 # Flow:
 #   CI checks → Android build → GitHub Release with artifacts
 #
-# TOOLCHAIN: Must match rust-toolchain.toml (nightly-2026-03-01)
+# TOOLCHAIN: Must match rust-toolchain.toml (stable + date pin)
 # SECURITY:  All third-party actions pinned to commit SHA
+# DIAGNOSTIC: Unstripped binaries + ELF analysis artifacts included for SIGSEGV triage
 # ============================================================
 
 name: Release
@@ -171,11 +172,92 @@ jobs:
       - name: Build aura-daemon and aura-neocortex (release)
         run: cargo build --release -p aura-daemon -p aura-neocortex --target aarch64-linux-android
 
+      - name: Copy unstripped binaries (for crash analysis)
+        run: |
+          TAG="${{ github.ref_name }}"
+          for BIN in aura-daemon aura-neocortex; do
+            cp "target/aarch64-linux-android/release/$BIN" \
+               "target/aarch64-linux-android/${BIN}-unstripped-${TAG}-aarch64-linux-android"
+          done
+
       - name: Strip binaries
         run: |
           for BIN in aura-daemon aura-neocortex; do
             "$TOOLCHAIN/llvm-strip" "target/aarch64-linux-android/release/$BIN"
           done
+
+      - name: Install termux-elf-cleaner (Termux ELF sanitizer)
+        run: |
+          TERMUX_CLEANER_VERSION="v2.5"
+          curl -fsSL "https://github.com/termux/termux-elf-cleaner/releases/download/${TERMUX_CLEANER_VERSION}/termux-elf-cleaner-${TERMUX_CLEANER_VERSION#v}-aarch64-linux-android.tar.gz" -o termux-elf-cleaner.tar.gz
+          tar xzf termux-elf-cleaner.tar.gz
+          chmod +x termux-elf-cleaner
+          echo "termux-elf-cleaner installed: $(./termux-elf-cleaner --version 2>&1 || echo 'version check done')"
+
+      - name: Run termux-elf-cleaner (belt-and-suspenders hygiene)
+        run: |
+          for BIN in aura-daemon aura-neocortex; do
+            echo "Cleaning $BIN..."
+            ./termux-elf-cleaner "target/aarch64-linux-android/release/$BIN" || echo "  (warning: non-fatal)"
+          done
+
+      - name: Readelf analysis (ELF structure snapshot for diagnostics)
+        run: |
+          mkdir -p elf-analysis
+          for BIN in aura-daemon aura-neocortex; do
+            BASE="target/aarch64-linux-android/release/$BIN"
+            UNSTRIPPED="target/aarch64-linux-android/${BIN}-unstripped-${{ github.ref_name }}-aarch64-linux-android"
+
+            echo "=== $BIN — STRIPPED ELF headers ===" > "elf-analysis/${BIN}-stripped-elf-headers.txt"
+            "$TOOLCHAIN/llvm-readelf" -h "$BASE" >> "elf-analysis/${BIN}-stripped-elf-headers.txt"
+
+            echo "=== $BIN — STRIPPED program headers ===" > "elf-analysis/${BIN}-stripped-program-headers.txt"
+            "$TOOLCHAIN/llvm-readelf" -l "$BASE" >> "elf-analysis/${BIN}-stripped-program-headers.txt"
+
+            echo "=== $BIN — STRIPPED dynamic section ===" > "elf-analysis/${BIN}-stripped-dynamic-section.txt"
+            "$TOOLCHAIN/llvm-readelf" -d "$BASE" >> "elf-analysis/${BIN}-stripped-dynamic-section.txt"
+
+            echo "=== $BIN — UNSTRIPPED ELF headers ===" > "elf-analysis/${BIN}-unstripped-elf-headers.txt"
+            "$TOOLCHAIN/llvm-readelf" -h "$UNSTRIPPED" >> "elf-analysis/${BIN}-unstripped-elf-headers.txt"
+
+            echo "=== $BIN — UNSTRIPPED section headers ===" > "elf-analysis/${BIN}-unstripped-section-headers.txt"
+            "$TOOLCHAIN/llvm-readelf" -S "$UNSTRIPPED" >> "elf-analysis/${BIN}-unstripped-section-headers.txt"
+
+            echo "=== $BIN — UNSTRIPPED dynamic section ===" > "elf-analysis/${BIN}-unstripped-dynamic-section.txt"
+            "$TOOLCHAIN/llvm-readelf" -d "$UNSTRIPPED" >> "elf-analysis/${BIN}-unstripped-dynamic-section.txt"
+          done
+          echo "ELF analysis complete. Artifacts:"
+          ls -la elf-analysis/
+
+      - name: Generate BUILD-INFO.txt
+        run: |
+          TAG="${{ github.ref_name }}"
+          {
+            echo "AURA v4 Release Build Info"
+            echo "=========================="
+            echo "Tag:         $TAG"
+            echo "Git commit:  $(git rev-parse HEAD)"
+            echo "Git branch:  ${{ github.ref_name }}"
+            echo "Build date:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            echo "Rust version:"
+            rustc --version
+            echo ""
+            echo "Cargo version:"
+            cargo --version
+            echo ""
+            echo "NDK version: $NDK_VERSION"
+            echo "NDK path:    $NDK_HOME"
+            echo "API level:   $API_LEVEL"
+            echo "Target:      $TARGET"
+            echo ""
+            echo "LLVM toolchain:"
+            echo "  llvm-readelf: $("$TOOLCHAIN/llvm-readelf" --version | head -1)"
+            echo "  llvm-strip:   $("$TOOLCHAIN/llvm-strip" --version | head -1)"
+            echo ""
+            echo "termux-elf-cleaner version: $("$PWD/termux-elf-cleaner" --version 2>&1 || echo 'unknown')"
+          } > "BUILD-INFO.txt"
+          cat "BUILD-INFO.txt"
 
       - name: Verify Android runtime dependencies
         run: |
@@ -222,17 +304,19 @@ jobs:
           done
           echo "DAEMON_NAME=aura-daemon-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
           echo "NEOCORTEX_NAME=aura-neocortex-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
+          echo "DAEMON_UNSTRIPPED=aura-daemon-unstripped-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
+          echo "NEOCORTEX_UNSTRIPPED=aura-neocortex-unstripped-${TAG}-aarch64-linux-android" >> $GITHUB_ENV
 
       # Generate SHA256 checksum sidecar for binary verification
       - name: Generate binary checksums
         run: |
-          for BIN in "$DAEMON_NAME" "$NEOCORTEX_NAME"; do
+          for BIN in "$DAEMON_NAME" "$NEOCORTEX_NAME" "$DAEMON_UNSTRIPPED" "$NEOCORTEX_UNSTRIPPED"; do
             sha256sum "$BIN" > "${BIN}.sha256"
             echo "SHA256 for $BIN:"
             cat "${BIN}.sha256"
           done
 
-      - name: Upload binary artifacts
+      - name: Upload stripped release binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-binaries
@@ -241,7 +325,28 @@ jobs:
             aura-daemon-*-aarch64-linux-android.sha256
             aura-neocortex-*-aarch64-linux-android
             aura-neocortex-*-aarch64-linux-android.sha256
-          retention-days: 1
+            BUILD-INFO.txt
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload unstripped diagnostic binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-binaries-unstripped
+          path: |
+            aura-daemon-unstripped-*-aarch64-linux-android
+            aura-daemon-unstripped-*-aarch64-linux-android.sha256
+            aura-neocortex-unstripped-*-aarch64-linux-android
+            aura-neocortex-unstripped-*-aarch64-linux-android.sha256
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload ELF analysis artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-binaries-elf-analysis
+          path: elf-analysis/
+          retention-days: 90
           if-no-files-found: error
 
   # --------------------------------------------------------
@@ -264,6 +369,18 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-binaries
+
+      - name: Download unstripped diagnostic binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-binaries-unstripped
+          path: unstripped
+
+      - name: Download ELF analysis artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-binaries-elf-analysis
+          path: elf-analysis
 
       - name: Generate release notes from git log
         run: |
@@ -300,9 +417,27 @@ jobs:
             echo "curl -fsSL https://raw.githubusercontent.com/\${{ github.repository }}/main/install.sh | bash"
             echo '```'
             echo ""
-            echo "**Binaries:**"
+            echo "## Artifacts"
+            echo ""
+            echo "### Stripped Release Binaries"
             echo "- \`aura-daemon-${TAG}-aarch64-linux-android\`"
             echo "- \`aura-neocortex-${TAG}-aarch64-linux-android\`"
+            echo ""
+            echo "### Unstripped Diagnostic Binaries (for crash analysis)"
+            echo "These retain full debug symbols for use with \`addr2line\`, \`gdb\`, or \`llvm-symbolizer\`."
+            echo '```sh'
+            echo "# Map crash address to source location:"
+            echo "aarch64-linux-android-addr2line -Cfae -e aura-daemon-unstripped-${TAG}-aarch64-linux-android 0x<address>"
+            echo '```'
+            echo "- \`aura-daemon-unstripped-${TAG}-aarch64-linux-android\`"
+            echo "- \`aura-neocortex-unstripped-${TAG}-aarch64-linux-android\`"
+            echo ""
+            echo "### ELF Analysis Snapshots"
+            echo "ELF headers, program headers, dynamic section, and section headers captured at build time."
+            echo "See \`elf-analysis/\` directory in the ELF analysis artifact."
+            echo ""
+            echo "### Build Info"
+            echo "Reproducibility metadata: \`BUILD-INFO.txt\`"
             echo ""
             echo "Built for ARM64 Android (API 26+, Termux)."
           } > release_notes.md
@@ -322,5 +457,11 @@ jobs:
             aura-daemon-*-aarch64-linux-android.sha256
             aura-neocortex-*-aarch64-linux-android
             aura-neocortex-*-aarch64-linux-android.sha256
+            unstripped/aura-daemon-unstripped-*-aarch64-linux-android
+            unstripped/aura-daemon-unstripped-*-aarch64-linux-android.sha256
+            unstripped/aura-neocortex-unstripped-*-aarch64-linux-android
+            unstripped/aura-neocortex-unstripped-*-aarch64-linux-android.sha256
+            elf-analysis/
+            BUILD-INFO.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

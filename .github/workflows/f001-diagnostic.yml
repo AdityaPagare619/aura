@@ -10,7 +10,7 @@
 #   - old-nightly: Build with nightly-2025-06-01 (tests H5)
 #   - unwind-panic: Build with panic=unwind (tests H6)
 #
-# TOOLCHAIN: Default nightly-2026-03-01 (matches production)
+# TOOLCHAIN: stable (matches production after F001 fix)
 # SECURITY:  NDK download verified with SHA256 checksum
 # ============================================================
 
@@ -213,7 +213,7 @@ jobs:
           echo "| Info | Value |"
           echo "|------|-------|"
           echo "| Variant | ${{ inputs.variant }} |"
-          echo "| Toolchain | ${{ inputs.variant == 'old-nightly' && 'nightly-2025-06-01' || 'nightly-2026-03-01' }} |"
+          echo "| Toolchain | ${{ inputs.variant == 'old-nightly' && 'nightly-2025-06-01' || 'stable' }} |"
           echo "| NDK | r26b (API 26) |"
           echo "| Stripped | ${{ inputs.variant == 'unstripped' && 'NO (diagnostic)' || 'YES' }} |"
           echo "| panic mode | ${{ inputs.variant == 'unwind-panic' && 'unwind' || 'abort (default)' }} |"

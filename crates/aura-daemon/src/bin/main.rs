@@ -72,7 +72,20 @@ impl Args {
 
         // Default config path: ~/.config/aura/config.toml
         let config_path = config_path.unwrap_or_else(|| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            // Try HOME, then PREFIX (Termux), then current_dir, then explicit default.
+            // Defensive fallback: don't use "." as it creates confusing paths.
+            let candidates = [
+                std::env::var("HOME").ok(),
+                std::env::var("PREFIX").ok(),   // Termux-specific
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .ok(),
+            ];
+            let home = candidates
+                .into_iter()
+                .flatten()
+                .next()
+                .unwrap_or_else(|| "/data/data/com.termux/files/home".to_string());
             PathBuf::from(home)
                 .join(".config")
                 .join("aura")
@@ -84,23 +97,9 @@ impl Args {
 }
 
 fn main() {
-    // ── Step 1: Parse CLI args BEFORE tracing init ─────────────────────────
-    // This ensures --version/--help exit cleanly with no tracing pollution.
-    // Tracing is intentionally NOT initialized here so that --version/--help
-    // output is clean and the runtime probe in install.sh gets reliable output.
-    let args = match Args::parse() {
-        Ok(a) => a,
-        Err(e) => {
-            // Use eprintln! since tracing is not yet initialized.
-            eprintln!("error: {e}");
-            print_usage();
-            std::process::exit(1);
-        },
-    };
-
-    // ── Step 2: Install panic hook ──────────────────────────────────────────
-    // Set a global panic hook BEFORE any subsystem can panic.
+    // ── Step 0: Install panic hook BEFORE anything else ────────────────────
     // This ensures panic messages are logged even with panic="abort" in release.
+    // MUST be first to catch any panic from any initialization code.
     std::panic::set_hook(Box::new(|panic_info| {
         let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -115,6 +114,20 @@ fn main() {
             .unwrap_or_else(|| "unknown location".to_string());
         eprintln!("FATAL PANIC at {location}: {msg}");
     }));
+
+    // ── Step 1: Parse CLI args BEFORE tracing init ─────────────────────────
+    // This ensures --version/--help exit cleanly with no tracing pollution.
+    // Tracing is intentionally NOT initialized here so that --version/--help
+    // output is clean and the runtime probe in install.sh gets reliable output.
+    let args = match Args::parse() {
+        Ok(a) => a,
+        Err(e) => {
+            // Use eprintln! since tracing is not yet initialized.
+            eprintln!("error: {e}");
+            print_usage();
+            std::process::exit(1);
+        },
+    };
 
     // ── Step 3: Initialize tracing ─────────────────────────────────────────
     tracing_subscriber::fmt()

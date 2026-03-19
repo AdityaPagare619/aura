@@ -1,4 +1,6 @@
 [toolchain]
-channel = "nightly-2026-03-01"
+# CHANGED: nightly-2026-03-01 → stable (F001 fix: nightly LLVM/ABI mismatch with NDK r26b)
+# nightly-2026-03-01 + panic=abort + LTO + NDK r26b = known startup SIGSEGV (NDK #2073)
+channel = "stable"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = ["aarch64-linux-android", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]

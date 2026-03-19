@@ -40,10 +40,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (nightly-2026-03-01) + components
+      - name: Install Rust (stable) + components
+        # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073 — panic=abort+LTO crashes)
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           components: clippy, rustfmt
 
       - name: Cache cargo
@@ -93,10 +94,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (nightly-2026-03-01) + Android target
+      - name: Install Rust (stable) + Android target
+        # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073 — panic=abort+LTO crashes)
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           targets: aarch64-linux-android
 
       - name: Cache cargo

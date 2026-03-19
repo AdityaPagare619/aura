@@ -58,11 +58,11 @@ jobs:
       # ----------------------------------------------------------
       # Rust toolchain selection based on variant
       # ----------------------------------------------------------
-      - name: "Install Rust — nightly-2026-03-01 (default)"
+      - name: "Install Rust — stable (F001 fix: NDK #2073 panic=abort+LTO crash)"
         if: inputs.variant == 'unstripped'
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           targets: aarch64-linux-android
 
       - name: "Install Rust — nightly-2025-06-01 (H5 test: old nightly)"
@@ -72,11 +72,11 @@ jobs:
           toolchain: nightly-2025-06-01
           targets: aarch64-linux-android
 
-      - name: "Install Rust — nightly-2026-03-01 (for unwind-panic)"
+      - name: "Install Rust — stable (for unwind-panic)"
         if: inputs.variant == 'unwind-panic'
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           targets: aarch64-linux-android
 
       # ----------------------------------------------------------

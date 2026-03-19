@@ -45,10 +45,11 @@ jobs:
       # ----------------------------------------------------------
       # 2. Rust toolchain + Android target (matches rust-toolchain.toml)
       # ----------------------------------------------------------
-      - name: Install Rust (nightly-2026-03-01) + aarch64-linux-android target
+      - name: Install Rust (stable) + aarch64-linux-android target
+        # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073 — panic=abort+LTO crashes)
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           targets: aarch64-linux-android
 
       # ----------------------------------------------------------

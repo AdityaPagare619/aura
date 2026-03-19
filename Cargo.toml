@@ -30,7 +30,7 @@ zstd = "0.13"
 
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "thin"           # CHANGED: true → thin (F001 fix: NDK #2073 — LTO+panic=abort causes startup SIGSEGV)
 codegen-units = 1
 strip = true
-panic = "abort"
+panic = "unwind"       # CHANGED: abort → unwind (F001 fix: NDK #2073 — LTO+panic=abort causes startup SIGSEGV)

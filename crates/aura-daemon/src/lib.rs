@@ -1,4 +1,5 @@
-#![feature(once_cell_try)]
+// F001 FIX: Removed #![feature(once_cell_try)] — was nightly-only, not needed on stable
+// The feature was unused in actual code (tokio uses once_cell internally)
 //! `aura-daemon` — the always-on core of AURA v4.
 //!
 //! Compiles as `cdylib` (`libaura_core.so`) loaded by the Android Kotlin

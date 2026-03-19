@@ -1,4 +1,4 @@
-#![feature(once_cell_try)]
+// F001 FIX: Removed #![feature(once_cell_try)] — was nightly-only, not needed on stable
 //! Standalone binary entry point for the AURA v4 daemon.
 //!
 //! This binary is used in two scenarios:

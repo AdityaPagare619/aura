@@ -412,6 +412,8 @@ RULES:
 
 /// Output format instructions based on grammar kind.
 /// These tell the model exactly what JSON shape to produce.
+/// SCHEMA ALIGNMENT NOTE: ReflectionVerdict uses `{"safe", "correct", "concerns", "verdict"}`
+/// to match `grammar.rs` ReflectionVerdict::parse() expectations (verdict: approve|flag|reject).
 fn output_format_section(grammar: Option<GrammarKind>) -> String {
     match grammar {
         None => String::new(),
@@ -440,8 +442,8 @@ Produce a JSON object with your reasoning and conclusion:
         Some(GrammarKind::ReflectionVerdict) => "\
 OUTPUT FORMAT:
 Produce a JSON verdict object:
-{\"approved\": true|false, \"issues\": [\"issue 1\", ...], \
-\"severity\": \"none\"|\"minor\"|\"major\"|\"critical\", \"suggestion\": \"...\"|null}"
+{\"safe\": <bool>, \"correct\": <bool>, \"concerns\": [\"concern 1\", ...], \
+\"verdict\": \"approve\"|\"flag\"|\"reject\"}"
             .to_string(),
 
         Some(GrammarKind::ConfidenceAssessment) => "\
@@ -1134,8 +1136,8 @@ sending messages without consent, accessing sensitive data)?
 4. COMPLETENESS: Does the plan cover the full goal, or is it missing steps?
 
 OUTPUT FORMAT:
-{{\"approved\": true|false, \"issues\": [\"...\"], \
-\"severity\": \"none\"|\"minor\"|\"major\"|\"critical\", \"suggestion\": \"...\"|null}}
+{{\"safe\": <bool>, \"correct\": <bool>, \"concerns\": [\"...\"], \
+\"verdict\": \"approve\"|\"flag\"|\"reject\"}}
 
 Produce the verdict now.",
         mode = original_mode,
@@ -1545,7 +1547,8 @@ mod tests {
         assert!(prompt.contains("Open Settings"));
         assert!(prompt.contains("goal_description"));
         assert!(prompt.contains("SAFETY"));
-        assert!(prompt.contains("approved"));
+        assert!(prompt.contains("\"safe\":"));
+        assert!(prompt.contains("\"verdict\":"));
     }
 
     #[test]

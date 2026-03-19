@@ -43,7 +43,7 @@ pub struct DaemonConfig {
     pub rss_warning_mb: u32,
     /// RSS memory hard ceiling (MB) — daemon will shed load above this.
     pub rss_ceiling_mb: u32,
-    /// AURA version string (e.g. "4.0.0-alpha.7").
+    /// AURA version string (e.g. "4.0.0-alpha.8").
     #[serde(default = "default_daemon_version")]
     pub version: String,
     /// Log level: "trace" | "debug" | "info" | "warn" | "error".
@@ -55,7 +55,7 @@ pub struct DaemonConfig {
 }
 
 fn default_daemon_version() -> String {
-    "4.0.0-alpha.7".to_string()
+    "4.0.0-alpha.8".to_string()
 }
 fn default_daemon_log_level() -> String {
     "info".to_string()
@@ -70,7 +70,7 @@ impl Default for DaemonConfig {
             checkpoint_interval_s: 300,
             rss_warning_mb: 28,
             rss_ceiling_mb: 30,
-            version: "4.0.0-alpha.7".to_string(),
+            version: "4.0.0-alpha.8".to_string(),
             log_level: "info".to_string(),
             data_dir: "/data/data/com.aura/files".to_string(),
         }

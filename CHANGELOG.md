@@ -19,6 +19,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [4.0.0-alpha.8] — 2026-03-19
+
+### Fixed
+- Installer `--skip-build` unattended execution order now performs binary
+  download + runtime validation before model download.
+- This prevents multi-GB model transfer waste when release binaries are
+  runtime-incompatible on the target device.
+
+### Updated
+- Workspace version bumped to `4.0.0-alpha.8`
+- Installer stable channel now targets `v4.0.0-alpha.8`
+
+---
+
 ## [4.0.0-alpha.7] — 2026-03-19
 
 ### Fixed
@@ -180,7 +194,8 @@ v3 source lives in `../aura-v3/` (parent directory).
 
 ---
 
-[Unreleased]: https://github.com/AdityaPagare619/aura/compare/v4.0.0-alpha.7...HEAD
+[Unreleased]: https://github.com/AdityaPagare619/aura/compare/v4.0.0-alpha.8...HEAD
+[4.0.0-alpha.8]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.8
 [4.0.0-alpha.7]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.7
 [4.0.0-alpha.6]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.6
 [4.0.0-alpha.1]: https://github.com/AdityaPagare619/aura/releases/tag/v4.0.0-alpha.1

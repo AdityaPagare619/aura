@@ -2,7 +2,7 @@
 
 > **Entry point for all engineers.** Read this first. Then follow the path for your role.
 >
-> **Version:** 4.0.0-alpha.7 | **Status:** Active Development — pre-release validation in progress  
+> **Version:** 4.0.0-alpha.8 | **Status:** Active Development — pre-release validation in progress  
 > **Last updated:** 2026-03-13
 
 ---

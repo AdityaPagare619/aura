@@ -139,7 +139,8 @@ impl TelemetryEngine {
     /// Returns the closure's return value.
     pub fn time<F, R>(&mut self, label: &str, f: F) -> R
     where
-        F: FnOnce() -> R, {
+        F: FnOnce() -> R,
+    {
         let start = Instant::now();
         let result = f();
         let elapsed_us = start.elapsed().as_micros() as f64;

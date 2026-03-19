@@ -195,7 +195,8 @@ impl<T> BoundedVec<T> {
     /// Retain only elements matching the predicate.
     pub fn retain<F>(&mut self, f: F)
     where
-        F: FnMut(&T) -> bool, {
+        F: FnMut(&T) -> bool,
+    {
         self.inner.retain(f);
     }
 }

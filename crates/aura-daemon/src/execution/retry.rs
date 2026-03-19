@@ -158,7 +158,8 @@ impl<T, E> RetryOutcome<T, E> {
 /// This is a synchronous version. For async, use `retry_with_backoff_async`.
 pub fn retry_with_backoff<T, E, F>(policy: &RetryPolicy, mut operation: F) -> RetryOutcome<T, E>
 where
-    F: FnMut(u32) -> Result<T, E>, {
+    F: FnMut(u32) -> Result<T, E>,
+{
     let total_attempts = 1 + policy.max_retries;
 
     // Run the first attempt separately so `last_error` is non-optional,
@@ -207,7 +208,8 @@ pub async fn retry_with_backoff_async<T, E, F, Fut>(
 ) -> RetryOutcome<T, E>
 where
     F: FnMut(u32) -> Fut,
-    Fut: std::future::Future<Output = Result<T, E>>, {
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
     let total_attempts = 1 + policy.max_retries;
 
     // Run the first attempt separately so `last_error` is non-optional,
@@ -753,7 +755,8 @@ impl IntelligentRetry {
     ) -> RetryStrategy
     where
         E: std::fmt::Display,
-        C: FnOnce(&E) -> ErrorClass, {
+        C: FnOnce(&E) -> ErrorClass,
+    {
         let error_class = classify(error);
         let description = format!("{}", error);
 

@@ -1,4 +1,3 @@
-#![feature(negative_impls)]
 //! AURA Neocortex — LLM inference binary.
 //!
 //! This is a **separate process** from the AURA daemon.  It communicates via

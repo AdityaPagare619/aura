@@ -248,7 +248,8 @@ impl ConnectivityManager {
     /// Only one callback is supported; calling this again replaces the previous one.
     pub fn set_on_change<F>(&mut self, callback: F)
     where
-        F: Fn(NetworkType, NetworkQuality) + Send + 'static, {
+        F: Fn(NetworkType, NetworkQuality) + Send + 'static,
+    {
         self.on_change = Some(Box::new(callback));
     }
 

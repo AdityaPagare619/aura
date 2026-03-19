@@ -3,7 +3,7 @@
 # Runs on every push and PR to main
 # All jobs run in parallel — fast feedback, no serialization
 #
-# TOOLCHAIN: Must match rust-toolchain.toml (nightly-2026-03-01)
+# TOOLCHAIN: stable (was nightly-2026-03-01 — F001 fix: NDK #2073)
 # FEATURES:  --features stub skips llama.cpp FFI for CI hosts
 # ============================================================
 
@@ -38,13 +38,14 @@ jobs:
         with:
           submodules: recursive
 
-      # rust-toolchain.toml pins nightly-2026-03-01 — let rustup pick it up
+      # rust-toolchain.toml pins stable — let rustup pick it up
       # automatically. We explicitly install the same toolchain here to ensure
       # the action provisions the correct components and targets.
-      - name: Install Rust (nightly-2026-03-01)
+      # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073 — panic=abort+LTO crashes)
+      - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           components: clippy, rustfmt
 
       - name: Cache cargo
@@ -74,10 +75,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (nightly-2026-03-01)
+      # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073)
+      - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
 
       - name: Cache cargo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -109,10 +111,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (nightly-2026-03-01) + clippy
+      # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073)
+      - name: Install Rust (stable) + clippy
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           components: clippy
 
       - name: Cache cargo
@@ -142,10 +145,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (nightly-2026-03-01) + rustfmt
+      # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073)
+      - name: Install Rust (stable) + rustfmt
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
           components: rustfmt
 
       - run: cargo fmt --check
@@ -159,10 +163,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust (nightly-2026-03-01)
+      # CHANGED: nightly-2026-03-01 → stable (F001 fix: NDK #2073)
+      - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: nightly-2026-03-01
+          toolchain: stable
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked

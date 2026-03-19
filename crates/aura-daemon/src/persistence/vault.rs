@@ -124,7 +124,8 @@ impl<T> BoundedVec<T> {
     #[must_use]
     pub fn to_vec(&self) -> Vec<T>
     where
-        T: Clone, {
+        T: Clone,
+    {
         self.inner.iter().cloned().collect()
     }
 }

@@ -681,7 +681,8 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
 /// `StartupError::SubSystemInit`.
 fn init_critical<T, F>(name: &'static str, f: F) -> Result<T, StartupError>
 where
-    F: FnOnce() -> Result<T, StartupError>, {
+    F: FnOnce() -> Result<T, StartupError>,
+{
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(result) => result,
         Err(panic) => {
@@ -699,7 +700,8 @@ where
 /// returns `None` and logs a warning. The daemon continues in degraded mode.
 fn init_non_critical<T, F>(name: &'static str, f: F) -> Option<T>
 where
-    F: FnOnce() -> T, {
+    F: FnOnce() -> T,
+{
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
         Err(panic) => {

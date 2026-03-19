@@ -621,11 +621,10 @@ pub struct LoadedModel {
 // machine, ensuring no concurrent mutation. Moving between threads is safe
 // because we guarantee single-owner semantics at the architectural level.
 //
-// !Sync: Explicitly declared. Although Rust auto-derives !Sync for raw-pointer
-// types, making it explicit prevents accidental future changes (e.g. wrapping
-// in Arc) from silently enabling shared-reference access across threads.
+// !Sync: Raw pointers are auto-!Sync in Rust. The comment above documents
+// the reasoning. No explicit `impl !Sync` needed on stable Rust.
+// (Removed: `impl !Sync for LoadedModel {}` — nightly-only syntax.)
 unsafe impl Send for LoadedModel {}
-impl !Sync for LoadedModel {}
 
 impl LoadedModel {
     /// Whether this model's pointers are valid (non-null).

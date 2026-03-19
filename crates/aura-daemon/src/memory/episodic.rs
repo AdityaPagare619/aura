@@ -6,7 +6,7 @@
 //! importance scoring, and a 64-dim trigram hash embedding for similarity search.
 //!
 //! Retrieval uses the v4 recall scoring formula:
-//!   score = similarity×0.4 + recency×0.2 + importance×0.2 + activation×0.2
+//!   score = similarity×0.25 + recency×0.20 + activation×0.20 + emotional_valence×0.15 + goal_relevance×0.10 + novelty_score×0.10
 //!
 //! Pattern separation: when a new episode is too similar (cosine > 0.9) to an
 //! existing one, slight noise is injected into the embedding to maintain
@@ -835,8 +835,10 @@ fn query_episodes_hnsw(
         let score = importance::recall_score(
             similarity,
             hours_ago,
-            episode.importance,
             episode.access_count,
+            episode.emotional_valence,
+            0.5,
+            0.5,
         );
 
         if score >= min_relevance {
@@ -908,8 +910,10 @@ fn query_episodes_sync(
         let score = importance::recall_score(
             similarity,
             hours_ago,
-            episode.importance,
             episode.access_count,
+            episode.emotional_valence,
+            0.5,
+            0.5,
         );
 
         if score >= min_relevance {

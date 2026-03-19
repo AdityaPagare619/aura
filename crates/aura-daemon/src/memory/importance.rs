@@ -193,19 +193,30 @@ pub fn access_bonus(access_count: u32) -> f32 {
 
 /// Compute the recall score for ranking retrieval results.
 ///
-/// score = similarity*0.4 + recency*0.2 + importance*0.2 + activation*0.2
+/// score = similarity*0.25 + recency*0.20 + activation*0.20 + emotional_valence*0.15 + goal_relevance*0.10 + novelty_score*0.10
 ///
 /// Where:
 /// - similarity: cosine similarity between query and memory embedding [0, 1]
 /// - recency: exp(-0.1 * hours_ago) — ~7 hour half-life
-/// - importance: pre-computed importance score [0, 2], normalized to [0, 1]
 /// - activation: access_bonus / 2.0 (normalized to [0, 1])
-pub fn recall_score(similarity: f32, hours_ago: f64, importance: f32, access_count: u32) -> f32 {
-    let recency = (-0.1 * hours_ago).exp() as f32; // ~7 hour half-life
-    let norm_importance = (importance / 2.0).clamp(0.0, 1.0);
+/// - emotional_valence: emotional significance from episodic memory [0, 1]
+/// - goal_relevance: how related this memory is to current goals [0, 1]
+/// - novelty_score: how different this memory is from existing memories [0, 1]
+pub fn recall_score(
+    similarity: f32,
+    hours_ago: f64,
+    access_count: u32,
+    emotional_valence: f32,
+    goal_relevance: f32,
+    novelty_score: f32,
+) -> f32 {
+    let recency = (-0.1 * hours_ago).exp() as f32;
     let activation = (access_bonus(access_count) / 2.0).clamp(0.0, 1.0);
+    let norm_valence = emotional_valence.clamp(0.0, 1.0);
+    let norm_goal = goal_relevance.clamp(0.0, 1.0);
+    let norm_novelty = novelty_score.clamp(0.0, 1.0);
 
-    similarity * 0.4 + recency * 0.2 + norm_importance * 0.2 + activation * 0.2
+    similarity * 0.25 + recency * 0.20 + activation * 0.20 + norm_valence * 0.15 + norm_goal * 0.10 + norm_novelty * 0.10
 }
 
 /// Consolidation score for deciding what to promote between tiers.
@@ -306,9 +317,9 @@ mod tests {
 
     #[test]
     fn test_recall_score() {
-        // Perfect match, just created, high importance, many accesses
-        let score = recall_score(1.0, 0.0, 2.0, 10);
-        // 1.0*0.4 + 1.0*0.2 + 1.0*0.2 + 1.0*0.2 = 1.0
+        // Perfect match, just created, high valence, many accesses, high goal/novelty
+        let score = recall_score(1.0, 0.0, 10, 1.0, 1.0, 1.0);
+        // 1.0*0.25 + 1.0*0.20 + 1.0*0.20 + 1.0*0.15 + 1.0*0.10 + 1.0*0.10 = 1.0
         assert!(
             (score - 1.0).abs() < 1e-5,
             "max recall score should be 1.0, got {}",
@@ -318,9 +329,9 @@ mod tests {
 
     #[test]
     fn test_recall_score_old_low_importance() {
-        let score = recall_score(0.5, 24.0, 0.3, 1);
-        // similarity=0.5*0.4=0.2, recency=exp(-2.4)*0.2≈0.018, importance=0.15*0.2=0.03,
-        // access=0.55*0.2=0.11
+        let score = recall_score(0.5, 24.0, 1, 0.3, 0.5, 0.5);
+        // similarity=0.5*0.25=0.125, recency≈0.09*0.20=0.018, activation≈0.55*0.20=0.11,
+        // valence=0.3*0.15=0.045, goal=0.5*0.10=0.05, novelty=0.5*0.10=0.05
         assert!(score > 0.0 && score < 1.0);
     }
 

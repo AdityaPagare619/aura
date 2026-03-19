@@ -82,10 +82,12 @@ const MIN_RELEVANCE: f32 = 0.15;
 const MAX_CONVERSATION_TURNS: usize = 10;
 
 /// Recall scoring weights.
-const WEIGHT_SIMILARITY: f32 = 0.40;
+const WEIGHT_SIMILARITY: f32 = 0.25;
 const WEIGHT_RECENCY: f32 = 0.20;
-const WEIGHT_IMPORTANCE: f32 = 0.20;
 const WEIGHT_ACTIVATION: f32 = 0.20;
+const WEIGHT_EMOTIONAL_VALENCE: f32 = 0.15;
+const WEIGHT_GOAL_RELEVANCE: f32 = 0.10;
+const WEIGHT_NOVELTY: f32 = 0.10;
 
 /// Recency normalization window — 1 hour in ms.
 const RECENCY_WINDOW_MS: u64 = 3_600_000;
@@ -547,6 +549,8 @@ impl Contextor {
         }
 
         // Compute composite recall score for each memory
+        // Formula: similarity×0.25 + recency×0.20 + activation×0.20 + emotional_valence×0.15 + goal_relevance×0.10 + novelty_score×0.10
+        // Note: emotional_valence, goal_relevance, novelty_score default to 0.5 when not available in MemoryResult
         for mem in &mut memories {
             let recency = compute_recency(mem.timestamp_ms, now_ms);
             let activation = match mem.tier {
@@ -559,8 +563,10 @@ impl Contextor {
 
             mem.recall_score = WEIGHT_SIMILARITY * mem.similarity
                 + WEIGHT_RECENCY * recency
-                + WEIGHT_IMPORTANCE * mem.importance.clamp(0.0, 1.0)
-                + WEIGHT_ACTIVATION * activation;
+                + WEIGHT_ACTIVATION * activation
+                + WEIGHT_EMOTIONAL_VALENCE * 0.5
+                + WEIGHT_GOAL_RELEVANCE * 0.5
+                + WEIGHT_NOVELTY * 0.5;
         }
 
         // Sort by recall score descending

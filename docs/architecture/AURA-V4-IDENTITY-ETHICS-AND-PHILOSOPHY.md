@@ -215,7 +215,7 @@ graph TD
     ActionProposal["Action Proposal"]
     
     subgraph Layer2["Layer 2: Absolute Ethics (identity/ethics.rs)"]
-        EthicsCheck["15 Hardcoded Rules\nCompiled into Binary\nNO override mechanism"]
+        EthicsCheck["11 Hardcoded Rules\n(7 Block + 4 Audit)\nCompiled into Binary\nNO override mechanism"]
         EthicsPass["Ethics PASS"]
         EthicsBlock["Ethics BLOCK\nRequest Rejected"]
     end
@@ -277,11 +277,11 @@ The `production_policy_gate()` function in `policy/wiring.rs` currently returns 
 
 **Implementation:**
 
-- 15 rules compiled directly into the binary
+- **11 rules compiled directly into the binary** (7 blocking patterns + 4 audit keywords)
 - Checked before any action is dispatched
 - No runtime override mechanism exists — not in config, not in code, not via any API
 - Cannot be disabled by policy gate configuration
-- Cannot be unlocked by trust tier (even INTIMATE tier cannot bypass ethics)
+- Cannot be unlocked by trust tier (even SOULMATE tier cannot bypass ethics)
 
 **Why this layer is hardcoded:**
 
@@ -314,27 +314,31 @@ A system with only Layer 1 has no unconditional safety guarantees. A system with
 
 ## 3. Absolute Boundary Rules
 
-### 3.1 The 15 Rules
+### 3.1 The 11 Implemented Rules
 
-These 15 rules are compiled into the AURA v4 binary in `identity/ethics.rs`. They represent the absolute boundaries of what AURA will do, regardless of any other system state.
+These 11 rules are compiled into the AURA v4 binary in `identity/ethics.rs`. They represent the absolute boundaries of what AURA will do, regardless of any other system state.
 
-| # | Rule | Category | Rationale |
-|---|------|----------|-----------|
-| 1 | Never assist with harm to self or others | Physical Safety | Direct harm prevention |
-| 2 | Never generate CSAM or sexualize minors | Child Protection | Legal and ethical absolute |
-| 3 | Never assist with weapon of mass destruction synthesis | Mass Casualty Prevention | Catastrophic harm prevention |
-| 4 | Never impersonate emergency services | Public Safety Infrastructure | Risk of life-threatening confusion |
-| 5 | Never disable safety systems without explicit user consent | Device Safety | Prevents silent safety bypass |
-| 6 | Never exfiltrate user data without consent | Privacy | Core privacy guarantee |
-| 7 | Never execute irreversible destructive actions without confirmation | Data Integrity | Prevents unrecoverable loss |
-| 8 | Never forge identity documents | Legal / Identity Fraud | Direct legal harm |
-| 9 | Never assist with stalking or harassment | Personal Safety | Victim protection |
-| 10 | Never bypass device security systems | Device Security | Security baseline |
-| 11 | Never make medical diagnoses | Medical Safety | Unlicensed practice of medicine |
-| 12 | Never make legal advice that could cause harm | Legal Safety | Unlicensed legal practice |
-| 13 | Never assist with financial fraud | Financial Safety | Direct financial harm |
-| 14 | Never participate in coordinated deception campaigns | Information Integrity | Epistemic harm at scale |
-| 15 | Never assist with undermining democratic processes | Civic Safety | Societal harm prevention |
+**Note:** The Layer 1 (Block) / Layer 2 (Audit) architectural separation described in Section 2 is aspirational. Currently, all rules are evaluated in a flat sequence. The distinction below reflects intended categorization:
+
+| # | Rule | Category | Layer | Rationale |
+|---|------|----------|-------|-----------|
+| 1 | Never assist with harm to self or others | Physical Safety | Block | Direct harm prevention |
+| 2 | Never generate CSAM or sexualize minors | Child Protection | Block | Legal and ethical absolute |
+| 3 | Never assist with weapon of mass destruction synthesis | Mass Casualty | Block | Catastrophic harm prevention |
+| 4 | Never impersonate emergency services | Public Safety | Block | Risk of life-threatening confusion |
+| 5 | Never disable safety systems without explicit user consent | Device Safety | Block | Prevents silent safety bypass |
+| 6 | Never exfiltrate user data without consent | Privacy | Block | Core privacy guarantee |
+| 7 | Never execute irreversible destructive actions without confirmation | Data Integrity | Block | Prevents unrecoverable loss |
+| 8 | Never forge identity documents | Legal / Identity Fraud | Audit | Direct legal harm — flagged for review |
+| 9 | Never assist with stalking or harassment | Personal Safety | Audit | Victim protection — flagged for review |
+| 10 | Never bypass device security systems | Device Security | Audit | Security baseline — flagged for review |
+| 11 | Never make medical diagnoses | Medical Safety | Audit | Unlicensed practice of medicine — flagged for review |
+
+**Current Implementation:**
+- **7 blocking patterns** (Layer 1): `delete all`, `factory reset`, `format storage`, `uninstall system`, `disable security`, `root device`, `bypass lock`
+- **4 audit keywords** (Layer 2): `password`, `credential`, `payment`, `bank`
+
+The abstract rules 8-11 in the table above are not currently implemented as separate checks — they represent planned expansion beyond the current 11 pattern-based rules.
 
 ---
 
@@ -1058,7 +1062,7 @@ The code contains an explicit TODO comment at this location, indicating this is 
 
 Because Layer 2 (absolute ethics) is independent of Layer 1 and is always enforced:
 
-- All 15 absolute boundary rules remain fully enforced
+- All 11 absolute boundary rules remain fully enforced
 - No action that violates an absolute ethics rule can be executed
 - The gap does not create a path to ethics bypass
 
@@ -1116,7 +1120,7 @@ These mitigations are not a substitute for fixing the production gap. The remedi
 
 | File | System | Purpose |
 |------|--------|---------|
-| `identity/ethics.rs` | Absolute Ethics | 15 hardcoded boundary rules |
+| `identity/ethics.rs` | Absolute Ethics | 11 hardcoded boundary rules (7 block + 4 audit) |
 | `identity/anti_sycophancy.rs` | Anti-Sycophancy | 20-response window, pattern detection |
 | `identity/personality.rs` | OCEAN Model | 5 personality traits, evolution |
 | `identity/affective.rs` | VAD Mood Model | 3-dimensional mood state |

@@ -869,6 +869,33 @@ impl ModelManager {
             let (model_ptr, ctx_ptr) = load_model_ffi(&file_path, &ctx_params);
             let load_time = start.elapsed();
 
+            // Guard: null pointers mean the backend failed to load the model.
+            // Treat this the same as a downgrade trigger so we either try a
+            // smaller tier or surface a clear error rather than storing a broken
+            // LoadedModel with null pointers that would later cause UB on
+            // first inference.
+            if model_ptr.is_null() || ctx_ptr.is_null() {
+                error!(
+                    path = %file_path.display(),
+                    tier = tier_display(tier),
+                    "load_model_ffi returned null — backend load failed"
+                );
+                if let Some(lower) = tier_downgrade(tier) {
+                    warn!(
+                        from = tier_display(tier),
+                        to = tier_display(lower),
+                        "downgrading tier after null-pointer load failure"
+                    );
+                    tier = lower;
+                    continue;
+                } else {
+                    return Err(format!(
+                        "model load failed for all tiers (last attempted: {})",
+                        tier_display(tier)
+                    ));
+                }
+            }
+
             // Post-load headroom check: verify >= 200 MB remains.
             let post_load_ram = available_ram_mb();
             let headroom_ok = post_load_ram >= 200;
@@ -1080,13 +1107,26 @@ fn load_model_ffi(
     let model_params = LlamaModelParams::default();
     let path_str = path.to_string_lossy();
 
-    // Ensure backend is initialized
+    // Ensure backend is initialized.
+    //
+    // TOCTOU (Time-Of-Check-Time-Of-Use) note: multiple threads (parallel tests or
+    // neocortex tasks) may reach this block simultaneously, both observing
+    // `is_backend_initialized() == false`.
+    // `init_stub_backend` uses OnceLock::set, so only one thread wins.  The loser
+    // receives `BackendError::StubMode("backend already initialized")`, which is NOT
+    // a real failure — the winning thread's backend is ready for both parties.
+    // We therefore re-check `is_backend_initialized()` after any init failure before
+    // giving up; only a backend that is still absent after the attempt is fatal.
     if !aura_llama_sys::is_backend_initialized() {
         #[cfg(not(target_os = "android"))]
         {
             if let Err(e) = aura_llama_sys::init_stub_backend(0xA0BA) {
-                error!(error = %e, "failed to initialize stub backend");
-                return (std::ptr::null_mut(), std::ptr::null_mut());
+                // "already initialized" is benign — another thread beat us here.
+                if !aura_llama_sys::is_backend_initialized() {
+                    error!(error = %e, "failed to initialize stub backend");
+                    return (std::ptr::null_mut(), std::ptr::null_mut());
+                }
+                debug!("stub backend already initialized by concurrent caller; proceeding");
             }
         }
         #[cfg(target_os = "android")]
@@ -1130,8 +1170,6 @@ fn free_model_ffi(model_ptr: *mut LlamaModel, ctx_ptr: *mut LlamaContext) {
 
 #[cfg(test)]
 mod tests {
-    use aura_types::ipc::InferenceMode;
-
     use super::*;
 
     // ── Tier helpers ────────────────────────────────────────────────────

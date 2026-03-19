@@ -4,7 +4,12 @@
 # These are defaults used by `cargo build --target aarch64-linux-android`.
 # The NDK toolchain path must be in PATH, or set CARGO_TARGET_*_LINKER
 # in the environment (CI sets these via workflow env vars).
+#
+# API LEVEL: Must stay in sync with API_LEVEL="26" set in both
+# .github/workflows/release.yml and .github/workflows/build-android.yml.
+# Using API 26 ensures binary ABI compatibility with Android 8.0+ (minSdk 26)
+# and eliminates linker-version skew between local and CI builds.
 
 [target.aarch64-linux-android]
-linker = "aarch64-linux-android21-clang"
+linker = "aarch64-linux-android26-clang"
 ar = "llvm-ar"

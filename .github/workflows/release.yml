@@ -86,6 +86,8 @@ jobs:
     name: Build aarch64-linux-android
     runs-on: ubuntu-latest
     needs: ci-check
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout (with submodules)
@@ -175,7 +177,17 @@ jobs:
             "$TOOLCHAIN/llvm-strip" "target/aarch64-linux-android/release/$BIN"
           done
 
-      - name: Verify Android runtime dependencies
+      # ── Binary Contract ──────────────────────────────────────────────────
+      # Hard gate that validates every artifact satisfies the minimum identity
+      # contract BEFORE any checksum or release upload proceeds.
+      # Checks:
+      #   A) ELF magic bytes  → rejects HTML error pages or truncated files
+      #   B) Machine = EM_AARCH64 (0xb7)  → rejects wrong-architecture binaries
+      #   C) Type = ET_EXEC (2) or ET_DYN (3/PIE)  → rejects corrupt ELF
+      #   D) No forbidden shared libraries (libc++_shared.so, libstdc++.so, etc.)
+      #   E) Section count > 0  → rejects empty/stripped-to-nothing binaries
+      # Any failure is class F_BINARY_CONTRACT and blocks the release.
+      - name: Binary Contract — ELF identity + dependency policy
         run: |
           set -euo pipefail
 
@@ -185,30 +197,239 @@ jobs:
             exit 1
           fi
 
-          check_needed() {
+          # Forbidden shared libraries — runtime availability on bare Termux is NOT guaranteed.
+          FORBIDDEN_LIBS="libc++_shared.so libstdc++.so libstdc++.so.6"
+
+          binary_contract() {
             local bin="$1"
-            echo "Inspecting dynamic deps for: $bin"
+            local label
+            label="$(basename "$bin")"
+            echo "━━━ Binary Contract: $label ━━━"
 
+            # ── A: ELF magic ────────────────────────────────────────────────
+            # First 4 bytes must be 0x7f 0x45 0x4c 0x46 ("\x7fELF")
+            local magic
+            magic=$(od -A n -N 4 -t x1 "$bin" 2>/dev/null | tr -d ' \n')
+            echo "  ELF magic:   $magic"
+            if [ "$magic" != "7f454c46" ]; then
+              echo "  FAIL [A] ELF magic mismatch — expected 7f454c46, got $magic"
+              echo "  This usually means the binary was replaced by an HTML error page,"
+              echo "  a truncated download, or a completely wrong file."
+              return 1
+            fi
+            echo "  PASS [A] ELF magic OK"
+
+            # ── B: Machine type EM_AARCH64 (bytes 19-18 in ELF header = 0x00b7) ─
+            # ELF e_machine is at offset 18-19 (little-endian = b7 00)
+            local machine_le
+            machine_le=$(od -A n -j 18 -N 2 -t x1 "$bin" 2>/dev/null | tr -d ' \n')
+            echo "  e_machine:   $machine_le (LE bytes)"
+            # LE: b7 00 = EM_AARCH64 = 183
+            if [ "$machine_le" != "b700" ]; then
+              echo "  FAIL [B] Wrong architecture — expected b700 (EM_AARCH64), got $machine_le"
+              echo "  Binary is not AArch64. Wrong toolchain or cached artifact from different arch."
+              return 1
+            fi
+            echo "  PASS [B] Architecture = EM_AARCH64"
+
+            # ── C: ELF type ET_EXEC (0200) or ET_DYN (0300 = PIE) ───────────
+            # ELF e_type is at offset 16-17 (little-endian)
+            local etype_le
+            etype_le=$(od -A n -j 16 -N 2 -t x1 "$bin" 2>/dev/null | tr -d ' \n')
+            echo "  e_type:      $etype_le (LE bytes)"
+            # 02 00 = ET_EXEC, 03 00 = ET_DYN (PIE executables appear as ET_DYN)
+            if [ "$etype_le" != "0200" ] && [ "$etype_le" != "0300" ]; then
+              echo "  FAIL [C] Unexpected ELF type $etype_le — expected 0200 (ET_EXEC) or 0300 (ET_DYN/PIE)"
+              return 1
+            fi
+            echo "  PASS [C] ELF type OK ($etype_le)"
+
+            # ── D: Dependency policy ─────────────────────────────────────────
             local needed
-            needed="$($READELF -d "$bin" | awk '/NEEDED/ {print $5}' | tr -d '[]' || true)"
-
+            needed="$($READELF -d "$bin" 2>/dev/null | awk '/NEEDED/ {print $5}' | tr -d '[]' || true)"
             if [ -n "$needed" ]; then
-              echo "$needed" | sed 's/^/  NEEDED: /'
+              echo "  Dynamic NEEDED libs:"
+              echo "$needed" | sed 's/^/    /'
             else
-              echo "  NEEDED: <none>"
+              echo "  Dynamic NEEDED libs: <none — statically linked>"
+            fi
+            local dep_fail=0
+            for forbidden in $FORBIDDEN_LIBS; do
+              if printf '%s\n' "$needed" | grep -Fqx "$forbidden"; then
+                echo "  FAIL [D] Forbidden dependency: $forbidden"
+                echo "       This library is not guaranteed present on bare Termux/Android."
+                dep_fail=1
+              fi
+            done
+            if [ "$dep_fail" -eq 1 ]; then
+              return 1
+            fi
+            echo "  PASS [D] Dependency policy OK"
+
+            # ── E: Section count sanity ──────────────────────────────────────
+            local shnum
+            shnum=$("$READELF" -h "$bin" 2>/dev/null | awk '/Number of section headers/ {print $NF}' || echo "0")
+            echo "  Section headers: $shnum"
+            if [ "${shnum:-0}" -eq 0 ]; then
+              echo "  FAIL [E] Zero section headers — binary may be corrupt or over-stripped"
+              return 1
+            fi
+            echo "  PASS [E] Section count OK ($shnum sections)"
+
+            echo "  ✓ Binary Contract PASSED for $label"
+            echo ""
+          }
+
+          binary_contract "target/aarch64-linux-android/release/aura-daemon"
+          binary_contract "target/aarch64-linux-android/release/aura-neocortex"
+
+          echo "All binary contract checks passed."
+
+      # ── Stale-artifact detection ─────────────────────────────────────────
+      # Compares the new binary digest against the previously published release.
+      # A matching digest means no runtime code changed since the last release,
+      # which is a strong signal that this release is premature or that the
+      # build cache served a stale artifact.
+      # The check is advisory (warn, not fail) to handle legitimate no-op releases.
+      - name: Stale-artifact detection (compare digest vs previous release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+
+          echo "Current tag: $TAG"
+
+          # Fetch the most recent release that is NOT this tag (previous release).
+          PREV_TAG=$(gh release list --repo "$REPO" --limit 10 --json tagName \
+            --jq "[.[] | select(.tagName != \"$TAG\") | .tagName] | first" 2>/dev/null || true)
+
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "null" ]; then
+            echo "No previous release found — skipping stale-artifact check (first release)."
+            exit 0
+          fi
+
+          echo "Previous release tag: $PREV_TAG"
+
+          stale_check() {
+            local bin_name="$1"
+            local new_bin="$2"
+
+            # Try to download the previous release's .sha256 sidecar.
+            local prev_sha_url="https://github.com/${REPO}/releases/download/${PREV_TAG}/${bin_name}-${PREV_TAG}-aarch64-linux-android.sha256"
+            local prev_sha
+            prev_sha=$(curl --fail --silent --location "$prev_sha_url" 2>/dev/null | cut -d' ' -f1 || true)
+
+            if [ -z "$prev_sha" ]; then
+              echo "Could not fetch previous SHA256 for $bin_name from $prev_sha_url — skipping."
+              return 0
             fi
 
-            # Production invariant for Termux one-line installs:
-            # release binaries must not require libc++_shared.so at runtime.
-            if printf '%s\n' "$needed" | grep -Fqx 'libc++_shared.so'; then
-              echo "ERROR: $bin depends on libc++_shared.so (not guaranteed on target devices)."
-              echo "Fix: link C++ runtime statically for Android release artifacts."
-              exit 1
+            local new_sha
+            new_sha=$(sha256sum "$new_bin" | cut -d' ' -f1)
+
+            echo "$bin_name: prev=$prev_sha  new=$new_sha"
+
+            if [ "$new_sha" = "$prev_sha" ]; then
+              echo "::warning title=Stale Artifact::$bin_name binary digest is IDENTICAL to $PREV_TAG."
+              echo "  This means no runtime code changed between releases."
+              echo "  If this is intentional (installer-only release), add '[no-binary-change]'"
+              echo "  to the tag message. Otherwise the build cache may have served stale objects."
+              echo ""
+              echo "  Stale release invariant violated — blocking release."
+              echo "  To override (installer-only release): re-tag with message containing [no-binary-change]"
+              # Check if the tag message explicitly overrides
+              local tag_msg
+              tag_msg=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null || true)
+              if printf '%s\n' "$tag_msg" | grep -qF '[no-binary-change]'; then
+                echo "  Override '[no-binary-change]' found in tag message — allowing stale binary."
+                return 0
+              fi
+              return 1
+            else
+              echo "$bin_name: digest changed from $PREV_TAG ✓"
             fi
           }
 
-          check_needed "target/aarch64-linux-android/release/aura-daemon"
-          check_needed "target/aarch64-linux-android/release/aura-neocortex"
+          stale_check "aura-daemon" "target/aarch64-linux-android/release/aura-daemon"
+          stale_check "aura-neocortex" "target/aarch64-linux-android/release/aura-neocortex"
+
+      # ── Truth Bundle manifest ─────────────────────────────────────────────
+      # An immutable JSON record that captures the full provenance of every
+      # release artifact.  Uploaded alongside the binaries so any future audit
+      # can verify what was built, when, and by whom.
+      - name: Generate truth bundle manifest
+        run: |
+          set -euo pipefail
+
+          TAG="${{ github.ref_name }}"
+          COMMIT="${{ github.sha }}"
+          RUN_ID="${{ github.run_id }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${RUN_ID}"
+
+          READELF="$TOOLCHAIN/llvm-readelf"
+
+          # Build a JSON array of quoted NEEDED library names for a binary.
+          needed_json_array() {
+            local bin="$1"
+            local libs
+            libs="$($READELF -d "$bin" 2>/dev/null | awk '/NEEDED/ {print $5}' | tr -d '[]' || true)"
+            if [ -z "$libs" ]; then
+              printf '[]'
+              return
+            fi
+            # Print each line as a quoted JSON string; prefix ", " from the second entry on.
+            local joined
+            joined=$(printf '%s\n' "$libs" | awk '{if(NR>1) printf ", "; printf "\"%s\"", $0}')
+            printf '[%s]' "$joined"
+          }
+
+          # Collect per-binary facts using plain variable assignments and echo
+          # to avoid any heredoc trailing-comma ambiguity.
+          daemon_bin="target/aarch64-linux-android/release/aura-daemon"
+          neocortex_bin="target/aarch64-linux-android/release/aura-neocortex"
+
+          D_SHA=$(sha256sum "$daemon_bin" | cut -d' ' -f1)
+          D_SIZE=$(stat -c '%s' "$daemon_bin")
+          D_MACHINE=$(od -A n -j 18 -N 2 -t x1 "$daemon_bin" 2>/dev/null | tr -d ' \n')
+          D_TYPE=$(od -A n -j 16 -N 2 -t x1 "$daemon_bin" 2>/dev/null | tr -d ' \n')
+          D_LIBS=$(needed_json_array "$daemon_bin")
+
+          N_SHA=$(sha256sum "$neocortex_bin" | cut -d' ' -f1)
+          N_SIZE=$(stat -c '%s' "$neocortex_bin")
+          N_MACHINE=$(od -A n -j 18 -N 2 -t x1 "$neocortex_bin" 2>/dev/null | tr -d ' \n')
+          N_TYPE=$(od -A n -j 16 -N 2 -t x1 "$neocortex_bin" 2>/dev/null | tr -d ' \n')
+          N_LIBS=$(needed_json_array "$neocortex_bin")
+
+          {
+            echo "{"
+            echo "  \"schema_version\": 1,"
+            echo "  \"tag\": \"${TAG}\","
+            echo "  \"commit_sha\": \"${COMMIT}\","
+            echo "  \"workflow_run_id\": \"${RUN_ID}\","
+            echo "  \"workflow_run_url\": \"${RUN_URL}\","
+            echo "  \"build_timestamp_utc\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+            echo "  \"ndk_version\": \"${NDK_VERSION}\","
+            echo "  \"api_level\": \"${API_LEVEL}\","
+            echo "  \"target\": \"${TARGET}\","
+            echo "  \"daemon_sha256\": \"${D_SHA}\","
+            echo "  \"daemon_size_bytes\": ${D_SIZE},"
+            echo "  \"daemon_elf_machine\": \"${D_MACHINE}\","
+            echo "  \"daemon_elf_type\": \"${D_TYPE}\","
+            echo "  \"daemon_needed_libs\": ${D_LIBS},"
+            echo "  \"neocortex_sha256\": \"${N_SHA}\","
+            echo "  \"neocortex_size_bytes\": ${N_SIZE},"
+            echo "  \"neocortex_elf_machine\": \"${N_MACHINE}\","
+            echo "  \"neocortex_elf_type\": \"${N_TYPE}\","
+            echo "  \"neocortex_needed_libs\": ${N_LIBS},"
+            echo "  \"binary_contract_passed\": true"
+            echo "}"
+          } > "release-truth-bundle-${TAG}.json"
+
+          echo "Truth bundle:"
+          cat "release-truth-bundle-${TAG}.json"
 
       # Rename binary to include version tag for the release artifact
       - name: Prepare release artifacts
@@ -239,6 +460,7 @@ jobs:
             aura-daemon-*-aarch64-linux-android.sha256
             aura-neocortex-*-aarch64-linux-android
             aura-neocortex-*-aarch64-linux-android.sha256
+            release-truth-bundle-*.json
           retention-days: 1
           if-no-files-found: error
 
@@ -291,6 +513,10 @@ jobs:
             echo "sha256sum -c aura-neocortex-${TAG}-aarch64-linux-android.sha256"
             echo '```'
             echo ""
+            echo "The \`release-truth-bundle-${TAG}.json\` file records the full provenance"
+            echo "of this build: commit SHA, workflow run ID, ELF metadata, and artifact"
+            echo "checksums. Use it to audit any release artifact."
+            echo ""
             echo "## Installation"
             echo ""
             echo '```sh'
@@ -320,5 +546,6 @@ jobs:
             aura-daemon-*-aarch64-linux-android.sha256
             aura-neocortex-*-aarch64-linux-android
             aura-neocortex-*-aarch64-linux-android.sha256
+            release-truth-bundle-*.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

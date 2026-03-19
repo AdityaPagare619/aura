@@ -209,6 +209,28 @@ run() {
     fi
 }
 
+classify_runtime_failure() {
+    local exit_code="$1"
+    local output="${2:-}"
+
+    if [ "$exit_code" -eq 139 ] || printf '%s\n' "$output" | grep -qi 'segmentation fault'; then
+        printf '%s' "startup segfault (exit 139)"
+        return 0
+    fi
+
+    if printf '%s\n' "$output" | grep -qi 'CANNOT LINK EXECUTABLE\|library ".*" not found\|dlopen failed'; then
+        printf '%s' "linker missing dependency"
+        return 0
+    fi
+
+    printf '%s' "unknown runtime failure"
+}
+
+release_tag_to_version() {
+    local tag="$1"
+    printf '%s' "${tag#v}"
+}
+
 confirm() {
     local prompt="$1"
     local default="${2:-y}"
@@ -1039,16 +1061,57 @@ phase_build() {
     if [ "$OPT_SKIP_BUILD" = "1" ]; then
         log_info "Skipping build (--skip-build)"
 
+        local release_tag="$AURA_STABLE_TAG"
+        local target_version
+        target_version="$(release_tag_to_version "$release_tag")"
+
+        local reuse_existing=0
+
         if [ -f "$AURA_BIN" ] && [ -f "$AURA_NEOCORTEX_BIN" ]; then
-            log_step "Using existing binaries"
-            return
+            local daemon_probe_out=""
+            local neocortex_probe_out=""
+            local daemon_class=""
+            local neocortex_class=""
+
+            reuse_existing=1
+
+            if daemon_probe_out=$("$AURA_BIN" --version 2>&1); then
+                if printf '%s\n' "$daemon_probe_out" | grep -q "$target_version"; then
+                    log_step "Existing aura-daemon matches target release: $target_version"
+                else
+                    warn "Existing aura-daemon version mismatch. Expected $target_version, got: $(printf '%s\n' "$daemon_probe_out" | awk 'NR==1{print; exit}')"
+                    reuse_existing=0
+                fi
+            else
+                daemon_class="$(classify_runtime_failure "$?" "$daemon_probe_out")"
+                warn "Existing aura-daemon failed runtime probe: ${daemon_class}"
+                reuse_existing=0
+            fi
+
+            if neocortex_probe_out=$("$AURA_NEOCORTEX_BIN" --help 2>&1); then
+                if printf '%s\n' "$neocortex_probe_out" | grep -q "aura-neocortex"; then
+                    log_step "Existing aura-neocortex runtime probe passed"
+                else
+                    warn "Existing aura-neocortex probe output unexpected"
+                fi
+            else
+                neocortex_class="$(classify_runtime_failure "$?" "$neocortex_probe_out")"
+                warn "Existing aura-neocortex failed runtime probe: ${neocortex_class}"
+                reuse_existing=0
+            fi
+
+            if [ "$reuse_existing" = "1" ]; then
+                log_step "Using existing binaries (validated)"
+                return
+            fi
+
+            log_info "Existing binaries failed validation. Re-downloading release artifacts..."
         fi
 
         # Download pre-built from GitHub Releases
         log_info "Downloading pre-built binaries from GitHub Releases..."
         local repo_slug
         repo_slug=$(echo "$AURA_REPO" | sed 's|https://github.com/||;s|\.git$||')
-        local release_tag="$AURA_STABLE_TAG"
         local base_url="https://github.com/${repo_slug}/releases/download/${release_tag}"
 
         for artifact in \
@@ -1112,10 +1175,14 @@ phase_build() {
                 if daemon_probe_out=$("$dest" --version 2>&1); then
                     log_step "Runtime probe passed: aura-daemon"
                 else
+                    local daemon_probe_rc=$?
                     local daemon_probe_first_line
                     daemon_probe_first_line=$(printf '%s\n' "$daemon_probe_out" | awk 'NR==1{print; exit}')
+                    local daemon_failure_class
+                    daemon_failure_class="$(classify_runtime_failure "$daemon_probe_rc" "$daemon_probe_out")"
                     rm -f "$dest"
                     die "Downloaded aura-daemon failed runtime probe (--version)." \
+                        "Failure class: ${daemon_failure_class}" \
                         "Probe output: ${daemon_probe_first_line}" \
                         "This release artifact is not runnable on this device."
                 fi
@@ -1127,12 +1194,16 @@ phase_build() {
                         warn "aura-neocortex probe returned unexpected output; continuing"
                     fi
                 else
+                    local neocortex_probe_rc=$?
                     local neocortex_probe_first_line
                     neocortex_probe_first_line=$(printf '%s\n' "$neocortex_probe_out" | awk 'NR==1{print; exit}')
+                    local neocortex_failure_class
+                    neocortex_failure_class="$(classify_runtime_failure "$neocortex_probe_rc" "$neocortex_probe_out")"
                     rm -f "$dest"
                     die "Downloaded aura-neocortex failed runtime probe (--help)." \
+                        "Failure class: ${neocortex_failure_class}" \
                         "Probe output: ${neocortex_probe_first_line}" \
-                        "Likely missing shared runtime dependency (example: libc++_shared.so)."
+                        "This release artifact is not runnable on this device."
                 fi
             fi
         done
@@ -1563,6 +1634,7 @@ phase_verify() {
     log_header "Phase 12 · Verification"
 
     local all_ok=1
+    local runtime_probe_failed=0
 
     # Binary check
     if [ -x "$AURA_BIN" ]; then
@@ -1607,12 +1679,15 @@ phase_verify() {
     # Quick smoke test — just version output
     if [ "$OPT_DRY_RUN" != "1" ] && [ -x "$AURA_BIN" ]; then
         local ver
-        ver=$("$AURA_BIN" --version 2>/dev/null || echo "")
-        if [ -n "$ver" ]; then
+        if ver=$("$AURA_BIN" --version 2>&1); then
             log_step "Daemon responds: $ver"
         else
-            warn "Daemon did not respond to --version"
+            local daemon_probe_rc=$?
+            local daemon_failure_class
+            daemon_failure_class="$(classify_runtime_failure "$daemon_probe_rc" "$ver")"
+            warn "Daemon did not respond to --version (${daemon_failure_class})"
             all_ok=0
+            runtime_probe_failed=1
         fi
     fi
 
@@ -1627,11 +1702,22 @@ phase_verify() {
                 warn "Neocortex returned unexpected --help output"
             fi
         else
+            local neocortex_help_rc=$?
             local neocortex_help_first_line
             neocortex_help_first_line=$(printf '%s\n' "$neocortex_help" | awk 'NR==1{print; exit}')
+            local neocortex_failure_class
+            neocortex_failure_class="$(classify_runtime_failure "$neocortex_help_rc" "$neocortex_help")"
             warn "Neocortex failed runtime probe (--help): ${neocortex_help_first_line}"
+            warn "Failure class: ${neocortex_failure_class}"
             all_ok=0
+            runtime_probe_failed=1
         fi
+    fi
+
+    if [ "$runtime_probe_failed" = "1" ]; then
+        die "Verification failed: one or more runtime probes failed." \
+            "This install is not considered successful on this device." \
+            "Run: bash verify.sh --quick for detailed failure context."
     fi
 
     echo ""

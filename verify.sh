@@ -33,6 +33,7 @@ FAIL=0
 WARN=0
 SKIP=0
 QUICK=0
+FAILURE_CODES=()
 
 [[ "${1:-}" == "--quick" ]] && QUICK=1
 
@@ -57,6 +58,29 @@ fail() { ((FAIL++)); echo -e "  ${RED}✗${NC} $1"; }
 warn() { ((WARN++)); echo -e "  ${YELLOW}⚠${NC} $1"; }
 skip() { ((SKIP++)); echo -e "  ${BLUE}⏭${NC} $1 (skipped)"; }
 header() { echo -e "\n${BOLD}═══ $1 ═══${NC}"; }
+
+add_failure_code() {
+    local code="$1"
+    local detail="$2"
+    FAILURE_CODES+=("${code}:${detail}")
+}
+
+classify_runtime_failure() {
+    local exit_code="$1"
+    local output="${2:-}"
+
+    if [ "$exit_code" -eq 139 ] || printf '%s\n' "$output" | grep -qi 'segmentation fault'; then
+        printf '%s' "F001_STARTUP_SEGFAULT"
+        return 0
+    fi
+
+    if printf '%s\n' "$output" | grep -qi 'CANNOT LINK EXECUTABLE\|library ".*" not found\|dlopen failed'; then
+        printf '%s' "F002_DYNAMIC_LINKER_DEPENDENCY"
+        return 0
+    fi
+
+    printf '%s' "F099_UNKNOWN_RUNTIME"
+}
 
 # ── Check helpers ───────────────────────────────────────────────────────────
 
@@ -129,6 +153,7 @@ if check_file_exists "$AURA_NEOCORTEX_BIN" "aura-neocortex binary"; then
     neocortex_probe=$("$AURA_NEOCORTEX_BIN" --help 2>&1 || true)
     if echo "$neocortex_probe" | grep -qi 'CANNOT LINK EXECUTABLE'; then
         fail "aura-neocortex runtime link failed: $(echo "$neocortex_probe" | head -1)"
+        add_failure_code "F002_DYNAMIC_LINKER_DEPENDENCY" "aura-neocortex --help"
     elif echo "$neocortex_probe" | grep -qi 'aura-neocortex'; then
         pass "aura-neocortex responds to --help"
     else
@@ -460,6 +485,17 @@ else
             fail "Daemon exited within 5 seconds — check /tmp/aura-verify-startup.log"
             echo -e "  ${RED}Last 10 lines:${NC}"
             tail -10 /tmp/aura-verify-startup.log 2>/dev/null | sed 's/^/    /'
+
+            daemon_exit=0
+            if wait "$test_pid" 2>/dev/null; then
+                daemon_exit=0
+            else
+                daemon_exit=$?
+            fi
+            startup_output=$(cat /tmp/aura-verify-startup.log 2>/dev/null || true)
+            daemon_failure_code=$(classify_runtime_failure "$daemon_exit" "$startup_output")
+            add_failure_code "$daemon_failure_code" "aura-daemon test start"
+            fail "Daemon failure classified as ${daemon_failure_code} (exit ${daemon_exit})"
         fi
     else
         skip "Daemon startup test (--quick mode)"
@@ -562,6 +598,14 @@ if [ "$FAIL" -eq 0 ]; then
     exit 0
 else
     echo -e "  ${RED}${BOLD}✗ ${FAIL} CHECK(S) FAILED${NC}"
+    if [ "${#FAILURE_CODES[@]}" -gt 0 ]; then
+        echo -e "  ${BOLD}Failure classification:${NC}"
+        for entry in "${FAILURE_CODES[@]}"; do
+            code="${entry%%:*}"
+            detail="${entry#*:}"
+            echo -e "    - ${RED}${code}${NC}: ${detail}"
+        done
+    fi
     echo -e "  Review the failures above and fix before running AURA."
     echo ""
     exit 1

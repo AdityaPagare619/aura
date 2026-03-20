@@ -25,7 +25,9 @@ pub use personality::{
     ConsistencyReport, Personality, PersonalityArchetype, PersonalityEngine, PersonalityEvent,
     PersonalityOutcome,
 };
-pub use proactive_consent::{ProactiveConsent, ProactiveSettings};
+pub use proactive_consent::{
+    Consent, ConsentCategory, ConsentLevel, GranularConsent, ProactiveConsent, ProactiveSettings,
+};
 pub use prompt_personality::PersonalityPromptInjector;
 pub use relationship::{InteractionType, RelationshipTracker, RiskLevel, UserRelationship};
 pub use thinking_partner::{ChallengeLevel, ThinkingPartner};

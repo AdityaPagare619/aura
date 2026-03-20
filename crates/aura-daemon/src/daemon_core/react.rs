@@ -847,6 +847,218 @@ pub fn plan_step_to_tool_call(step: &aura_types::dsl::DslStep) -> ToolCall {
     }
 }
 
+/// Convert a LLM-generated [`ToolCall`] into a [`DslStep`] for execution
+/// via the real [`Executor`] pipeline.
+///
+/// This is the inverse of [`plan_step_to_tool_call`].  It bridges the gap
+/// between the structured LLM output (`ToolCall.parameters` as strings) and
+/// the typed `DslStep` that the executor expects.
+fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
+    use aura_types::actions::{ActionType, ElementAssertion, ScrollDirection, TargetSelector};
+    use aura_types::dsl::FailureStrategy;
+
+    let action: ActionType = match tool_call.tool_name.as_str() {
+        "tap" => {
+            let x: i32 = tool_call
+                .parameters
+                .get("x")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let y: i32 = tool_call
+                .parameters
+                .get("y")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            ActionType::Tap { x, y }
+        },
+        "long_press" => {
+            let x: i32 = tool_call
+                .parameters
+                .get("x")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let y: i32 = tool_call
+                .parameters
+                .get("y")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            ActionType::LongPress { x, y }
+        },
+        "swipe" => {
+            let from_x: i32 = tool_call
+                .parameters
+                .get("from_x")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let from_y: i32 = tool_call
+                .parameters
+                .get("from_y")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let to_x: i32 = tool_call
+                .parameters
+                .get("to_x")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let to_y: i32 = tool_call
+                .parameters
+                .get("to_y")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let duration_ms: u32 = tool_call
+                .parameters
+                .get("duration_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300);
+            ActionType::Swipe {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                duration_ms,
+            }
+        },
+        "type_text" => {
+            let text = tool_call
+                .parameters
+                .get("text")
+                .cloned()
+                .unwrap_or_default();
+            ActionType::Type { text }
+        },
+        "scroll" => {
+            let direction = match tool_call
+                .parameters
+                .get("direction")
+                .map(|v| v.as_str())
+                .unwrap_or("down")
+            {
+                "up" => ScrollDirection::Up,
+                "down" => ScrollDirection::Down,
+                "left" => ScrollDirection::Left,
+                "right" => ScrollDirection::Right,
+                _ => ScrollDirection::Down,
+            };
+            let amount: i32 = tool_call
+                .parameters
+                .get("amount")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1);
+            ActionType::Scroll { direction, amount }
+        },
+        "back" => ActionType::Back,
+        "home" => ActionType::Home,
+        "recents" => ActionType::Recents,
+        "open_app" => {
+            let package = tool_call
+                .parameters
+                .get("package")
+                .cloned()
+                .unwrap_or_default();
+            ActionType::OpenApp { package }
+        },
+        "notification_action" => {
+            let notification_id: u32 = tool_call
+                .parameters
+                .get("notification_id")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let action_index: u32 = tool_call
+                .parameters
+                .get("action_index")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            ActionType::NotificationAction {
+                notification_id,
+                action_index,
+            }
+        },
+        "wait_for_element" => {
+            let timeout_ms: u32 = tool_call
+                .parameters
+                .get("timeout_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5000);
+            // Parse selector from parameters — fall back to LLM description for flexible matching
+            let selector = if let Some(text) = tool_call.parameters.get("text") {
+                TargetSelector::Text(text.clone())
+            } else if let Some(resource_id) = tool_call.parameters.get("resource_id") {
+                TargetSelector::ResourceId(resource_id.clone())
+            } else if let Some(desc) = tool_call.parameters.get("description") {
+                TargetSelector::ContentDescription(desc.clone())
+            } else {
+                // Fall back to LLM-based description matching
+                TargetSelector::LlmDescription(
+                    tool_call
+                        .parameters
+                        .values()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            };
+            ActionType::WaitForElement {
+                selector,
+                timeout_ms,
+            }
+        },
+        "assert_element" => {
+            let selector = if let Some(text) = tool_call.parameters.get("text") {
+                TargetSelector::Text(text.clone())
+            } else if let Some(resource_id) = tool_call.parameters.get("resource_id") {
+                TargetSelector::ResourceId(resource_id.clone())
+            } else {
+                TargetSelector::LlmDescription(
+                    tool_call
+                        .parameters
+                        .values()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            };
+            // Determine assertion type from parameters
+            let expected = match tool_call
+                .parameters
+                .get("assert")
+                .map(|v| v.as_str())
+                .unwrap_or("exists")
+            {
+                "not_exists" => ElementAssertion::NotExists,
+                "text_equals" => ElementAssertion::TextEquals(
+                    tool_call
+                        .parameters
+                        .get("expected_text")
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+                "text_contains" => ElementAssertion::TextContains(
+                    tool_call
+                        .parameters
+                        .get("expected_text")
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+                "is_enabled" => ElementAssertion::IsEnabled,
+                "is_checked" => ElementAssertion::IsChecked,
+                _ => ElementAssertion::Exists,
+            };
+            ActionType::AssertElement { selector, expected }
+        },
+        _ => ActionType::Back,
+    };
+
+    aura_types::dsl::DslStep {
+        action,
+        target: None,
+        timeout_ms: 5000,
+        on_failure: FailureStrategy::Abort,
+        precondition: None,
+        postcondition: None,
+        label: Some(format!("semantic_react:{}", tool_call.tool_name)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Signal Aggregation — post-iteration data processing
 // ---------------------------------------------------------------------------
@@ -1364,19 +1576,235 @@ impl ReactEngine {
     /// Execute a task using Semantic ReAct (System 2) with real subsystems.
     ///
     /// LLM-driven think→act→observe loop for novel or complex tasks.
-    /// Delegates to the standalone implementation when no engine-specific
-    /// subsystems are needed.
+    /// Actions are executed via the real [`Executor`] pipeline (with built-in
+    /// PolicyGate, sandbox, anti-bot, and verification), not simulated.
     #[instrument(skip(self), fields(session_id = session.session_id))]
     async fn execute_semantic_react(
         &mut self,
         session: &mut AgenticSession,
         plan: Option<ActionPlan>,
     ) -> TaskOutcome {
-        let mut policy_ctx = PolicyContext {
-            gate: &mut self.policy_gate,
-            audit: &mut self.audit_log,
-        };
-        execute_semantic_react_standalone(session, plan, Some(&mut policy_ctx)).await
+        let start = Instant::now();
+        let mut current_plan = plan;
+
+        loop {
+            if let Some(reason) = session.should_terminate() {
+                warn!(reason, "SemanticReact session terminating");
+                return TaskOutcome::Failed {
+                    reason: reason.to_string(),
+                    iterations_used: session.iteration_count,
+                    total_ms: start.elapsed().as_millis() as u64,
+                    last_strategy: session.strategy,
+                };
+            }
+
+            if session.iteration_count >= session.max_iterations {
+                warn!(
+                    iterations = session.iteration_count,
+                    "max iterations reached"
+                );
+                return TaskOutcome::Failed {
+                    reason: "max iterations reached".to_string(),
+                    iterations_used: session.iteration_count,
+                    total_ms: start.elapsed().as_millis() as u64,
+                    last_strategy: session.strategy,
+                };
+            }
+
+            let context = match build_context(session, None, None) {
+                Ok(_ctx) => {},
+                Err(e) => {
+                    warn!(error = %e, "failed to build context — aborting");
+                    return TaskOutcome::Failed {
+                        reason: format!("context build failed: {e}"),
+                        iterations_used: session.iteration_count,
+                        total_ms: start.elapsed().as_millis() as u64,
+                        last_strategy: session.strategy,
+                    };
+                },
+            };
+
+            let thought = format!(
+                "SemanticReact iteration {}: strategy={}, failures={}",
+                session.iteration_count, session.strategy, session.consecutive_failures
+            );
+
+            // Resolve the next tool call from the plan (if any) or signal done.
+            let tool_call = if let Some(ref plan) = current_plan {
+                let step_idx = session.iteration_count as usize;
+                if step_idx < plan.steps.len() {
+                    plan_step_to_tool_call(&plan.steps[step_idx])
+                } else {
+                    info!("plan exhausted — would request re-plan from neocortex");
+                    current_plan = None;
+                    continue;
+                }
+            } else {
+                info!("no plan available — SemanticReact needs a plan to proceed");
+                return TaskOutcome::Failed {
+                    reason:
+                        "SemanticReact mode requires an action plan (use DGS or provide a plan)"
+                            .to_string(),
+                    iterations_used: session.iteration_count,
+                    total_ms: start.elapsed().as_millis() as u64,
+                    last_strategy: session.strategy,
+                };
+            };
+
+            debug!(action = %tool_call.tool_name, "SemanticReact executing action via Executor");
+
+            // --- Policy gate check (before action reaches the Executor) ---
+            let mut policy_ctx = PolicyContext {
+                gate: &mut self.policy_gate,
+                audit: &mut self.audit_log,
+            };
+            let action_str = format!("{}:{}", tool_call.tool_name, tool_call.reasoning);
+            let observation = if let Some(denied_result) = policy_ctx.check_action(&action_str) {
+                denied_result
+            } else {
+                // Convert ToolCall to DslStep and execute via the real Executor.
+                let dsl_step = tool_call_to_dsl_step(&tool_call);
+                let goal_desc = current_plan
+                    .as_ref()
+                    .map(|p| p.goal_description.clone())
+                    .unwrap_or_else(|| session.task.clone());
+                let single_step_plan = ActionPlan {
+                    goal_description: goal_desc,
+                    steps: vec![dsl_step],
+                    estimated_duration_ms: 5000,
+                    confidence: 0.8,
+                    source: current_plan
+                        .as_ref()
+                        .map(|p| p.source)
+                        .unwrap_or(aura_types::etg::PlanSource::UserDefined),
+                };
+
+                let before_hash = self.capture_screen_hash();
+
+                let exec_result = self
+                    .executor
+                    .execute(&single_step_plan, self.screen.as_ref())
+                    .await;
+
+                let after_hash = self.capture_screen_hash();
+                let screen_changed = before_hash != after_hash && before_hash != 0;
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+
+                match exec_result {
+                    Ok(ExecutionOutcome::Success { .. }) => ActionResult {
+                        success: true,
+                        duration_ms: elapsed_ms as u32,
+                        error: None,
+                        screen_changed,
+                        matched_element: Some(format!("exec_{}", tool_call.tool_name)),
+                    },
+                    Ok(ExecutionOutcome::Failed { reason, .. }) => ActionResult {
+                        success: false,
+                        duration_ms: elapsed_ms as u32,
+                        error: Some(reason),
+                        screen_changed,
+                        matched_element: None,
+                    },
+                    Ok(ExecutionOutcome::Cancelled { .. }) => ActionResult {
+                        success: false,
+                        duration_ms: elapsed_ms as u32,
+                        error: Some("execution cancelled".to_string()),
+                        screen_changed,
+                        matched_element: None,
+                    },
+                    Ok(ExecutionOutcome::CycleDetected { step, tier }) => ActionResult {
+                        success: false,
+                        duration_ms: elapsed_ms as u32,
+                        error: Some(format!("cycle detected at step {} tier {}", step, tier)),
+                        screen_changed,
+                        matched_element: None,
+                    },
+                    Err(e) => ActionResult {
+                        success: false,
+                        duration_ms: elapsed_ms as u32,
+                        error: Some(format!("executor error: {e}")),
+                        screen_changed,
+                        matched_element: None,
+                    },
+                }
+            };
+
+            let post_screen_desc = self
+                .capture_screen_summary()
+                .map(|s| {
+                    let mut desc = format!("{}/{}", s.package_name, s.activity_name);
+                    let elements: Vec<&str> = s
+                        .interactive_elements
+                        .iter()
+                        .take(10)
+                        .map(|e| e.as_str())
+                        .collect();
+                    if !elements.is_empty() {
+                        desc.push_str(" | interactive: ");
+                        desc.push_str(&elements.join(", "));
+                    }
+                    if !s.visible_text.is_empty() {
+                        let text_preview: Vec<&str> =
+                            s.visible_text.iter().take(5).map(|t| t.as_str()).collect();
+                        desc.push_str(" | text: ");
+                        desc.push_str(&text_preview.join("; "));
+                    }
+                    desc
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let (react_done, react_tokens) = send_react_step_ipc(
+                &tool_call.tool_name,
+                &observation,
+                &post_screen_desc,
+                &session.task,
+                session.iteration_count,
+                session.max_iterations,
+            )
+            .await;
+
+            let (reflection, confidence) =
+                compute_iteration_signals(&tool_call, &observation, session.strategy);
+
+            let iteration = Iteration {
+                thought,
+                action: tool_call,
+                observation,
+                reflection,
+                confidence,
+                duration_ms: start.elapsed().as_millis() as u64,
+            };
+
+            session.record_iteration(iteration);
+
+            // Check neocortex completion signal; fall back to heuristic.
+            if let Some(true) = react_done {
+                info!("neocortex signalled task complete via ReActDecision");
+                return TaskOutcome::Success {
+                    iterations_used: session.iteration_count,
+                    total_ms: start.elapsed().as_millis() as u64,
+                    final_confidence: session
+                        .iterations
+                        .last()
+                        .map(|i| i.confidence)
+                        .unwrap_or(1.0),
+                };
+            }
+
+            if let Some(last) = session.iterations.last() {
+                if last.observation.success && last.confidence >= 0.85 {
+                    info!(
+                        confidence = last.confidence,
+                        "high-confidence success — task likely complete"
+                    );
+                    return TaskOutcome::Success {
+                        iterations_used: session.iteration_count,
+                        total_ms: start.elapsed().as_millis() as u64,
+                        final_confidence: last.confidence,
+                    };
+                }
+            }
+        }
     }
 }
 

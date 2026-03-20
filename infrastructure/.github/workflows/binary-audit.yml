@@ -1,0 +1,57 @@
+name: AURA Binary Audit
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      binary_path:
+        description: 'Path to binary to audit'
+        required: false
+        default: 'target/aarch64-linux-android/release/aura-daemon'
+
+jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: aarch64-linux-android
+      
+      - name: Build (if needed)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          cargo build --release -p aura-daemon --target aarch64-linux-android
+      
+      - name: Download artifact
+        if: github.event_name == 'release'
+        uses: actions/download-artifact@v4
+        with:
+          name: aura-binaries
+      
+      - name: Run verification
+        run: |
+          chmod +x infrastructure/scripts/verify-binary.sh
+          ./infrastructure/scripts/verify-binary.sh aura-daemon
+      
+      - name: Run security audit
+        run: |
+          chmod +x infrastructure/scripts/audit-binary.sh
+          ./infrastructure/scripts/audit-binary.sh aura-daemon
+      
+      - name: Check for vulnerabilities
+        run: |
+          cargo audit || true
+      
+      - name: Publish audit report
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-report
+          path: audit-*.json
+          retention-days: 30

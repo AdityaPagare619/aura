@@ -1,0 +1,66 @@
+# AURA Reproducible Build Configuration
+#
+# This file configures the reproducible build pipeline.
+# See: https://reproducible-builds.org/
+
+[build]
+# Exact toolchain versions to use
+rust_version = "1.87.0"
+rust_version_date = "2025-03-18"
+ndk_version = "r26b"
+cargo_version = "1.87.0"
+
+# Build environment isolation
+use_docker = true
+docker_image = "ghcr.io/adityapagare619/aura-termux-dev"
+
+# Environment variables that must be set
+env_vars = [
+    "CARGO_HOME=/root/.cargo",
+    "HOME=/root",
+    "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+]
+
+# Environment variables that MUST be unset
+env_vars_unset = [
+    "SOURCE_DATE_EPOCH",  # Set by build system instead
+    "CARGO_PROFILE_RELEASE_DEBUG",
+]
+
+[environment]
+# Reproducible builds require consistent:
+# - Build date (fixed via SOURCE_DATE_EPOCH)
+# - Build directory (fixed via BUILDDIR)
+# - Hostname (fixed via HOSTNAME)
+# - User/Group IDs (fixed via BUILD_USER/BUILD_GROUP)
+
+SOURCE_DATE_EPOCH = "1742534400"  # 2024-03-20 00:00:00 UTC
+BUILDDIR = "/workspace/build"
+HOSTNAME = "aura-reproducible-build"
+
+# umask for consistent permissions
+UMASK = "0022"
+
+[binaries]
+aura_daemon = "target/aarch64-linux-android/release/aura-daemon"
+aura_neocortex = "target/aarch64-linux-android/release/aura-neocortex"
+
+[verification]
+# After build, verify reproducibility by comparing two builds
+compare_two_builds = true
+max_size_difference_bytes = 1024  # Allow small differences (timestamps in binaries)
+hash_algorithm = "sha256"
+
+# What to check:
+# - Byte-identical output (ideally)
+# - Same functionality (by running test suite)
+# - Same symbol table
+# - Same debugging info
+check_symbols = true
+check_debug_info = true
+
+[audit]
+# Publish build info for users to verify
+publish_build_info = true
+build_info_format = ["json", "txt", "sha256"]
+audit_server = "https://reproducible-builds.org"

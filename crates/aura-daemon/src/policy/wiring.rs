@@ -27,8 +27,8 @@ use crate::policy::{
 /// blocked and logged automatically.
 ///
 /// # Wiring contract
-/// - `Executor::new` / `normal` / `safety` / `power` all call `PolicyGate::allow_all()` directly
-///   today; a future PR should plumb the result of this function through instead.
+/// - All Executor constructors (`new`, `normal`, `safety`, `power`) are wired
+///   to this function via `production_policy_gate()`.
 /// - Rate limiting, deny-list rules, and audit hooks are all configured here.
 pub fn production_policy_gate() -> PolicyGate {
     let mut gate = PolicyGate::deny_by_default();

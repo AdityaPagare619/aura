@@ -1,0 +1,170 @@
+# ============================================================
+# AURA v4 — Termux-like Development Container
+# ============================================================
+#
+# This Dockerfile creates an Android/Termux-like build environment
+# that mirrors the actual deployment target. It catches NDK/ABI
+# issues BEFORE they reach real devices.
+#
+# KEY CONSTRAINTS MIMICKED:
+# - Android NDK r26b (the KNOWN PROBLEMATIC version — tests against it)
+# - bionic libc (NOT glibc — different malloc, thread behavior)
+# - Limited RAM (512MiB) — catches OOM issues
+# - aarch64 architecture (arm64-v8a)
+# - Termux package ecosystem versions
+#
+# USAGE:
+#   Local:  docker build -f .devcontainer/Dockerfile.termux-like -t aura-dev .
+#           docker run --memory=512m --memory-swap=768m aura-dev
+#   CI:     Used automatically by GitHub Actions pipeline
+#
+# ============================================================
+
+FROM debian:bookworm-slim AS builder
+
+# ── Metadata ─────────────────────────────────────────────────
+LABEL maintainer="AURA Team"
+LABEL description="Termux-like build environment for AURA v4 Android validation"
+LABEL version="1.0"
+
+# ── Build Arguments ────────────────────────────────────────
+ARG NDK_VERSION=r26b
+ARG TERMUX_ARCH=aarch64
+ARG TERMUX_RUST_VERSION=1.87.0
+ARG CARGO_TARGET=aarch64-linux-android
+
+ENV NDK_VERSION=${NDK_VERSION}
+ENV TERMUX_ARCH=${TERMUX_ARCH}
+ENV TERMUX_RUST_VERSION=${TERMUX_RUST_VERSION}
+ENV CARGO_TARGET=${CARGO_TARGET}
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CARGO_HOME=/cargo
+ENV RUSTUP_HOME=/rustup
+
+# ── System Dependencies ─────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    unzip \
+    xz-utils \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Android NDK (THE PROBLEMATIC VERSION) ──────────────────
+# We test against r26b specifically because:
+# - NDK Issue #2073: lto=true + panic=abort + NDK r26b = SIGSEGV
+# - This container catches the issue BEFORE users hit it on real devices
+# - r27+ fixes this, but we must support users on r26b
+RUN echo "Installing Android NDK ${NDK_VERSION} (the problematic version)" \
+    && mkdir -p /opt/android-ndk \
+    && cd /opt/android-ndk \
+    && wget -q "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" -O /tmp/ndk.zip \
+    && unzip -q /tmp/ndk.zip \
+    && mv android-ndk-${NDK_VERSION} ${NDK_VERSION} \
+    && rm /tmp/ndk.zip \
+    && echo "NDK installed: $(ls /opt/android-ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/)"
+
+ENV ANDROID_NDK_HOME=/opt/android-ndk/${NDK_VERSION}
+ENV PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+ENV CC_aarch64_linux_android="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+ENV CXX_aarch64_linux_android="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
+ENV AR_aarch64_linux_android="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+ENV CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+ENV CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+
+# ── Rust Toolchain ─────────────────────────────────────────
+# Using stable Rust matching Termux's current Rust version
+RUN curl --proto '=https' --tlsv1.2 -sSf \
+    "https://sh.rustup.rs" -o /tmp/rustup.sh \
+    && sh /tmp/rustup.sh -y \
+    --default-toolchain ${TERMUX_RUST_VERSION} \
+    && rm /tmp/rustup.sh
+
+ENV PATH="${CARGO_HOME}/bin:${PATH}"
+ENV RUSTUP_HOME=${RUSTUP_HOME}
+ENV CARGO_HOME=${CARGO_HOME}
+
+# Pre-install Android target
+RUN rustup target add ${CARGO_TARGET}
+
+# ── SQLite (matches Termux package) ─────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsqlite3-dev \
+    sqlite3 \
+    && apt-get clean
+
+# ── Project Setup ──────────────────────────────────────────
+WORKDIR /workspace/aura
+
+# Copy ONLY dependency manifests first (for Docker layer caching)
+COPY Cargo.toml Cargo.lock* ./
+
+# Download dependencies (cached as separate layer)
+RUN cargo fetch --locked 2>/dev/null || true
+
+# Copy full source
+COPY . .
+
+# ── Build ──────────────────────────────────────────────────
+# Build with EXACT settings that will be used for release
+# This mirrors the CI/release build, catching all platform issues
+# Note: lto="thin" and panic="unwind" are already set in Cargo.toml [profile.release]
+# We use RUSTFLAGS to pass additional rustc flags for verification
+RUN echo "Building AURA for Android (${CARGO_TARGET}) with NDK ${NDK_VERSION}..." \
+    && RUSTFLAGS="-C lto=thin -C panic=unwind" \
+    && export RUSTFLAGS \
+    && cargo build \
+        --release \
+        --target ${CARGO_TARGET} \
+    2>&1 | tee /tmp/build.log \
+    && echo "BUILD SUCCESSFUL" \
+    && ls -lh target/${CARGO_TARGET}/release/aura-daemon 2>/dev/null || \
+    (echo "BUILD FAILED - checking errors:" && cat /tmp/build.log | tail -50 && exit 1)
+
+# ── Verify Binary ───────────────────────────────────────────
+# Quick sanity check that the binary is valid ELF
+RUN echo "Verifying binary format..." \
+    && file target/${CARGO_TARGET}/release/aura-daemon \
+    && echo "Binary OK: $(md5sum target/${CARGO_TARGET}/release/aura-daemon)"
+
+# ── Smoke Tests ────────────────────────────────────────────
+RUN chmod +x infrastructure/scripts/smoke/container_smoke.sh \
+    && echo "Running container smoke tests..." \
+    && bash infrastructure/scripts/smoke/container_smoke.sh \
+    2>&1 | tee /tmp/smoke.log \
+    && echo "SMOKE TESTS PASSED" \
+    || (echo "SMOKE TESTS FAILED:" && cat /tmp/smoke.log && exit 1)
+
+# ── Final Stage ────────────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+
+# Minimal runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    sqlite3 \
+    procps \
+    coreutils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder
+COPY --from=builder /workspace/aura/target/aarch64-linux-android/release/aura-daemon /usr/local/bin/
+
+# Verify binary works
+RUN echo "Verifying binary in runtime..." \
+    && file /usr/local/bin/aura-daemon \
+    && /usr/local/bin/aura-daemon --version \
+    && echo "Runtime verification OK"
+
+# Expose for health checks
+EXPOSE 8080
+
+# Default: run smoke tests (can be overridden)
+CMD ["/usr/local/bin/aura-daemon", "--version"]

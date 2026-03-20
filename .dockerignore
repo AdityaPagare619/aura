@@ -1,0 +1,73 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Rust build artifacts
+**/target/
+**/Cargo.lock
+**/node_modules/
+**/.DS_Store
+
+# Documentation (not needed in container)
+docs/
+*.md
+LICENSE
+CONTRIBUTING.md
+
+# Test files (not needed in production)
+tests/
+**/*.test
+**/*.spec
+
+# CI/CD configs (not needed in container)
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Large binary files
+*.bin
+*.exe
+*.dll
+*.so
+*.a
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+
+# Audio/Video
+*.mp3
+*.mp4
+*.wav
+*.avi
+
+# Archives
+*.zip
+*.tar
+*.gz
+*.rar
+
+# Infrastructure scripts that won't be used in container
+infrastructure/scripts/
+infrastructure/tests/
+infrastructure/docs/
+
+# Keep only the source code
+!crates/
+!src/

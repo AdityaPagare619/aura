@@ -1,0 +1,61 @@
+name: AURA Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          echo "MAJOR=$(echo $VERSION | cut -d. -f1)" >> $GITHUB_OUTPUT
+      
+      - name: Create tag if needed
+        run: |
+          git tag v${{ steps.version.outputs.VERSION }} 2>/dev/null || true
+      
+      - name: Set up Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: aarch64-linux-android
+      
+      - name: Build release binaries
+        run: |
+          cargo build --release -p aura-daemon --target aarch64-linux-android
+          cargo build --release -p aura-neocortex --target aarch64-linux-android
+      
+      - name: Generate checksums
+        run: |
+          sha256sum target/aarch64-linux-android/release/aura-daemon > aura-daemon.sha256
+          sha256sum target/aarch64-linux-android/release/aura-neocortex > aura-neocortex.sha256
+          cat aura-daemon.sha256
+          cat aura-neocortex.sha256
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: AURA v${{ steps.version.outputs.VERSION }}
+          draft: true
+          prerelease: ${{ steps.version.outputs.MAJOR < 4 }}
+          files: |
+            target/aarch64-linux-android/release/aura-daemon
+            target/aarch64-linux-android/release/aura-neocortex
+            aura-daemon.sha256
+            aura-neocortex.sha256
+          generate_release_notes: true

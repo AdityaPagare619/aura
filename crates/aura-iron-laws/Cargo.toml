@@ -1,0 +1,17 @@
+[package]
+name = "aura-iron-laws"
+version = "0.1.0"
+edition = "2021"
+authors = ["AURA Team <team@aura.example.com>"]
+description = "Immutable Ethics Layer for AURA v4 — Compile-time enforced 7 Iron Laws"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+repository = "https://github.com/AdityaPagare619/aura"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+trybuild = "1.0"

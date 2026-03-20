@@ -5,6 +5,7 @@ members = [
     "crates/aura-daemon",
     "crates/aura-neocortex",
     "crates/aura-llama-sys",
+    "crates/aura-iron-laws",
 ]
 
 [workspace.package]

@@ -43,7 +43,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use aura_types::{config::AuraConfig, errors::AuraError};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use self::{
     approval::PolicyGate,
@@ -241,7 +241,7 @@ impl TelegramEngine {
                 // Rust (body) extracts audio → future STT feeds LLM (brain).
                 // For alpha: decode succeeds → log → still route description text.
                 // When STT is wired, transcript replaces description text.
-                let _voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data
+                let voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data
                 {
                     #[cfg(feature = "voice")]
                     {

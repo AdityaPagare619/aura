@@ -168,7 +168,7 @@ pub fn update_importance(current: f32, event: ImportanceEvent) -> f32 {
         ImportanceEvent::TimePassed { hours } => {
             // Apply recency decay multiplicatively
             current * recency_decay(hours)
-        },
+        }
         ImportanceEvent::RelatedStrengthened => current + 0.05,
     };
     adjusted.clamp(0.0, 2.0)
@@ -216,7 +216,12 @@ pub fn recall_score(
     let norm_goal = goal_relevance.clamp(0.0, 1.0);
     let norm_novelty = novelty_score.clamp(0.0, 1.0);
 
-    similarity * 0.25 + recency * 0.20 + activation * 0.20 + norm_valence * 0.15 + norm_goal * 0.10 + norm_novelty * 0.10
+    similarity * 0.25
+        + recency * 0.20
+        + activation * 0.20
+        + norm_valence * 0.15
+        + norm_goal * 0.10
+        + norm_novelty * 0.10
 }
 
 /// Consolidation score for deciding what to promote between tiers.

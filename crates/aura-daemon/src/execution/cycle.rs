@@ -285,11 +285,11 @@ impl CycleDetector {
                 let recent = self.entry_at(i as usize);
                 let earlier = self.entry_at((i + period) as usize);
                 match (recent, earlier) {
-                    (Some(r), Some(e)) if r.state_hash == e.state_hash => {},
+                    (Some(r), Some(e)) if r.state_hash == e.state_hash => {}
                     _ => {
                         is_orbit = false;
                         break;
-                    },
+                    }
                 }
             }
             if is_orbit {

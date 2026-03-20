@@ -262,13 +262,13 @@ impl InferenceEngine {
             Some(m) => {
                 m.last_used = Instant::now();
                 m.is_stub()
-            },
+            }
             None => {
                 return NeocortexToDaemon::Error {
                     code: error_codes::MODEL_NOT_LOADED,
                     message: "model not loaded".into(),
                 };
-            },
+            }
         };
 
         let start = Instant::now();
@@ -371,7 +371,7 @@ impl InferenceEngine {
             Err(e) => {
                 warn!(error = %e, "output parsing failed, will return raw");
                 None
-            },
+            }
         };
 
         // Estimate confidence
@@ -522,7 +522,7 @@ impl InferenceEngine {
                 None => {
                     debug!("already at highest tier, accepting output");
                     return Ok(outcome);
-                },
+                }
             };
 
             send_progress(NeocortexToDaemon::Progress {
@@ -548,11 +548,11 @@ impl InferenceEngine {
                     );
                     last_outcome = Some(outcome);
                     // Loop again with the new model
-                },
+                }
                 Err(e) => {
                     warn!(error = %e, "cascade escalation failed, accepting current output");
                     return Ok(outcome);
-                },
+                }
             }
         }
     }
@@ -729,7 +729,7 @@ impl InferenceEngine {
             Err(e) => {
                 warn!(error = %e, "ReAct final output parsing failed");
                 None
-            },
+            }
         };
 
         let mut confidence = estimate_confidence_from_output(&effective_output, mode, None, false);
@@ -845,7 +845,7 @@ impl InferenceEngine {
                 Err(_err) => {
                     warn!(sample = i, "BoN sample failed, skipping");
                     continue;
-                },
+                }
             };
 
             if gen_result.was_cancelled {
@@ -927,7 +927,7 @@ impl InferenceEngine {
             None => {
                 warn!("No model loaded during reflection, skipping.");
                 return outcome;
-            },
+            }
         };
 
         send_progress(NeocortexToDaemon::Progress {
@@ -1001,7 +1001,7 @@ impl InferenceEngine {
                     let _ = manager.cascade_to(original_tier, &switch_back_params);
                 }
                 return outcome;
-            },
+            }
         };
 
         // Switch back to original tier if we successfully switched before.
@@ -1040,13 +1040,13 @@ impl InferenceEngine {
                     );
                     outcome.confidence *= 0.85;
                 }
-            },
+            }
             Err(_) => {
                 warn!(
                     raw = ?gen_result.text,
                     "reflection: could not parse verdict JSON, treating as implicit pass"
                 );
-            },
+            }
         }
 
         outcome
@@ -1078,7 +1078,7 @@ impl InferenceEngine {
                     code: error_codes::MODEL_NOT_LOADED,
                     message: "model not loaded during token generation".into(),
                 });
-            },
+            }
         };
 
         let backend = aura_llama_sys::backend();
@@ -1137,7 +1137,7 @@ impl InferenceEngine {
                             "Layer 0: GBNF grammar activated for constrained decoding"
                         );
                         true
-                    },
+                    }
                     Err(e) => {
                         warn!(
                             error = %e,
@@ -1145,7 +1145,7 @@ impl InferenceEngine {
                             "Layer 0: grammar activation failed, falling back to post-hoc validation"
                         );
                         false
-                    },
+                    }
                 },
                 None => {
                     warn!(
@@ -1153,7 +1153,7 @@ impl InferenceEngine {
                         "Layer 0: grammar compilation returned None, falling back to post-hoc validation"
                     );
                     false
-                },
+                }
             }
         } else {
             false
@@ -1358,7 +1358,7 @@ fn decode_tokens(manager: &ModelManager, tokens: &[aura_llama_sys::LlamaToken]) 
         None => {
             error!("attempted to decode tokens without a loaded model");
             return String::new();
-        },
+        }
     };
 
     aura_llama_sys::backend()
@@ -1411,7 +1411,7 @@ fn convert_outcome_to_ipc(outcome: InferenceOutcome, mode: InferenceMode) -> Neo
                 mood_hint: Some(0.0),
                 tokens_used: 0,
             }
-        },
+        }
     }
 }
 
@@ -1443,7 +1443,7 @@ fn unwrap_cot_output(raw: &str) -> (String, Option<String>) {
         Ok(cot) if !cot.thinking.is_empty() => {
             debug!(thinking_len = cot.thinking.len(), "unwrapped CoT thinking");
             (cot.action, Some(cot.thinking))
-        },
+        }
         Ok(cot) => (cot.action, None),
         Err(_) => (raw.to_string(), None),
     }
@@ -1577,7 +1577,7 @@ fn estimate_confidence_from_output(
             let k = 2.0_f32;
             let midpoint = -1.5_f32;
             1.0 / (1.0 + (-k * (lp - midpoint)).exp())
-        },
+        }
         None => 0.5, // Uninformative prior
     };
 
@@ -1603,7 +1603,7 @@ fn estimate_confidence_from_output(
             } else {
                 0.1
             }
-        },
+        }
         InferenceMode::Composer => {
             let trimmed = output.trim();
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
@@ -1618,7 +1618,7 @@ fn estimate_confidence_from_output(
             } else {
                 0.1
             }
-        },
+        }
         InferenceMode::Conversational => {
             // Any non-trivial, coherent text scores well
             let len = output.len();
@@ -1629,7 +1629,7 @@ fn estimate_confidence_from_output(
             } else {
                 0.15
             }
-        },
+        }
     };
 
     // ── Channel 3: Length normality ──
@@ -2049,7 +2049,7 @@ mod tests {
             NeocortexToDaemon::PlanReady { plan, .. } => {
                 assert!(!plan.steps.is_empty());
                 assert!(plan.confidence > 0.0);
-            },
+            }
             other => panic!("expected PlanReady, got {other:?}"),
         }
 
@@ -2067,7 +2067,7 @@ mod tests {
         match result {
             NeocortexToDaemon::ComposedScript { steps } => {
                 assert!(!steps.is_empty());
-            },
+            }
             other => panic!("expected ComposedScript, got {other:?}"),
         }
     }
@@ -2086,7 +2086,7 @@ mod tests {
             } => {
                 assert!(!text.is_empty());
                 assert!(mood_hint.is_some());
-            },
+            }
             other => panic!("expected ConversationReply, got {other:?}"),
         }
     }
@@ -2329,7 +2329,7 @@ Action: {\"tool\": \"open_app\"}";
         match ipc {
             NeocortexToDaemon::ConversationReply { text, .. } => {
                 assert_eq!(text, "Hello there!");
-            },
+            }
             other => panic!("expected ConversationReply, got {other:?}"),
         }
     }
@@ -2348,7 +2348,7 @@ Action: {\"tool\": \"open_app\"}";
         match ipc {
             NeocortexToDaemon::ConversationReply { text, .. } => {
                 assert!(text.contains("unparseable"));
-            },
+            }
             other => panic!("expected fallback ConversationReply, got {other:?}"),
         }
     }
@@ -2434,7 +2434,7 @@ Action: {\"tool\": \"open_app\"}";
         match result {
             NeocortexToDaemon::Error { code, .. } => {
                 assert_eq!(code, error_codes::MODEL_NOT_LOADED);
-            },
+            }
             other => panic!("expected Error, got {other:?}"),
         }
     }

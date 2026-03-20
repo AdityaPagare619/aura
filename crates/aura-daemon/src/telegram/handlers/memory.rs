@@ -248,7 +248,7 @@ mod tests {
                 // Must NOT claim memory was stored.
                 assert!(!html.contains("Memory Stored"));
                 assert!(!html.contains("Saved to episodic"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -266,7 +266,7 @@ mod tests {
                 assert!(html.contains("Memory Service Unavailable"));
                 assert!(html.contains("meetings"));
                 assert!(html.contains("No search was performed"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -284,7 +284,7 @@ mod tests {
                 assert!(html.contains("Memory Service Unavailable"));
                 assert!(html.contains("No memories were deleted"));
                 assert!(html.contains("PolicyGate"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -302,7 +302,7 @@ mod tests {
                 assert!(html.contains("Memory Statistics"));
                 assert!(html.contains("disconnected")); // no channel in test
                 assert!(html.contains("0 pending"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -319,7 +319,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Memories"));
                 assert!(html.contains("recent"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }

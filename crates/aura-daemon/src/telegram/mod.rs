@@ -43,7 +43,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use aura_types::{config::AuraConfig, errors::AuraError};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 use self::{
     approval::PolicyGate,
@@ -241,7 +241,7 @@ impl TelegramEngine {
                 // Rust (body) extracts audio → future STT feeds LLM (brain).
                 // For alpha: decode succeeds → log → still route description text.
                 // When STT is wired, transcript replaces description text.
-                let voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data
+                let _voice_processed: Option<f32> = if let Some(ref voice_bytes) = update.voice_data
                 {
                     #[cfg(feature = "voice")]
                     {
@@ -260,15 +260,15 @@ impl TelegramEngine {
                                 // TODO(stt-alpha): When STT is wired, transcribe pcm_16k
                                 // and use transcript as `text` instead of description.
                                 Some(result.duration_secs)
-                            },
+                            }
                             Ok(Err(e)) => {
                                 warn!(error = %e, "voice pipeline: decode failed — falling back to text");
                                 None
-                            },
+                            }
                             Err(e) => {
                                 warn!(error = %e, "voice pipeline: spawn_blocking panicked");
                                 None
-                            },
+                            }
                         }
                     }
                     #[cfg(not(feature = "voice"))]
@@ -294,7 +294,7 @@ impl TelegramEngine {
                             ),
                             None => continue, // Callback/system update — no content.
                         }
-                    },
+                    }
                 };
 
                 // Check for active dialogue first.
@@ -313,7 +313,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        },
+                        }
                         DialogueOutcome::Completed { kind: _, responses } => {
                             for resp in responses {
                                 let _ = queue.enqueue(
@@ -328,7 +328,7 @@ impl TelegramEngine {
                                     None,
                                 );
                             }
-                        },
+                        }
                         DialogueOutcome::InvalidInput(hint) => {
                             let _ = queue.enqueue(
                                 chat_id,
@@ -341,7 +341,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        },
+                        }
                         DialogueOutcome::TimedOut => {
                             let _ = queue.enqueue(
                                 chat_id,
@@ -354,7 +354,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        },
+                        }
                         DialogueOutcome::Cancelled => {
                             let _ = queue.enqueue(
                                 chat_id,
@@ -367,7 +367,7 @@ impl TelegramEngine {
                                 3,
                                 None,
                             );
-                        },
+                        }
                     }
                     continue;
                 }
@@ -425,13 +425,13 @@ impl TelegramEngine {
                                                         None,
                                                     );
                                                     true
-                                                },
+                                                }
                                                 Err(_) => {
                                                     // TTS unavailable (expected in alpha).
                                                     // Fall back to text response.
                                                     debug!("TTS unavailable — responding with text to voice message");
                                                     false
-                                                },
+                                                }
                                             }
                                         } else {
                                             false
@@ -452,7 +452,7 @@ impl TelegramEngine {
                                                 None,
                                             );
                                         }
-                                    },
+                                    }
                                     HandlerResponse::Html(text) => {
                                         let _ = queue.enqueue(
                                             chat_id,
@@ -465,7 +465,7 @@ impl TelegramEngine {
                                             3,
                                             None,
                                         );
-                                    },
+                                    }
                                     HandlerResponse::Photo { data, caption } => {
                                         let _ = queue.enqueue(
                                             chat_id,
@@ -475,7 +475,7 @@ impl TelegramEngine {
                                             3,
                                             None,
                                         );
-                                    },
+                                    }
                                     HandlerResponse::Voice { text } => {
                                         let _ = queue.enqueue(
                                             chat_id,
@@ -488,10 +488,10 @@ impl TelegramEngine {
                                             3,
                                             Some("voice"),
                                         );
-                                    },
-                                    HandlerResponse::Empty => {},
+                                    }
+                                    HandlerResponse::Empty => {}
                                 }
-                            },
+                            }
                             Err(e) => {
                                 audit.record(
                                     chat_id,
@@ -509,9 +509,9 @@ impl TelegramEngine {
                                     3,
                                     None,
                                 );
-                            },
+                            }
                         }
-                    },
+                    }
                     Err(sec_err) => {
                         audit.record(
                             chat_id,
@@ -529,7 +529,7 @@ impl TelegramEngine {
                             3,
                             None,
                         );
-                    },
+                    }
                 }
             }
         };
@@ -570,7 +570,7 @@ impl TelegramEngine {
                     ),
                     None => return, // Callback/system update — no content.
                 }
-            },
+            }
         };
 
         // Check if there's an active dialogue for this chat.
@@ -610,7 +610,7 @@ impl TelegramEngine {
                         self.audit
                             .record(chat_id, &audit_summary, AuditOutcome::Allowed);
                         self.enqueue_response(chat_id, response);
-                    },
+                    }
                     Err(e) => {
                         // Layer 5: audit (failure).
                         self.audit.record(
@@ -629,9 +629,9 @@ impl TelegramEngine {
                             3,
                             None,
                         );
-                    },
+                    }
                 }
-            },
+            }
             Err(sec_err) => {
                 // Layer 5: audit (denied).
                 self.audit.record(
@@ -650,7 +650,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
         }
     }
 
@@ -673,7 +673,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             DialogueOutcome::Completed { kind, responses } => {
                 let msg = format!("Dialogue completed: {:?}\nResponses: {:?}", kind, responses);
                 // TODO: Execute the action associated with the completed dialogue.
@@ -688,7 +688,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             DialogueOutcome::InvalidInput(hint) => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -701,7 +701,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             DialogueOutcome::TimedOut => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -714,7 +714,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             DialogueOutcome::Cancelled => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -727,7 +727,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
         }
     }
 
@@ -748,7 +748,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             HandlerResponse::Html(html) => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -761,7 +761,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             HandlerResponse::Photo { data, caption } => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -771,7 +771,7 @@ impl TelegramEngine {
                     3,
                     None,
                 );
-            },
+            }
             HandlerResponse::Voice { text } => {
                 let _ = self.queue.enqueue(
                     chat_id,
@@ -784,8 +784,8 @@ impl TelegramEngine {
                     3,
                     Some("voice"),
                 );
-            },
-            HandlerResponse::Empty => {},
+            }
+            HandlerResponse::Empty => {}
         }
     }
 

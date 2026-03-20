@@ -172,7 +172,7 @@ impl ResponseRouter {
                     Ok(()) => {
                         routed += 1;
                         debug!(bridge = key, total_routed = routed, "response routed");
-                    },
+                    }
                     Err(mpsc::error::TrySendError::Full(resp)) => {
                         dropped += 1;
                         warn!(
@@ -181,7 +181,7 @@ impl ResponseRouter {
                             total_dropped = dropped,
                             "bridge channel full — response dropped (backpressure)"
                         );
-                    },
+                    }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         dropped += 1;
                         reg.bridges.remove(key);
@@ -190,7 +190,7 @@ impl ResponseRouter {
                             total_dropped = dropped,
                             "bridge channel closed — unregistered automatically"
                         );
-                    },
+                    }
                 }
             } else {
                 dropped += 1;

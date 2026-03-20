@@ -395,59 +395,59 @@ pub fn parse_from_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMeta, Ggu
             GGUF_TYPE_STRING => {
                 let val = read_gguf_string(reader)?;
                 apply_string_kv(&mut meta, &key_lower, val);
-            },
+            }
             GGUF_TYPE_UINT32 => {
                 let val = read_u32_le(reader)?;
                 apply_u32_kv(&mut meta, &key_lower, val);
-            },
+            }
             GGUF_TYPE_UINT64 => {
                 let val = read_u64_le(reader)?;
                 apply_u64_kv(&mut meta, &key_lower, val);
-            },
+            }
             GGUF_TYPE_INT32 => {
                 let val = read_i32_le(reader)?;
                 apply_i32_kv(&mut meta, &key_lower, val);
-            },
+            }
             GGUF_TYPE_INT64 => {
                 let val = read_i64_le(reader)?;
                 // No i64 fields we care about — skip
                 let _ = val;
-            },
+            }
             GGUF_TYPE_FLOAT32 => {
                 let val = read_f32_le(reader)?;
                 // No f32 fields we care about — skip
                 let _ = val;
-            },
+            }
             GGUF_TYPE_FLOAT64 => {
                 let val = read_f64_le(reader)?;
                 let _ = val;
-            },
+            }
             GGUF_TYPE_BOOL => {
                 let val = read_u8(reader)?;
                 let _ = val;
-            },
+            }
             GGUF_TYPE_UINT8 => {
                 let val = read_u8(reader)?;
                 let _ = val;
-            },
+            }
             GGUF_TYPE_INT8 => {
                 let val = read_u8(reader)?;
                 let _ = val;
-            },
+            }
             GGUF_TYPE_UINT16 => {
                 let val = read_u16_le(reader)?;
                 let _ = val;
-            },
+            }
             GGUF_TYPE_INT16 => {
                 let val = read_u16_le(reader)?;
                 let _ = val;
-            },
+            }
             GGUF_TYPE_ARRAY => {
                 skip_gguf_array(reader)?;
-            },
+            }
             other => {
                 return Err(GgufError::UnknownType(other));
-            },
+            }
         }
     }
 
@@ -541,14 +541,14 @@ fn skip_gguf_array<R: Read + Seek>(reader: &mut R) -> Result<(), GgufError> {
                 reader.seek(SeekFrom::Current(len as i64))?;
             }
             return Ok(());
-        },
+        }
         GGUF_TYPE_ARRAY => {
             // Nested array: recurse for each element
             for _ in 0..count {
                 skip_gguf_array(reader)?;
             }
             return Ok(());
-        },
+        }
         other => return Err(GgufError::UnknownType(other)),
     };
 

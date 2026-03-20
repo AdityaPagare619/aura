@@ -133,12 +133,12 @@ impl InputChannel for VoiceBridge {
                             warn!(error = %e, "TTS delivery failed");
                         }
                     }
-                },
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {},
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     info!("response channel closed — voice bridge exiting");
                     break;
-                },
+                }
             }
 
             // Process one audio frame.
@@ -161,17 +161,17 @@ impl InputChannel for VoiceBridge {
                         error!("command channel closed — voice bridge exiting");
                         break;
                     }
-                },
+                }
                 Ok(None) => {
                     // No complete utterance yet — continue listening.
-                },
+                }
                 Err(VoiceError::NotRunning) => {
                     warn!("voice engine stopped unexpectedly");
                     break;
-                },
+                }
                 Err(e) => {
                     warn!(error = %e, "voice frame processing error — continuing");
-                },
+                }
             }
         }
 
@@ -221,7 +221,7 @@ mod tests {
                 assert_eq!(meta.duration_ms, 1500);
                 assert!((meta.emotional_valence.unwrap() - 0.6).abs() < f32::EPSILON);
                 assert!((meta.emotional_arousal.unwrap() - 0.4).abs() < f32::EPSILON);
-            },
+            }
             _ => panic!("expected Chat variant"),
         }
     }
@@ -241,7 +241,7 @@ mod tests {
                 let meta = voice_meta.expect("should have voice metadata");
                 assert!(meta.emotional_valence.is_none());
                 assert!(meta.emotional_arousal.is_none());
-            },
+            }
             _ => panic!("expected Chat variant"),
         }
     }

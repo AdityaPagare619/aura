@@ -158,7 +158,7 @@ impl VoiceHandler {
             VoiceModePreference::Smart => {
                 let is_short = response_text.split_whitespace().count() < SHORT_RESPONSE_THRESHOLD;
                 is_short && context.last_response_was_voice
-            },
+            }
             VoiceModePreference::Never => false,
         }
     }

@@ -851,8 +851,10 @@ mod tests {
 
     #[test]
     fn test_projected_runtime() {
-        let mut budget = PowerBudget::default();
-        budget.current_draw_ma = 100.0;
+        let mut budget = PowerBudget {
+            current_draw_ma: 100.0,
+            ..Default::default()
+        };
         budget.update_projected_runtime();
         // 818 mWh remaining / (100 mA × 3.85V) = 818 / 385 ≈ 2.125 hours
         assert!((budget.projected_runtime_hours - 2.125).abs() < 0.01);
@@ -860,8 +862,10 @@ mod tests {
 
     #[test]
     fn test_projected_runtime_no_draw() {
-        let mut budget = PowerBudget::default();
-        budget.current_draw_ma = 0.0;
+        let mut budget = PowerBudget {
+            current_draw_ma: 0.0,
+            ..Default::default()
+        };
         budget.update_projected_runtime();
         assert!(budget.projected_runtime_hours.is_infinite());
     }

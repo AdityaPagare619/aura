@@ -634,8 +634,8 @@ impl GoalTracker {
                     } else {
                         blocked += 1;
                     }
-                },
-                _ => {}, // Terminal states are in history, not tracked.
+                }
+                _ => {} // Terminal states are in history, not tracked.
             }
         }
 
@@ -1313,7 +1313,7 @@ mod tests {
             Err(GoalError::InvalidTransition { from, to }) => {
                 assert!(from.contains("Pending"));
                 assert!(to.contains("Completed"));
-            },
+            }
             other => panic!("expected InvalidTransition, got {:?}", other),
         }
     }

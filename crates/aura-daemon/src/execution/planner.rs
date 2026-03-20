@@ -102,13 +102,13 @@ impl std::fmt::Display for PlanError {
             PlanError::NoPlanFound(msg) => write!(f, "no plan found: {msg}"),
             PlanError::TooManySteps { actual, max } => {
                 write!(f, "plan has {actual} steps, max is {max}")
-            },
+            }
             PlanError::TemplateCapacityExceeded { max } => {
                 write!(f, "template capacity exceeded: max {max}")
-            },
+            }
             PlanError::ValidationFailed(errors) => {
                 write!(f, "plan validation failed: {} errors", errors.len())
-            },
+            }
         }
     }
 }
@@ -135,10 +135,10 @@ impl std::fmt::Display for PlanValidationError {
         match self {
             PlanValidationError::StepLimitExceeded { actual, max } => {
                 write!(f, "step limit exceeded: {actual} > {max}")
-            },
+            }
             PlanValidationError::DuplicateConsecutiveAction { step_index } => {
                 write!(f, "duplicate consecutive action at step {step_index}")
-            },
+            }
             PlanValidationError::DeadlineExceeded {
                 estimated_ms,
                 deadline_ms,
@@ -147,11 +147,11 @@ impl std::fmt::Display for PlanValidationError {
                     f,
                     "estimated {estimated_ms}ms exceeds deadline {deadline_ms}ms"
                 )
-            },
+            }
             PlanValidationError::EmptyPlan => write!(f, "plan has no steps"),
             PlanValidationError::ZeroTimeout { step_index } => {
                 write!(f, "step {step_index} has zero timeout")
-            },
+            }
         }
     }
 }
@@ -728,7 +728,7 @@ impl EnhancedPlanner {
 
         for i in 1..=m {
             for j in 1..=n {
-                if &a[i - 1] == &b[j - 1] {
+                if a[i - 1] == b[j - 1] {
                     dp[i][j] = dp[i - 1][j - 1] + 1;
                 } else {
                     dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
@@ -737,20 +737,6 @@ impl EnhancedPlanner {
         }
 
         dp[m][n]
-    }
-
-    /// Extract character trigrams from a string (3-grams).
-    fn extract_trigrams(s: &str) -> Vec<String> {
-        s.chars()
-            .collect::<Vec<_>>()
-            .windows(3)
-            .filter(|w| {
-                // Skip trigrams that are mostly whitespace/punctuation
-                let significant = w.iter().filter(|c| c.is_alphanumeric()).count();
-                significant >= 2
-            })
-            .map(|w| w.iter().collect::<String>())
-            .collect()
     }
 
     // ── Plan Caching ────────────────────────────────────────────────────
@@ -918,7 +904,7 @@ impl EnhancedPlanner {
             Err(_) => {
                 debug!("score_plan: no Tokio runtime — returning neutral score 0.5");
                 return 0.5;
-            },
+            }
         };
 
         // TODO(ARCH-MED-2): `block_on()` inside a sync fn called from an async
@@ -934,7 +920,7 @@ impl EnhancedPlanner {
                     Err(e) => {
                         warn!(error = %e, "score_plan: IPC connect failed — defaulting to 0.5");
                         return 0.5;
-                    },
+                    }
                 };
 
                 match client
@@ -946,18 +932,18 @@ impl EnhancedPlanner {
                         let clamped = score.clamp(0.0, 1.0);
                         debug!(score = clamped, "score_plan: received LLM score");
                         clamped
-                    },
+                    }
                     Ok(other) => {
                         warn!(
                             resp = ?std::mem::discriminant(&other),
                             "score_plan: unexpected IPC response — defaulting to 0.5"
                         );
                         0.5
-                    },
+                    }
                     Err(e) => {
                         warn!(error = %e, "score_plan: IPC request failed — defaulting to 0.5");
                         0.5
-                    },
+                    }
                 }
             })
         })

@@ -103,12 +103,12 @@ pub async fn decode_frame<T: DeserializeOwned>(stream: &mut IpcStream) -> Result
     // Read the 4-byte length prefix.
     let mut len_buf = [0u8; FRAME_HEADER_SIZE];
     match stream.read_exact(&mut len_buf).await {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             return Err(IpcError::ConnectionLost {
                 reason: "peer closed connection (EOF during header read)".into(),
             });
-        },
+        }
         Err(e) => return Err(IpcError::Io(e)),
     }
 
@@ -128,14 +128,14 @@ pub async fn decode_frame<T: DeserializeOwned>(stream: &mut IpcStream) -> Result
     // Read the payload body.
     let mut body = vec![0u8; msg_len];
     match stream.read_exact(&mut body).await {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             return Err(IpcError::ConnectionLost {
                 reason: format!(
                     "peer closed connection (EOF during body read, expected {msg_len} bytes)"
                 ),
             });
-        },
+        }
         Err(e) => return Err(IpcError::Io(e)),
     }
 
@@ -155,7 +155,7 @@ pub async fn decode_frame<T: DeserializeOwned>(stream: &mut IpcStream) -> Result
 /// - [`IpcError::ConnectionLost`] on broken-pipe / reset errors.
 pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), IpcError> {
     match stream.write_all(frame).await {
-        Ok(()) => {},
+        Ok(()) => {}
         Err(e)
             if e.kind() == std::io::ErrorKind::BrokenPipe
                 || e.kind() == std::io::ErrorKind::ConnectionReset =>
@@ -163,7 +163,7 @@ pub async fn write_frame(stream: &mut IpcStream, frame: &[u8]) -> Result<(), Ipc
             return Err(IpcError::ConnectionLost {
                 reason: format!("write failed: {e}"),
             });
-        },
+        }
         Err(e) => return Err(IpcError::Io(e)),
     }
     stream.flush().await.map_err(|e| {
@@ -290,7 +290,7 @@ mod tests {
                 assert_eq!(params.n_ctx, 4096);
                 assert_eq!(params.n_threads, 8);
                 assert!(matches!(params.model_tier, ModelTier::Full8B));
-            },
+            }
             other => panic!("expected Load, got {other:?}"),
         }
     }

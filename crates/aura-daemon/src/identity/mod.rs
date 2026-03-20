@@ -356,7 +356,7 @@ impl IdentityEngine {
                     "sycophancy: opinion reversal analysis"
                 );
                 reversed
-            },
+            }
             None => {
                 // No prior response to compare against, but explicit reversal
                 // markers ("on second thought", "let me reconsider") still
@@ -364,7 +364,7 @@ impl IdentityEngine {
                 let reversal_density =
                     Self::phrase_density(response_text, &resp_lower, REVERSAL_PHRASES);
                 reversal_density > 0.0
-            },
+            }
         };
 
         // ── 4. Praise density ──────────────────────────────────────
@@ -597,17 +597,17 @@ impl IdentityEngine {
                 lower.contains("i don't know")
                     || lower.contains("i'm not sure")
                     || lower.contains("i don't have information")
-            },
+            }
             epistemic::EpistemicLevel::Uncertain => {
                 lower.contains("i could check")
                     || lower.contains("let me look")
                     || lower.contains("i could look into")
-            },
+            }
             epistemic::EpistemicLevel::Probable => {
                 lower.contains("i think")
                     || lower.contains("based on what i've seen")
                     || lower.contains("it seems like")
-            },
+            }
             epistemic::EpistemicLevel::Certain => true,
         };
 
@@ -713,7 +713,7 @@ impl IdentityEngine {
             Some(profile) => {
                 self.user_profile = Some(profile);
                 Ok(())
-            },
+            }
             None => Ok(()),
         }
     }
@@ -854,7 +854,7 @@ fn encode_personality_event(event: &personality::PersonalityEvent) -> Vec<u8> {
             let mut buf = vec![2u8];
             buf.extend_from_slice(msg.as_bytes());
             buf
-        },
+        }
         personality::PersonalityEvent::ContextualPressure {
             trait_name,
             direction,
@@ -866,7 +866,7 @@ fn encode_personality_event(event: &personality::PersonalityEvent) -> Vec<u8> {
             buf.extend_from_slice(name_bytes);
             buf.extend_from_slice(&direction.to_le_bytes());
             buf
-        },
+        }
     }
 }
 
@@ -883,7 +883,7 @@ pub fn decode_personality_event(payload: &[u8]) -> Option<personality::Personali
         2 => {
             let msg = std::str::from_utf8(&payload[1..]).ok()?;
             Some(personality::PersonalityEvent::UserFeedback(msg.to_string()))
-        },
+        }
         3 => {
             if payload.len() < 4 {
                 return None;
@@ -906,7 +906,7 @@ pub fn decode_personality_event(payload: &[u8]) -> Option<personality::Personali
                 trait_name,
                 direction,
             })
-        },
+        }
         _ => None,
     }
 }
@@ -1017,15 +1017,15 @@ fn encode_mood_event(event: &MoodEvent, now_ms: u64) -> Vec<u8> {
         MoodEvent::Silence { duration_ms } => {
             buf.push(6u8);
             buf.extend_from_slice(&duration_ms.to_le_bytes());
-        },
+        }
         MoodEvent::VoiceStressDetected { level } => {
             buf.push(7u8);
             buf.extend_from_slice(&level.to_le_bytes());
-        },
+        }
         MoodEvent::VoiceFatigueDetected { level } => {
             buf.push(8u8);
             buf.extend_from_slice(&level.to_le_bytes());
-        },
+        }
     }
     buf.extend_from_slice(&now_ms.to_le_bytes());
     buf
@@ -1053,21 +1053,21 @@ pub fn decode_mood_event(payload: &[u8]) -> Option<(MoodEvent, u64)> {
                 payload[8],
             ]);
             (MoodEvent::Silence { duration_ms }, 9)
-        },
+        }
         7 => {
             if payload.len() < 5 {
                 return None;
             }
             let level = f32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
             (MoodEvent::VoiceStressDetected { level }, 5)
-        },
+        }
         8 => {
             if payload.len() < 5 {
                 return None;
             }
             let level = f32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
             (MoodEvent::VoiceFatigueDetected { level }, 5)
-        },
+        }
         _ => return None,
     };
 

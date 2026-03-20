@@ -560,7 +560,7 @@ impl ExtensionSandbox {
                     Permission::ReadMemoryDomain(_) | Permission::ObserveScreen => None,
                     other => Some(format!("Functional tier cannot use permission '{other}'")),
                 }
-            },
+            }
             ExecutionTier::Observer => {
                 // Observer extensions cannot write, send, execute, or network.
                 match permission {
@@ -574,7 +574,7 @@ impl ExtensionSandbox {
                     )),
                     _ => None,
                 }
-            },
+            }
             ExecutionTier::Advisor | ExecutionTier::Autonomous => None,
         }
     }
@@ -591,7 +591,7 @@ impl ExtensionSandbox {
         match permission {
             Permission::WriteSemanticMemory => {
                 Some("third-party extensions cannot write to semantic memory".to_string())
-            },
+            }
             Permission::NetworkAccess => Some(
                 "third-party extensions cannot have unrestricted network access \
                  (use NetworkEgress with specific hosts instead)"

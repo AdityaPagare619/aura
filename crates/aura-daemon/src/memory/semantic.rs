@@ -909,7 +909,7 @@ fn reinforce_sync(
                 "semantic entry {} not found",
                 entry_id
             )))
-        },
+        }
     };
 
     // Boost confidence: min(0.99, current + 0.05)
@@ -995,7 +995,7 @@ pub(crate) async fn try_generalize_via_llm(
                 "LLM generalization succeeded"
             );
             text
-        },
+        }
         Ok(other) => {
             warn!(
                 ?other,
@@ -1003,7 +1003,7 @@ pub(crate) async fn try_generalize_via_llm(
                 "unexpected neocortex response during generalization — falling back to sync"
             );
             return try_generalize_sync(conn, hnsw, episodes, concept_hint, now_ms);
-        },
+        }
         Err(e) => {
             warn!(
                 error = %e,
@@ -1011,7 +1011,7 @@ pub(crate) async fn try_generalize_via_llm(
                 "neocortex IPC failed during generalization — falling back to sync"
             );
             return try_generalize_sync(conn, hnsw, episodes, concept_hint, now_ms);
-        },
+        }
     };
 
     let confidence = importance::generalization_confidence(episodes.len());

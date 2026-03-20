@@ -466,7 +466,7 @@ impl CalibrationResult {
                 let cal: Self = serde_json::from_slice(&data)
                     .map_err(|e| OnboardingError::CalibrationFailed(format!("deserialize: {e}")))?;
                 Ok(Some(cal))
-            },
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::CalibrationFailed(format!("load: {e}"))),
         }

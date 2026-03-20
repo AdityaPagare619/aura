@@ -232,7 +232,7 @@ impl NeocortexClient {
                 let resp = inner?;
                 debug!(req_id, resp = ?std::mem::discriminant(&resp), "received response");
                 Ok(resp)
-            },
+            }
             Err(_elapsed) => {
                 warn!(
                     req_id,
@@ -248,7 +248,7 @@ impl NeocortexClient {
                         protocol::REQUEST_TIMEOUT
                     ),
                 })
-            },
+            }
         }
     }
 
@@ -282,7 +282,7 @@ impl NeocortexClient {
                 self.stream = Some(stream);
                 self.reconnect_backoff.reset();
                 Ok(())
-            },
+            }
             Err(e) => {
                 warn!(
                     error = %e,
@@ -290,7 +290,7 @@ impl NeocortexClient {
                     "reconnect failed"
                 );
                 Err(e)
-            },
+            }
         }
     }
 

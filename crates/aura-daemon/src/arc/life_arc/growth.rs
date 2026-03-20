@@ -202,7 +202,7 @@ impl GrowthArc {
                     duration_minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            },
+            }
             GrowthEvent::SkillPractice {
                 skill,
                 duration_minutes,
@@ -214,7 +214,7 @@ impl GrowthArc {
                     duration_minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            },
+            }
             GrowthEvent::GoalProgress {
                 goal_id,
                 progress_pct,
@@ -227,7 +227,7 @@ impl GrowthArc {
                         goal.completed = true;
                     }
                 }
-            },
+            }
             GrowthEvent::BookReading { title, pages } => {
                 // Convert pages to approximate minutes (avg 1.5 min/page).
                 let minutes = (pages as f32 * 1.5) as u32;
@@ -237,7 +237,7 @@ impl GrowthArc {
                     duration_minutes: minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            },
+            }
             GrowthEvent::CourseProgress {
                 course,
                 lesson_count,
@@ -250,7 +250,7 @@ impl GrowthArc {
                     duration_minutes: minutes,
                 });
                 self.refresh_learning_stats(now_ms);
-            },
+            }
             GrowthEvent::GoalCreated {
                 goal_id,
                 description,
@@ -267,7 +267,7 @@ impl GrowthArc {
                     });
                 }
                 // Silently drop if at capacity — log would be better in production.
-            },
+            }
         }
     }
 

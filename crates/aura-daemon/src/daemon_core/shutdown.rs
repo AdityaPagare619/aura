@@ -106,10 +106,10 @@ pub fn graceful_shutdown(
         Ok(()) => {
             report.checkpoint_saved = true;
             tracing::info!("final checkpoint saved");
-        },
+        }
         Err(e) => {
             tracing::error!(error = %e, "failed to save final checkpoint");
-        },
+        }
     }
 
     if Instant::now() >= deadline {
@@ -127,11 +127,11 @@ pub fn graceful_shutdown(
             Ok(()) => {
                 report.db_closed = true;
                 tracing::info!("database closed cleanly");
-            },
+            }
             Err((conn, e)) => {
                 tracing::error!(error = %e, "database close failed — dropping connection");
                 drop(conn);
-            },
+            }
         }
     } else {
         report.db_closed = true; // nothing to close

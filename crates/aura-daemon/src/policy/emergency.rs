@@ -106,13 +106,13 @@ impl std::fmt::Display for EmergencyReason {
             ),
             Self::UserRequested { trigger_phrase } => {
                 write!(f, "user requested: \"{trigger_phrase}\"")
-            },
+            }
             Self::ScreenFrozen { unchanged_actions } => {
                 write!(
                     f,
                     "screen frozen: {unchanged_actions} actions with no screen change"
                 )
-            },
+            }
             Self::WatchdogTimeout {
                 last_heartbeat_ms_ago,
             } => write!(

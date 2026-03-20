@@ -100,7 +100,7 @@ pub fn parse_action_plan(json: &str) -> Result<ActionPlan, AuraError> {
             Ok(step) => steps.push(step),
             Err(e) => {
                 tracing::warn!(step_index = i, error = %e, "skipping malformed plan step");
-            },
+            }
         }
     }
 
@@ -195,7 +195,7 @@ pub fn parse_dsl_steps(json: &str) -> Result<Vec<DslStep>, AuraError> {
             Ok(step) => steps.push(step),
             Err(e) => {
                 tracing::warn!(step_index = i, error = %e, "skipping malformed DSL step");
-            },
+            }
         }
     }
 
@@ -229,12 +229,12 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
             let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Ok(ActionType::Tap { x, y })
-        },
+        }
         "longpress" | "long_press" => {
             let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Ok(ActionType::LongPress { x, y })
-        },
+        }
         "swipe" => {
             let from_x = obj.get("from_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let from_y = obj.get("from_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -251,7 +251,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 to_y,
                 duration_ms,
             })
-        },
+        }
         "type" | "text" => {
             let text = obj
                 .get("text")
@@ -259,7 +259,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 .unwrap_or("")
                 .to_string();
             Ok(ActionType::Type { text })
-        },
+        }
         "scroll" => {
             let direction = obj
                 .get("direction")
@@ -268,7 +268,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 .unwrap_or(ScrollDirection::Down);
             let amount = obj.get("amount").and_then(|v| v.as_i64()).unwrap_or(300) as i32;
             Ok(ActionType::Scroll { direction, amount })
-        },
+        }
         "back" => Ok(ActionType::Back),
         "home" => Ok(ActionType::Home),
         "recents" => Ok(ActionType::Recents),
@@ -279,7 +279,7 @@ fn parse_action_type(value: &serde_json::Value) -> Result<ActionType, AuraError>
                 .unwrap_or("")
                 .to_string();
             Ok(ActionType::OpenApp { package })
-        },
+        }
         _ => Err(AuraError::Llm(LlmError::InferenceFailed(format!(
             "unknown action type: {type_str}"
         )))),
@@ -328,16 +328,16 @@ fn parse_target_selector(value: &serde_json::Value) -> Result<TargetSelector, Au
         "text" => Ok(TargetSelector::Text(val)),
         "content_description" | "contentdescription" | "description" => {
             Ok(TargetSelector::ContentDescription(val))
-        },
+        }
         "class_name" | "classname" | "class" => Ok(TargetSelector::ClassName(val)),
         "coordinates" | "coords" => {
             let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Ok(TargetSelector::Coordinates { x, y })
-        },
+        }
         "llm_description" | "llmdescription" | "description_llm" => {
             Ok(TargetSelector::LlmDescription(val))
-        },
+        }
         _ => {
             // Last resort: if there's a "value" field, treat as LLM description.
             if !val.is_empty() {
@@ -347,7 +347,7 @@ fn parse_target_selector(value: &serde_json::Value) -> Result<TargetSelector, Au
                     "unknown target selector type: {type_str}"
                 ))))
             }
-        },
+        }
     }
 }
 
@@ -379,7 +379,7 @@ fn parse_failure_strategy(value: &serde_json::Value) -> Result<FailureStrategy, 
                 "retry" => {
                     let max = obj.get("max").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
                     Ok(FailureStrategy::Retry { max })
-                },
+                }
                 "skip" => Ok(FailureStrategy::Skip),
                 "abort" => Ok(FailureStrategy::Abort),
                 "ask_user" | "askuser" => {
@@ -389,7 +389,7 @@ fn parse_failure_strategy(value: &serde_json::Value) -> Result<FailureStrategy, 
                         .unwrap_or("What should I do?")
                         .to_string();
                     Ok(FailureStrategy::AskUser(msg))
-                },
+                }
                 _ => Ok(FailureStrategy::default()),
             };
         }
@@ -632,10 +632,10 @@ pub fn format_action_brief(action: &ActionType) -> String {
                 text.clone()
             };
             format!("Type(\"{preview}\")")
-        },
+        }
         ActionType::Scroll { direction, amount } => {
             format!("Scroll({direction:?},{amount})")
-        },
+        }
         ActionType::Back => "Back".to_string(),
         ActionType::Home => "Home".to_string(),
         ActionType::Recents => "Recents".to_string(),
@@ -649,10 +649,10 @@ pub fn format_action_brief(action: &ActionType) -> String {
             timeout_ms,
         } => {
             format!("WaitFor({selector:?},{}ms)", timeout_ms)
-        },
+        }
         ActionType::AssertElement { selector, expected } => {
             format!("Assert({selector:?}={expected:?})")
-        },
+        }
     }
 }
 
@@ -682,11 +682,11 @@ pub fn parse_for_mode(mode: InferenceMode, output: &str) -> Result<ParsedOutput,
         InferenceMode::Planner | InferenceMode::Strategist => {
             let plan = parse_action_plan(output)?;
             Ok(ParsedOutput::Plan(plan))
-        },
+        }
         InferenceMode::Composer => {
             let steps = parse_dsl_steps(output)?;
             Ok(ParsedOutput::Steps(steps))
-        },
+        }
         InferenceMode::Conversational => {
             let reply = output.trim().to_string();
             if reply.is_empty() {
@@ -695,7 +695,7 @@ pub fn parse_for_mode(mode: InferenceMode, output: &str) -> Result<ParsedOutput,
                 )));
             }
             Ok(ParsedOutput::Reply(reply))
-        },
+        }
     }
 }
 

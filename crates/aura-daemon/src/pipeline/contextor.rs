@@ -412,7 +412,7 @@ impl Contextor {
                 let budget = TOKEN_BUDGET_LOW as f32
                     + s * (TOKEN_BUDGET_EMERGENCY as f32 - TOKEN_BUDGET_LOW as f32);
                 budget as usize
-            },
+            }
         }
     }
 
@@ -428,7 +428,7 @@ impl Contextor {
                 let results = MAX_RESULTS_LOW as f32
                     + s * (MAX_RESULTS_EMERGENCY as f32 - MAX_RESULTS_LOW as f32);
                 (results as usize).max(MAX_RESULTS_LOW)
-            },
+            }
         }
     }
 
@@ -521,10 +521,10 @@ impl Contextor {
                         recall_score: 0.0,
                     });
                 }
-            },
+            }
             Err(e) => {
                 warn!(error = %e, "cross-tier memory query failed");
-            },
+            }
         }
 
         results
@@ -628,7 +628,7 @@ impl Contextor {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| "primary".to_owned())
-            },
+            }
             // System events (screen changes, sensor data) don't have a user
             _ => return None,
         };

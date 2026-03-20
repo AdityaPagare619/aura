@@ -308,7 +308,7 @@ fn classify_relationship_stage(
             } else {
                 current_stage
             }
-        },
+        }
     }
 }
 

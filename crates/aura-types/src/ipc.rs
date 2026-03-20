@@ -990,7 +990,7 @@ mod tests {
                 assert_eq!(text, "Hello user!");
                 assert!((mood_hint.unwrap() - 0.8).abs() < f32::EPSILON);
                 assert_eq!(tokens_used, 150);
-            },
+            }
             _ => panic!("expected ConversationReply after roundtrip"),
         }
     }

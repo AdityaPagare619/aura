@@ -133,7 +133,7 @@ impl PlatformState {
                 report.connectivity_updated = true;
                 report.went_offline = !was_offline && self.connectivity.is_offline();
                 report.came_online = was_offline && !self.connectivity.is_offline();
-            },
+            }
             Err(e) => tracing::warn!(error = %e, "connectivity poll failed"),
         }
 

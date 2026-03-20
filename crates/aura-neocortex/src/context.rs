@@ -740,7 +740,7 @@ fn format_goal(goal: Option<&GoalSummary>) -> String {
                 s.push_str(&format!(" (blockers: {})", g.blockers.join(", ")));
             }
             s
-        },
+        }
     }
 }
 
@@ -758,7 +758,7 @@ fn format_screen(screen: Option<&ScreenSummary>) -> String {
                 parts.push(format!("text=[{}]", s.visible_text.join(", ")));
             }
             parts.join(" | ")
-        },
+        }
     }
 }
 
@@ -783,7 +783,7 @@ fn format_turn(turn: &ConversationTurn) -> String {
                 "{}: <|user_content_start|>{}<|user_content_end|>",
                 role_str, clean
             )
-        },
+        }
         // Assistant and System turns are trusted — no boundary wrapping.
         _ => format!("{}: {}", role_str, turn.content),
     }
@@ -1072,7 +1072,7 @@ pub fn should_force_cot(ctx: &ContextPackage, failure: Option<&FailureContext>) 
                 .unwrap_or(false);
             let complex_history = ctx.conversation_history.len() > 4;
             has_blockers || complex_history || failure.is_some()
-        },
+        }
         // CoT for Composer only with failure recovery.
         InferenceMode::Composer => failure.is_some(),
         // Never CoT for casual conversation.

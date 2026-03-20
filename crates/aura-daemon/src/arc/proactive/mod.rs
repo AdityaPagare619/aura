@@ -162,7 +162,12 @@ impl ProactiveEngine {
     }
 
     /// Regenerate initiative budget based on elapsed seconds, battery level, and temperature.
-    pub fn regenerate_initiative(&mut self, elapsed_secs: f32, battery_percent: u8, temperature_c: f32) {
+    pub fn regenerate_initiative(
+        &mut self,
+        elapsed_secs: f32,
+        battery_percent: u8,
+        temperature_c: f32,
+    ) {
         if elapsed_secs <= 0.0 {
             return;
         }
@@ -250,10 +255,10 @@ impl ProactiveEngine {
                         .push_back(ProactiveAction::Suggest(suggestion));
                     enqueued += 1;
                 }
-            },
+            }
             Err(e) => {
                 warn!(error = %e, "opportunity detection: suggestion trigger evaluation failed");
-            },
+            }
         }
 
         // 2) Check routine automations for the current time window.
@@ -374,7 +379,7 @@ impl ProactiveEngine {
                 ProactiveAction::Alert { urgency, .. } => {
                     // Urgent alerts are cheap — we want them to go through.
                     0.05 * (1.0 - urgency).max(MIN_INITIATIVE_COST)
-                },
+                }
             };
 
             if !self.spend_initiative(cost) {
@@ -464,10 +469,10 @@ impl ProactiveEngine {
                         info!(sections = sections.len(), "morning briefing generated");
                         actions.push(ProactiveAction::Briefing(sections));
                     }
-                },
+                }
                 Err(e) => {
                     warn!(error = %e, "morning briefing generation failed");
-                },
+                }
             }
         }
 
@@ -495,10 +500,10 @@ impl ProactiveEngine {
                             actions.push(ProactiveAction::Suggest(suggestion));
                         }
                     }
-                },
+                }
                 Err(e) => {
                     warn!(error = %e, "suggestion evaluation failed");
-                },
+                }
             }
         }
 
@@ -595,7 +600,7 @@ mod tests {
         let mut e = ProactiveEngine::new();
         e.initiative_budget = 0.5;
         e.regenerate_initiative(100.0, 15, 30.0); // 15% battery (< 20% threshold)
-        // Should use LOW_BATTERY_REGEN = 0.0005, so gain = 100 * 0.0005 = 0.05
+                                                  // Should use LOW_BATTERY_REGEN = 0.0005, so gain = 100 * 0.0005 = 0.05
         assert!((e.budget() - 0.55).abs() < 0.001, "got {}", e.budget());
     }
 
@@ -604,7 +609,7 @@ mod tests {
         let mut e = ProactiveEngine::new();
         e.initiative_budget = 0.5;
         e.regenerate_initiative(100.0, 100, 50.0); // 50°C > 45°C threshold
-        // Should use THERMAL_REGEN = 0.0005, so gain = 100 * 0.0005 = 0.05
+                                                   // Should use THERMAL_REGEN = 0.0005, so gain = 100 * 0.0005 = 0.05
         assert!((e.budget() - 0.55).abs() < 0.001, "got {}", e.budget());
     }
 
@@ -673,7 +678,14 @@ mod tests {
     #[test]
     fn test_tick_returns_ok_empty() {
         let mut e = ProactiveEngine::new();
-        let result = e.tick(1_000, PowerTier::P2Normal, ContextMode::Default, true, 100, 30.0);
+        let result = e.tick(
+            1_000,
+            PowerTier::P2Normal,
+            ContextMode::Default,
+            true,
+            100,
+            30.0,
+        );
         assert!(result.is_ok());
         // No triggers registered, so no actions.
         let actions = result.expect("should be ok");
@@ -688,15 +700,22 @@ mod tests {
     fn test_tick_sleeping_suppresses_suggestions() {
         let mut e = ProactiveEngine::new();
         let actions = e
-            .tick(1_000, PowerTier::P0Always, ContextMode::Sleeping, true, 100, 30.0)
+            .tick(
+                1_000,
+                PowerTier::P0Always,
+                ContextMode::Sleeping,
+                true,
+                100,
+                30.0,
+            )
             .expect("tick ok");
         // In sleeping mode, suggestions and briefings are suppressed.
         for a in &actions {
             match a {
                 ProactiveAction::Suggest(_) | ProactiveAction::Briefing(_) => {
                     panic!("should not get suggestions/briefings in sleeping mode");
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }

@@ -143,7 +143,7 @@ impl ModalityStateMachine {
             } => started_at.elapsed() >= *timeout,
             ModalityState::Processing { started_at } => {
                 started_at.elapsed() >= Duration::from_secs(30) // 30s processing timeout
-            },
+            }
             _ => false,
         }
     }
@@ -192,7 +192,7 @@ impl ModalityStateMachine {
                     started_at: Instant::now(),
                     timeout: self.listen_timeout,
                 })
-            },
+            }
             (ModalityState::WakeWordListening, VoiceEvent::DisableVoice) => Ok(ModalityState::Idle),
 
             // ActiveListening transitions
@@ -200,13 +200,13 @@ impl ModalityStateMachine {
                 Ok(ModalityState::Processing {
                     started_at: Instant::now(),
                 })
-            },
+            }
             (ModalityState::ActiveListening { .. }, VoiceEvent::Timeout) => {
                 Ok(ModalityState::WakeWordListening)
-            },
+            }
             (ModalityState::ActiveListening { .. }, VoiceEvent::DisableVoice) => {
                 Ok(ModalityState::Idle)
-            },
+            }
 
             // Processing transitions
             (ModalityState::Processing { .. }, VoiceEvent::ResponseReady { mode }) => {
@@ -214,26 +214,26 @@ impl ModalityStateMachine {
                     mode: mode.clone(),
                     started_at: Instant::now(),
                 })
-            },
+            }
             (ModalityState::Processing { .. }, VoiceEvent::ProcessingComplete) => {
                 // Processing done but no response to speak → go back to listening
                 Ok(ModalityState::WakeWordListening)
-            },
+            }
             (ModalityState::Processing { .. }, VoiceEvent::Timeout) => {
                 Ok(ModalityState::WakeWordListening)
-            },
+            }
 
             // Speaking transitions
             (ModalityState::Speaking { .. }, VoiceEvent::SpeakingComplete) => {
                 Ok(ModalityState::WakeWordListening)
-            },
+            }
             // Barge-in: user speaks while AURA is speaking
             (ModalityState::Speaking { .. }, VoiceEvent::WakeWordDetected) => {
                 Ok(ModalityState::ActiveListening {
                     started_at: Instant::now(),
                     timeout: self.listen_timeout,
                 })
-            },
+            }
 
             // InCall transitions
             (ModalityState::InCall { previous_state, .. }, VoiceEvent::CallEnded) => {
@@ -243,7 +243,7 @@ impl ModalityStateMachine {
                     ModalityState::Idle => Ok(ModalityState::WakeWordListening),
                     other => Ok(other),
                 }
-            },
+            }
 
             // Any state → Idle on disable
             (_, VoiceEvent::DisableVoice) => Ok(ModalityState::Idle),

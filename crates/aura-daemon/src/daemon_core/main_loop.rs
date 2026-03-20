@@ -382,79 +382,79 @@ impl LoopSubsystems {
             Ok(s) => {
                 tracing::info!("BdiScheduler initialised");
                 Some(s)
-            },
+            }
             Err(_) => {
                 tracing::warn!("BdiScheduler construction panicked — running without BDI");
                 None
-            },
+            }
         };
 
         let goal_tracker = match std::panic::catch_unwind(GoalTracker::new) {
             Ok(t) => {
                 tracing::info!("GoalTracker initialised");
                 Some(t)
-            },
+            }
             Err(_) => {
                 tracing::warn!("GoalTracker construction panicked — running without tracker");
                 None
-            },
+            }
         };
 
         let goal_decomposer = match std::panic::catch_unwind(GoalDecomposer::new) {
             Ok(d) => {
                 tracing::info!("GoalDecomposer initialised");
                 Some(d)
-            },
+            }
             Err(_) => {
                 tracing::warn!("GoalDecomposer construction panicked — running without decomposer");
                 None
-            },
+            }
         };
 
         let goal_registry = match std::panic::catch_unwind(GoalRegistry::new) {
             Ok(r) => {
                 tracing::info!("GoalRegistry initialised");
                 Some(r)
-            },
+            }
             Err(_) => {
                 tracing::warn!("GoalRegistry construction panicked — running without registry");
                 None
-            },
+            }
         };
 
         let conflict_resolver = match std::panic::catch_unwind(ConflictResolver::new) {
             Ok(c) => {
                 tracing::info!("ConflictResolver initialised");
                 Some(c)
-            },
+            }
             Err(_) => {
                 tracing::warn!(
                     "ConflictResolver construction panicked — running without conflict resolution"
                 );
                 None
-            },
+            }
         };
 
         let proactive = match std::panic::catch_unwind(ProactiveEngine::new) {
             Ok(p) => {
                 tracing::info!("ProactiveEngine initialised");
                 Some(p)
-            },
+            }
             Err(_) => {
                 tracing::warn!("ProactiveEngine construction panicked — running without proactive");
                 None
-            },
+            }
         };
 
         let arc_manager = match std::panic::catch_unwind(ArcManager::new) {
             Ok(a) => {
                 tracing::info!("ArcManager initialised");
                 Some(a)
-            },
+            }
             Err(_) => {
                 tracing::warn!("ArcManager construction panicked — running without ARC manager");
                 None
-            },
+            }
         };
 
         Self {
@@ -489,23 +489,23 @@ impl LoopSubsystems {
                 Ok(ep) => {
                     tracing::info!("EnhancedPlanner initialised");
                     Some(ep)
-                },
+                }
                 Err(_) => {
                     tracing::warn!(
                         "EnhancedPlanner construction panicked — running without plan caching"
                     );
                     None
-                },
+                }
             },
             workflow_observer: match std::panic::catch_unwind(WorkflowObserver::new) {
                 Ok(wo) => {
                     tracing::info!("WorkflowObserver initialised");
                     Some(wo)
-                },
+                }
                 Err(_) => {
                     tracing::warn!("WorkflowObserver construction panicked — running without workflow learning");
                     None
-                },
+                }
             },
             semantic_react: SemanticReact::new(),
             consecutive_task_failures: 0,
@@ -527,14 +527,14 @@ impl LoopSubsystems {
                             "WriteAheadJournal opened"
                         );
                         Some(j)
-                    },
+                    }
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
                             "journal creation failed — running without WAL persistence"
                         );
                         None
-                    },
+                    }
                 }
             },
             safe_mode: crate::persistence::SafeModeState::inactive(),
@@ -1015,7 +1015,7 @@ fn check_sandbox_for_task(sandbox: &Sandbox, description: &str) -> Option<String
                 "task blocked by sandbox containment — Forbidden"
             );
             Some(reason)
-        },
+        }
         ContainmentLevel::Restricted => {
             // L2: Log at warn level — per-action confirmation handled downstream.
             tracing::info!(
@@ -1025,7 +1025,7 @@ fn check_sandbox_for_task(sandbox: &Sandbox, description: &str) -> Option<String
                 "task classified as Restricted — per-action confirmation required"
             );
             None
-        },
+        }
         ContainmentLevel::Monitored => {
             tracing::debug!(
                 target: "SECURITY",
@@ -1034,7 +1034,7 @@ fn check_sandbox_for_task(sandbox: &Sandbox, description: &str) -> Option<String
                 "task classified as Monitored — execution will be logged"
             );
             None
-        },
+        }
         ContainmentLevel::Direct => None,
     }
 }
@@ -1154,7 +1154,7 @@ fn check_boundary_for_task(
                 reason,
                 prompt: confirmation_prompt,
             }
-        },
+        }
         BoundaryDecision::Deny { reason, level } => {
             tracing::warn!(
                 target: "SECURITY",
@@ -1164,7 +1164,7 @@ fn check_boundary_for_task(
                 "BoundaryReasoner: DENIED (conditional rule)"
             );
             BoundaryGateResult::Deny(reason)
-        },
+        }
         BoundaryDecision::DenyAbsolute { reason, rule_id } => {
             tracing::error!(
                 target: "SAFETY",
@@ -1174,7 +1174,7 @@ fn check_boundary_for_task(
                 "BoundaryReasoner: ABSOLUTE DENY — hardcoded safety rule"
             );
             BoundaryGateResult::Deny(format!("[{rule_id}] {reason}"))
-        },
+        }
     }
 }
 
@@ -1283,7 +1283,7 @@ fn format_system_result(result: &SystemResult) -> String {
             let pct = (level * 100.0) as u8;
             let charge_str = if *charging { ", charging" } else { "" };
             format!("Battery: {pct}%{charge_str} (health: {health:?})")
-        },
+        }
         SystemResult::Storage {
             total_bytes,
             free_bytes,
@@ -1291,7 +1291,7 @@ fn format_system_result(result: &SystemResult) -> String {
             let total_gb = *total_bytes as f64 / 1_073_741_824.0;
             let free_gb = *free_bytes as f64 / 1_073_741_824.0;
             format!("Storage: {free_gb:.1} GB free of {total_gb:.1} GB total")
-        },
+        }
         SystemResult::Network {
             connected,
             wifi,
@@ -1310,7 +1310,7 @@ fn format_system_result(result: &SystemResult) -> String {
                 Some(s) => format!("Network: {transport} (signal: {s})"),
                 None => format!("Network: {transport}"),
             }
-        },
+        }
         SystemResult::Memory {
             total_bytes,
             available_bytes,
@@ -1320,10 +1320,10 @@ fn format_system_result(result: &SystemResult) -> String {
             let avail_gb = *available_bytes as f64 / 1_073_741_824.0;
             let warn = if *low_memory { " [LOW MEMORY]" } else { "" };
             format!("RAM: {avail_gb:.1} GB available of {total_gb:.1} GB{warn}")
-        },
+        }
         SystemResult::Thermal(state) => {
             format!("Thermal state: {state:?}")
-        },
+        }
         SystemResult::Contacts(contacts) => {
             if contacts.is_empty() {
                 "No contacts found.".to_string()
@@ -1343,7 +1343,7 @@ fn format_system_result(result: &SystemResult) -> String {
                 };
                 format!("Contacts ({}):\n{}{more}", contacts.len(), list.join("\n"))
             }
-        },
+        }
         SystemResult::Calendar(events) => {
             if events.is_empty() {
                 "No calendar events found.".to_string()
@@ -1358,10 +1358,10 @@ fn format_system_result(result: &SystemResult) -> String {
                     .collect();
                 format!("Calendar ({} events):\n{}", events.len(), list.join("\n"))
             }
-        },
+        }
         SystemResult::Photos(photos) => {
             format!("Found {} recent photos.", photos.len())
-        },
+        }
         SystemResult::Notifications(notifs) => {
             if notifs.is_empty() {
                 "No active notifications.".to_string()
@@ -1373,7 +1373,7 @@ fn format_system_result(result: &SystemResult) -> String {
                     .collect();
                 format!("Notifications ({}):\n{}", notifs.len(), list.join("\n"))
             }
-        },
+        }
         SystemResult::ActionCompleted {
             command,
             success,
@@ -1384,7 +1384,7 @@ fn format_system_result(result: &SystemResult) -> String {
             } else {
                 format!("{command} failed: {message}")
             }
-        },
+        }
     }
 }
 
@@ -1399,11 +1399,11 @@ async fn ensure_ipc_connected(neocortex: &mut NeocortexClient) -> bool {
         Ok(()) => {
             tracing::info!("IPC reconnect succeeded");
             true
-        },
+        }
         Err(e) => {
             tracing::warn!(error = %e, "IPC reconnect failed");
             false
-        },
+        }
     }
 }
 
@@ -1548,14 +1548,14 @@ pub async fn run(mut state: DaemonState) {
         Err(e) => {
             tracing::warn!(error = %e, "failed to register voice bridge");
             None
-        },
+        }
     };
     let telegram_bridge_rx = match router.register("telegram").await {
         Ok(rx) => Some(rx),
         Err(e) => {
             tracing::warn!(error = %e, "failed to register telegram bridge");
             None
-        },
+        }
     };
 
     // Spawn the response router as a background task.
@@ -1593,14 +1593,14 @@ pub async fn run(mut state: DaemonState) {
                 Ok(()) => {
                     tracing::info!("neocortex process spawned and ready");
                     Some(proc)
-                },
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "neocortex spawned but failed readiness check — running without LLM");
                     // Process may still be starting; keep the handle for retry.
                     Some(proc)
-                },
+                }
             }
-        },
+        }
         Err(e) => {
             tracing::error!(error = %e, "failed to spawn neocortex process — running without LLM");
             tracing::warn!(
@@ -1608,7 +1608,7 @@ pub async fn run(mut state: DaemonState) {
                  Ensure aura-neocortex binary is installed at $PREFIX/bin/aura-neocortex"
             );
             None
-        },
+        }
     };
 
     // Spawn voice bridge (non-critical — runs in degraded mode if init fails).
@@ -1649,7 +1649,7 @@ pub async fn run(mut state: DaemonState) {
             Err(e) => {
                 tracing::error!(error = %e, "failed to open telegram message queue — responses will be logged only");
                 None
-            },
+            }
         };
 
         // Connection #2 — TelegramEngine (polls inbound + flushes outbound).
@@ -1673,15 +1673,15 @@ pub async fn run(mut state: DaemonState) {
                                 }
                             });
                             tracing::info!("telegram engine spawned (polling + queue flush)");
-                        },
+                        }
                         Err(e) => {
                             tracing::error!(error = %e, "failed to create telegram engine — no inbound/outbound");
-                        },
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to open engine DB connection for telegram");
-                },
+                }
             }
         } else {
             tracing::warn!("telegram bot_token is empty — engine not started");
@@ -1722,7 +1722,7 @@ pub async fn run(mut state: DaemonState) {
                      for memory swap — daemon loop cannot continue: {e}"
                 );
                 return;
-            },
+            }
         };
         std::mem::replace(&mut state.subsystems.memory, placeholder)
     };
@@ -1737,7 +1737,7 @@ pub async fn run(mut state: DaemonState) {
             Ok(()) => tracing::info!("IPC client connected to neocortex"),
             Err(e) => {
                 tracing::warn!(error = %e, "IPC client failed to connect — will retry on demand")
-            },
+            }
         }
     }
 
@@ -1757,7 +1757,7 @@ pub async fn run(mut state: DaemonState) {
                     key.copy_from_slice(&bytes);
                     tracing::info!("vault key loaded from {:?}", vault_key_path);
                     Some(key)
-                },
+                }
                 Ok(bytes) => {
                     tracing::error!(
                         len = bytes.len(),
@@ -1765,11 +1765,11 @@ pub async fn run(mut state: DaemonState) {
                         "vault.key has wrong length — expected 32 bytes; vault will remain locked"
                     );
                     None
-                },
+                }
                 Err(e) => {
                     tracing::error!(error = %e, path = ?vault_key_path, "failed to read vault.key");
                     None
-                },
+                }
             }
         } else {
             // Generate a fresh 32-byte key and persist it.
@@ -1789,11 +1789,11 @@ pub async fn run(mut state: DaemonState) {
                     }
                     tracing::info!(path = ?vault_key_path, "vault key generated and persisted");
                     Some(key)
-                },
+                }
                 Err(e) => {
                     tracing::error!(error = %e, path = ?vault_key_path, "failed to write vault.key — vault will remain locked");
                     None
-                },
+                }
             }
         };
 
@@ -1843,7 +1843,7 @@ pub async fn run(mut state: DaemonState) {
                                     error = ?e,
                                     "failed to sync goal into GoalTracker at startup"
                                 );
-                            },
+                            }
                         }
                     }
                 }
@@ -1904,7 +1904,7 @@ pub async fn run(mut state: DaemonState) {
                                     );
                                     failed += 1;
                                 }
-                            },
+                            }
                             crate::persistence::JournalCategory::Trust => {
                                 if let Some((user_id, interaction, ts)) =
                                     crate::identity::decode_trust_event(&entry.payload)
@@ -1922,7 +1922,7 @@ pub async fn run(mut state: DaemonState) {
                                     );
                                     failed += 1;
                                 }
-                            },
+                            }
                             crate::persistence::JournalCategory::Mood => {
                                 if let Some((event, ts)) =
                                     crate::identity::decode_mood_event(&entry.payload)
@@ -1936,7 +1936,7 @@ pub async fn run(mut state: DaemonState) {
                                     );
                                     failed += 1;
                                 }
-                            },
+                            }
                             crate::persistence::JournalCategory::Consent => {
                                 if let Some((_category, _granted, _ts)) =
                                     crate::identity::decode_consent_event(&entry.payload)
@@ -1951,12 +1951,12 @@ pub async fn run(mut state: DaemonState) {
                                     );
                                     failed += 1;
                                 }
-                            },
+                            }
                             // Goal / Execution / Memory categories: logged but not replayed
                             // into identity state (they're replayed by their own subsystems).
                             _ => {
                                 replayed += 1;
-                            },
+                            }
                         }
                     }
 
@@ -1978,14 +1978,14 @@ pub async fn run(mut state: DaemonState) {
                             tracing::info!("journal compacted after recovery");
                         }
                     }
-                },
+                }
                 Err(e) => {
                     tracing::error!(
                         error = %e,
                         "journal recovery FAILED — identity state may be stale"
                     );
                     journal_corruption = true;
-                },
+                }
             }
         } else {
             tracing::warn!(
@@ -2019,21 +2019,21 @@ pub async fn run(mut state: DaemonState) {
                             msg = %issue.message,
                             "CRITICAL integrity issue"
                         );
-                    },
+                    }
                     crate::persistence::VerificationSeverity::Warning => {
                         tracing::warn!(
                             subsystem = issue.subsystem,
                             msg = %issue.message,
                             "integrity warning"
                         );
-                    },
+                    }
                     crate::persistence::VerificationSeverity::Info => {
                         tracing::info!(
                             subsystem = issue.subsystem,
                             msg = %issue.message,
                             "integrity info"
                         );
-                    },
+                    }
                 }
             }
         }
@@ -2067,10 +2067,10 @@ pub async fn run(mut state: DaemonState) {
             } else if subs.identity.user_profile().is_some() {
                 tracing::info!("user profile loaded for consent checking");
             }
-        },
+        }
         Err(e) => {
             tracing::warn!(error = %e, "failed to open database for profile load");
-        },
+        }
     }
 
     // Track how many channels are still open.
@@ -2436,7 +2436,7 @@ async fn handle_a11y_event(
     let mood_event = match scored.gate_decision {
         GateDecision::EmergencyBypass | GateDecision::InstantWake => {
             Some(MoodEvent::UserFrustrated)
-        },
+        }
         GateDecision::SlowAccumulate => None, // low salience — no mood shift
         GateDecision::Suppress => Some(MoodEvent::Silence { duration_ms: 0 }),
     };
@@ -2657,7 +2657,7 @@ async fn handle_user_command(
                                             )
                                             .await;
                                             flush_outcome_bus(subs).await;
-                                        },
+                                        }
                                         // NeedConfirmation after user already confirmed
                                         // is contradictory — treat as Allow to respect
                                         // the user's explicit approval.
@@ -2694,7 +2694,7 @@ async fn handle_user_command(
                                                                     confidence = final_confidence,
                                                                     "confirmed task completed successfully"
                                                                 );
-                                                            },
+                                                            }
                                                             react::TaskOutcome::Failed {
                                                                 reason,
                                                                 ..
@@ -2712,7 +2712,7 @@ async fn handle_user_command(
                                                                     reason = %reason,
                                                                     "confirmed task execution failed"
                                                                 );
-                                                            },
+                                                            }
                                                             react::TaskOutcome::Cancelled {
                                                                 ..
                                                             } => {
@@ -2723,7 +2723,7 @@ async fn handle_user_command(
                                                                     goal_id = conf.goal_id,
                                                                     "confirmed task was cancelled"
                                                                 );
-                                                            },
+                                                            }
                                                         }
                                                     }
 
@@ -2733,7 +2733,7 @@ async fn handle_user_command(
                                                     );
                                                     send_response(&subs.response_tx, source, ack)
                                                         .await;
-                                                },
+                                                }
                                                 Err(policy_reason) => {
                                                     tracing::warn!(
                                                         target: "SECURITY",
@@ -2778,7 +2778,7 @@ async fn handle_user_command(
                                                     )
                                                     .await;
                                                     flush_outcome_bus(subs).await;
-                                                },
+                                                }
                                             }
 
                                             // ── Record user's approval for BoundaryReasoner L3
@@ -2788,7 +2788,7 @@ async fn handle_user_command(
                                                 true, // user allowed
                                                 response_time_ms,
                                             );
-                                        }, // end Allow|NeedConfirmation arm
+                                        } // end Allow|NeedConfirmation arm
                                     } // end match boundary_result
                                 } else {
                                     tracing::info!(
@@ -3020,11 +3020,11 @@ async fn handle_user_command(
                         ) {
                             tracing::warn!(error = %e, "failed to audit emergency stop");
                         }
-                    },
+                    }
                     Err(e) => {
                         // Already activated — not a failure, just redundant.
                         tracing::debug!(error = %e, "emergency stop already active");
-                    },
+                    }
                 }
                 send_response(
                     &subs.response_tx,
@@ -3041,7 +3041,7 @@ async fn handle_user_command(
             match manip.verdict {
                 crate::identity::ManipulationVerdict::Clean => {
                     tracing::debug!(score = manip.score, "manipulation check: clean");
-                },
+                }
                 crate::identity::ManipulationVerdict::Suspicious => {
                     tracing::warn!(
                         score = manip.score,
@@ -3060,7 +3060,7 @@ async fn handle_user_command(
                         tracing::warn!(error = %e, "failed to audit suspicious manipulation");
                     }
                     // Allow but flagged — continue processing.
-                },
+                }
                 crate::identity::ManipulationVerdict::Manipulative => {
                     tracing::warn!(
                         score = manip.score,
@@ -3088,7 +3088,7 @@ async fn handle_user_command(
                     )
                     .await;
                     return Ok(());
-                },
+                }
             }
 
             // ── Stage 1: NLU Parse ──────────────────────────────────
@@ -3104,7 +3104,7 @@ async fn handle_user_command(
             let intent = match parse_result.intent {
                 crate::pipeline::parser::NluIntent::Conversation { .. } => {
                     Intent::ConversationContinue
-                },
+                }
                 crate::pipeline::parser::NluIntent::Unknown { .. } => Intent::InformationRequest,
                 _ => {
                     if parse_result.intent.tool_name().is_some() {
@@ -3112,7 +3112,7 @@ async fn handle_user_command(
                     } else {
                         Intent::InformationRequest
                     }
-                },
+                }
             };
 
             let parsed = ParsedEvent {
@@ -3152,12 +3152,12 @@ async fn handle_user_command(
                     )
                     .await;
                     return Ok(());
-                },
+                }
                 crate::identity::PolicyVerdict::Audit { reason } => {
                     tracing::info!(reason = %reason, "policy gate flagged for audit");
                     // Continue but log.
-                },
-                crate::identity::PolicyVerdict::Allow => {},
+                }
+                crate::identity::PolicyVerdict::Allow => {}
             }
 
             // ── Stage 5: Contextor Enrich ───────────────────────────
@@ -3182,11 +3182,11 @@ async fn handle_user_command(
                         "context enrichment complete"
                     );
                     Some(e)
-                },
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "context enrichment failed — proceeding without");
                     None
-                },
+                }
             };
 
             // If enrichment failed entirely and this is a low-confidence parse,
@@ -3230,7 +3230,7 @@ async fn handle_user_command(
                     match boundary_check(subs, desc) {
                         BoundaryGateResult::Allow => {
                             tracing::debug!(description = desc, "boundary check: allowed");
-                        },
+                        }
                         BoundaryGateResult::Deny(reason) => {
                             tracing::warn!(
                                 description = desc,
@@ -3243,7 +3243,7 @@ async fn handle_user_command(
                             );
                             send_response(&subs.response_tx, source, denial_msg).await;
                             return Ok(());
-                        },
+                        }
                         BoundaryGateResult::NeedConfirmation { reason, prompt } => {
                             tracing::info!(
                                 description = desc,
@@ -3252,7 +3252,7 @@ async fn handle_user_command(
                             );
                             send_response(&subs.response_tx, source, prompt).await;
                             return Ok(());
-                        },
+                        }
                     }
                 }
 
@@ -3277,7 +3277,7 @@ async fn handle_user_command(
                         flush_outcome_bus(subs).await;
                         send_response(&subs.response_tx, source, response_text).await;
                         return Ok(());
-                    },
+                    }
                     Err(e) => {
                         // Bridge failed — fall through to normal pipeline.
                         // This is NOT a hard error; the classifier may find
@@ -3287,7 +3287,7 @@ async fn handle_user_command(
                             "SystemBridge fast-path: execution failed — \
                              falling through to classifier"
                         );
-                    },
+                    }
                 }
             }
 
@@ -3305,13 +3305,13 @@ async fn handle_user_command(
             match route.path {
                 RoutePath::System1 | RoutePath::DaemonOnly => {
                     dispatch_system1(&scored, &text, source, state, subs).await;
-                },
+                }
                 RoutePath::System2 => {
                     let mode = route
                         .neocortex_mode
                         .unwrap_or(InferenceMode::Conversational);
                     dispatch_system2(&scored, mode, _enriched.as_ref(), source, state, subs).await;
-                },
+                }
                 RoutePath::Hybrid => {
                     // Try System1 first; fall back to System2 if it fails.
                     let hybrid_start = now_ms();
@@ -3359,7 +3359,7 @@ async fn handle_user_command(
                         dispatch_system2(&scored, mode, _enriched.as_ref(), source, state, subs)
                             .await;
                     }
-                },
+                }
             }
 
             // Store the conversation turn in contextor.
@@ -3380,7 +3380,7 @@ async fn handle_user_command(
 
             // Flush outcome bus — dispatch all pending outcomes to cognitive subsystems.
             flush_outcome_bus(subs).await;
-        },
+        }
 
         UserCommand::TaskRequest {
             description,
@@ -3563,7 +3563,7 @@ async fn handle_user_command(
                             ));
                         }
                         flush_outcome_bus(subs).await;
-                    },
+                    }
                     BoundaryGateResult::NeedConfirmation { reason, prompt } => {
                         // Route through sandbox confirmation flow so user
                         // can /allow or /deny.
@@ -3618,7 +3618,7 @@ async fn handle_user_command(
                             }
                             flush_outcome_bus(subs).await;
                         }
-                    },
+                    }
                     BoundaryGateResult::Allow => {
                         if let Err(policy_reason) = check_task_policy_gate(subs, &description) {
                             tracing::warn!(
@@ -3674,7 +3674,7 @@ async fn handle_user_command(
                                         confidence = final_confidence,
                                         "task completed successfully"
                                     );
-                                },
+                                }
                                 react::TaskOutcome::Failed { reason, .. } => {
                                     goal.status =
                                         aura_types::goals::GoalStatus::Failed(reason.clone());
@@ -3691,7 +3691,7 @@ async fn handle_user_command(
                                         &description,
                                         now_ms(),
                                     );
-                                },
+                                }
                                 react::TaskOutcome::Cancelled { .. } => {
                                     goal.status = aura_types::goals::GoalStatus::Cancelled;
                                     tracing::info!(
@@ -3699,7 +3699,7 @@ async fn handle_user_command(
                                         session_id = session.session_id,
                                         "task was cancelled"
                                     );
-                                },
+                                }
                                 react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
                                     goal.status =
                                         aura_types::goals::GoalStatus::Failed(cycle_reason.clone());
@@ -3715,7 +3715,7 @@ async fn handle_user_command(
                                         &description,
                                         now_ms(),
                                     );
-                                },
+                                }
                             }
                         }
 
@@ -3726,14 +3726,14 @@ async fn handle_user_command(
                                 react::TaskOutcome::Success { .. } => tracker.complete(goal_id, ts),
                                 react::TaskOutcome::Failed { reason, .. } => {
                                     tracker.fail(goal_id, reason.clone(), ts)
-                                },
+                                }
                                 react::TaskOutcome::Cancelled { .. } => {
                                     // Pause on cancellation — goal can be resumed later.
                                     tracker.pause(goal_id, ts)
-                                },
+                                }
                                 react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
                                     tracker.fail(goal_id, cycle_reason.clone(), ts)
-                                },
+                                }
                             };
                             if let Err(e) = tracker_result {
                                 tracing::warn!(
@@ -3752,15 +3752,15 @@ async fn handle_user_command(
                                     subs.consecutive_task_failures = 0;
                                     subs.successful_task_count =
                                         subs.successful_task_count.saturating_add(1);
-                                },
+                                }
                                 react::TaskOutcome::Failed { .. }
                                 | react::TaskOutcome::CycleAborted { .. } => {
                                     subs.consecutive_task_failures =
                                         subs.consecutive_task_failures.saturating_add(1);
-                                },
+                                }
                                 react::TaskOutcome::Cancelled { .. } => {
                                     // Cancellations don't affect the escalation counters.
-                                },
+                                }
                             }
 
                             // On failure, consult SemanticReact to decide whether to
@@ -3787,7 +3787,7 @@ async fn handle_user_command(
                                     react::TaskOutcome::Failed { reason, .. } => reason.as_str(),
                                     react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
                                         cycle_reason.as_str()
-                                    },
+                                    }
                                     _ => "unknown",
                                 };
 
@@ -3843,7 +3843,7 @@ async fn handle_user_command(
                                             true, // optimistic — actual outcome tracked later
                                             now_ms(),
                                         );
-                                    },
+                                    }
                                     RecoveryAction::Replan { .. }
                                     | RecoveryAction::EscalateToStrategic { .. } => {
                                         // The failure needs a fresh approach from the LLM.
@@ -3945,18 +3945,18 @@ async fn handle_user_command(
                                                 goal_id,
                                                 "StrategicRecovery: Replan sent to neocortex"
                                             );
-                                                    },
+                                                    }
                                                     Ok(Err(e)) => {
                                                         tracing::warn!(
                                                             error = %e,
                                                             "StrategicRecovery: IPC send failed"
                                                         );
-                                                    },
+                                                    }
                                                     Err(_) => {
                                                         tracing::warn!(
                                                             "StrategicRecovery: IPC send timed out"
                                                         );
-                                                    },
+                                                    }
                                                 }
                                             } else {
                                                 tracing::warn!(
@@ -3971,7 +3971,7 @@ async fn handle_user_command(
                                      staying in System 1 despite Replan request"
                                             );
                                         }
-                                    },
+                                    }
                                     RecoveryAction::RestartEnvironment {
                                         ref target,
                                         wait_ms,
@@ -3991,7 +3991,7 @@ async fn handle_user_command(
                                             false,
                                             now_ms(),
                                         );
-                                    },
+                                    }
                                     RecoveryAction::NotifyUser {
                                         ref message,
                                         ref severity,
@@ -4016,7 +4016,7 @@ async fn handle_user_command(
                                             true,
                                             now_ms(),
                                         );
-                                    },
+                                    }
                                     RecoveryAction::HaltAndLog {
                                         ref reason,
                                         ref category,
@@ -4057,7 +4057,7 @@ async fn handle_user_command(
                                             false,
                                             now_ms(),
                                         );
-                                    },
+                                    }
                                     RecoveryAction::TryAlternative {
                                         ref alternative,
                                         ref reason,
@@ -4079,7 +4079,7 @@ async fn handle_user_command(
                                             true, // optimistic
                                             now_ms(),
                                         );
-                                    },
+                                    }
                                 }
                             }
                         }
@@ -4096,7 +4096,7 @@ async fn handle_user_command(
                                 | react::TaskOutcome::CycleAborted { .. } => MoodEvent::TaskFailed,
                                 react::TaskOutcome::Cancelled { .. } => {
                                     MoodEvent::Silence { duration_ms: 0 }
-                                },
+                                }
                             };
                             subs.identity.affective.process_event_with_personality(
                                 mood_event,
@@ -4181,10 +4181,10 @@ async fn handle_user_command(
 
                         // Flush outcome bus.
                         flush_outcome_bus(subs).await;
-                    }, // end BoundaryGateResult::Allow arm
+                    } // end BoundaryGateResult::Allow arm
                 } // end match boundary_result (Site 2: TaskRequest)
             } // end consent-allowed else branch
-        },
+        }
 
         UserCommand::CancelTask {
             task_id,
@@ -4200,7 +4200,7 @@ async fn handle_user_command(
                 Err(e) => {
                     tracing::warn!(task_id = %task_id, error = %e, "invalid task_id format");
                     return Ok(());
-                },
+                }
             };
 
             let found = state.checkpoint.goals.iter().any(|g| g.id == parsed_id);
@@ -4216,7 +4216,7 @@ async fn handle_user_command(
             } else {
                 tracing::warn!(task_id = parsed_id, "cancel requested for unknown task");
             }
-        },
+        }
 
         UserCommand::ProfileSwitch { profile, source } => {
             if profile.trim().is_empty() {
@@ -4236,7 +4236,7 @@ async fn handle_user_command(
                 crate::identity::InteractionType::Neutral,
                 now_ms(),
             );
-        },
+        }
     }
 
     Ok(())
@@ -4337,7 +4337,7 @@ async fn dispatch_system1(
                         RouteKind::System1,
                         now_ms(),
                     ));
-                },
+                }
                 BoundaryGateResult::Allow => {
                     if let Err(policy_reason) = check_task_policy_gate(subs, &scored.parsed.content)
                     {
@@ -4379,7 +4379,7 @@ async fn dispatch_system1(
                                 }
                                 subs.system1.cache_plan(text, plan, 1.0, now_ms());
                                 tracing::debug!("System1 plan cached after success");
-                            },
+                            }
                             react::TaskOutcome::Failed {
                                 reason, total_ms, ..
                             } => {
@@ -4404,7 +4404,7 @@ async fn dispatch_system1(
                                     )
                                     .with_input_summary(&scored.parsed.content),
                                 );
-                            },
+                            }
                             react::TaskOutcome::Cancelled { total_ms, .. } => {
                                 tracing::info!("System1 plan execution cancelled (Site 3)");
                                 subs.outcome_bus.publish(
@@ -4418,7 +4418,7 @@ async fn dispatch_system1(
                                     )
                                     .with_input_summary(&scored.parsed.content),
                                 );
-                            },
+                            }
                             react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
                                 tracing::warn!(
                                     reason = %cycle_reason,
@@ -4441,10 +4441,10 @@ async fn dispatch_system1(
                                     )
                                     .with_input_summary(&scored.parsed.content),
                                 );
-                            },
+                            }
                         }
                     }
-                }, // end BoundaryGateResult::Allow arm
+                } // end BoundaryGateResult::Allow arm
             } // end match boundary_result (Site 3: dispatch_system1)
         } // end consent-allowed else branch
     }
@@ -4504,7 +4504,7 @@ async fn dispatch_system2(
             .await;
             dispatch_system1(scored, &scored.parsed.content, source, state, subs).await;
             return;
-        },
+        }
     };
 
     // Enrich the outgoing message's ContextPackage with Contextor output.
@@ -4560,17 +4560,17 @@ async fn dispatch_system2(
             }
             state.pending_system2_sources.push_back(source.clone());
             // The response will arrive via the IPC inbound channel.
-        },
+        }
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "System2 IPC send failed — falling back to System1");
             subs.system2.complete_request(request.request_id);
             dispatch_system1(scored, &scored.parsed.content, source, state, subs).await;
-        },
+        }
         Err(_) => {
             tracing::warn!("System2 IPC send timed out — falling back to System1");
             subs.system2.complete_request(request.request_id);
             dispatch_system1(scored, &scored.parsed.content, source, state, subs).await;
-        },
+        }
     }
 }
 
@@ -4685,14 +4685,14 @@ async fn flush_outcome_bus(subs: &mut LoopSubsystems) {
                         new_confidence,
                         "GoalRegistry: capability confidence updated"
                     );
-                },
+                }
                 Err(e) => {
                     tracing::warn!(
                         capability = %capability_id,
                         error = %e,
                         "GoalRegistry: update_confidence failed"
                     );
-                },
+                }
             }
         }
     }
@@ -4741,7 +4741,7 @@ fn enrich_system2_message(
                                  before LLM dispatch"
                             );
                             false
-                        },
+                        }
                     }
                 })
                 .cloned()
@@ -4859,28 +4859,28 @@ fn enrich_system2_message(
         DaemonToNeocortex::Converse { mut context } => {
             apply(&mut context, enriched);
             DaemonToNeocortex::Converse { context }
-        },
+        }
         DaemonToNeocortex::Plan {
             mut context,
             failure,
         } => {
             apply(&mut context, enriched);
             DaemonToNeocortex::Plan { context, failure }
-        },
+        }
         DaemonToNeocortex::Compose {
             mut context,
             template,
         } => {
             apply(&mut context, enriched);
             DaemonToNeocortex::Compose { context, template }
-        },
+        }
         DaemonToNeocortex::Replan {
             mut context,
             failure,
         } => {
             apply(&mut context, enriched);
             DaemonToNeocortex::Replan { context, failure }
-        },
+        }
         other => other, // Pass through non-context variants unchanged.
     }
 }
@@ -4928,7 +4928,7 @@ async fn handle_ipc_outbound(
             Err(e) => {
                 tracing::error!(error = %e, "IPC outbound payload deserialization failed");
                 return Ok(());
-            },
+            }
         };
 
     tracing::debug!(len, "IPC outbound payload validated");
@@ -4998,7 +4998,7 @@ async fn handle_ipc_inbound(
                 )
                 .await;
             }
-        },
+        }
 
         NeocortexToDaemon::LoadFailed { reason } => {
             tracing::error!(reason = %reason, "neocortex model load failed");
@@ -5020,11 +5020,11 @@ async fn handle_ipc_inbound(
                 )
                 .await;
             }
-        },
+        }
 
         NeocortexToDaemon::Unloaded => {
             tracing::info!("neocortex model unloaded");
-        },
+        }
 
         NeocortexToDaemon::PlanReady { plan, .. } => {
             let step_count = plan.steps.len();
@@ -5126,7 +5126,7 @@ async fn handle_ipc_inbound(
                             now_ms(),
                         ));
                         flush_outcome_bus(subs).await;
-                    },
+                    }
                     BoundaryGateResult::Allow => {
                         if let Err(policy_reason) = check_task_policy_gate(subs, &plan_goal_desc) {
                             tracing::warn!(
@@ -5245,16 +5245,16 @@ async fn handle_ipc_inbound(
                                 status: match &outcome {
                                     react::TaskOutcome::Success { .. } => {
                                         aura_types::goals::GoalStatus::Completed
-                                    },
+                                    }
                                     react::TaskOutcome::Failed { .. }
                                     | react::TaskOutcome::CycleAborted { .. } => {
                                         aura_types::goals::GoalStatus::Failed(
                                             "plan failed".to_string(),
                                         )
-                                    },
+                                    }
                                     react::TaskOutcome::Cancelled { .. } => {
                                         aura_types::goals::GoalStatus::Cancelled
-                                    },
+                                    }
                                 },
                                 steps: Vec::new(),
                                 created_ms: ts,
@@ -5272,17 +5272,17 @@ async fn handle_ipc_inbound(
                                 match &outcome {
                                     react::TaskOutcome::Success { .. } => {
                                         let _ = tracker.complete(plan_goal_id, ts);
-                                    },
+                                    }
                                     react::TaskOutcome::Failed { reason, .. } => {
                                         let _ = tracker.fail(plan_goal_id, reason.clone(), ts);
-                                    },
+                                    }
                                     react::TaskOutcome::CycleAborted { cycle_reason, .. } => {
                                         let _ =
                                             tracker.fail(plan_goal_id, cycle_reason.clone(), ts);
-                                    },
+                                    }
                                     react::TaskOutcome::Cancelled { .. } => {
                                         let _ = tracker.pause(plan_goal_id, ts);
-                                    },
+                                    }
                                 }
                             }
 
@@ -5328,10 +5328,10 @@ async fn handle_ipc_inbound(
                         {
                             tracing::warn!(error = %e, "failed to store plan episode");
                         }
-                    }, // end BoundaryGateResult::Allow arm
+                    } // end BoundaryGateResult::Allow arm
                 } // end match boundary_result (Site 4: PlanReady)
             } // end consent-allowed else branch (Site 3: neocortex plan)
-        },
+        }
 
         NeocortexToDaemon::ConversationReply {
             text, mood_hint, ..
@@ -5425,12 +5425,12 @@ async fn handle_ipc_inbound(
                     tracing::info!(reason = %reason, "anti-sycophancy nudge");
                     // Append a honesty nudge to the response.
                     format!("{}\n\n[Note: {}]", text_after_truth, reason)
-                },
+                }
                 crate::identity::GateResult::Block { reason } => {
                     tracing::warn!(reason = %reason, "anti-sycophancy blocked response");
                     // Provide a neutral fallback.
                     "I want to be honest with you. Let me reconsider my response.".to_string()
-                },
+                }
             };
 
             // ── Episodic memory: record this conversation turn ──────────
@@ -5547,7 +5547,7 @@ async fn handle_ipc_inbound(
                 .with_response_summary(&final_text);
                 subs.outcome_bus.publish(s2_outcome);
             }
-        },
+        }
 
         NeocortexToDaemon::ComposedScript { steps } => {
             tracing::info!(step_count = steps.len(), "composed DSL script received");
@@ -5601,7 +5601,7 @@ async fn handle_ipc_inbound(
                             now_ms(),
                         ));
                         flush_outcome_bus(subs).await;
-                    },
+                    }
                     BoundaryGateResult::Allow => {
                         if let Err(policy_reason) = check_task_policy_gate(subs, &script_desc) {
                             tracing::warn!(
@@ -5639,13 +5639,13 @@ async fn handle_ipc_inbound(
                                 } => (OutcomeResult::Success, *total_ms, *final_confidence),
                                 react::TaskOutcome::Failed { total_ms, .. } => {
                                     (OutcomeResult::Failure, *total_ms, 0.0)
-                                },
+                                }
                                 react::TaskOutcome::Cancelled { total_ms, .. } => {
                                     (OutcomeResult::UserCancelled, *total_ms, 0.0)
-                                },
+                                }
                                 react::TaskOutcome::CycleAborted { .. } => {
                                     (OutcomeResult::Failure, 0, 0.0)
-                                },
+                                }
                             };
 
                             match &outcome {
@@ -5665,7 +5665,7 @@ async fn handle_ipc_inbound(
                                         &script_desc,
                                         now_ms(),
                                     );
-                                },
+                                }
                                 react::TaskOutcome::Cancelled { .. } => tracing::info!(
                                     script_desc = %script_desc,
                                     "composed script execution cancelled"
@@ -5682,7 +5682,7 @@ async fn handle_ipc_inbound(
                                         &script_desc,
                                         now_ms(),
                                     );
-                                },
+                                }
                             }
 
                             subs.outcome_bus.publish(
@@ -5698,10 +5698,10 @@ async fn handle_ipc_inbound(
                             );
                             flush_outcome_bus(subs).await;
                         }
-                    }, // end BoundaryGateResult::Allow arm
+                    } // end BoundaryGateResult::Allow arm
                 } // end match boundary_result (Site 5: ComposedScript)
             } // end consent-allowed else branch (Site 4: DSL script)
-        },
+        }
 
         NeocortexToDaemon::Progress { percent, stage } => {
             tracing::debug!(
@@ -5709,7 +5709,7 @@ async fn handle_ipc_inbound(
                 stage = %stage,
                 "neocortex inference progress"
             );
-        },
+        }
 
         NeocortexToDaemon::Error { code, message } => {
             tracing::error!(
@@ -5724,11 +5724,11 @@ async fn handle_ipc_inbound(
                 &format!("code={}", code),
                 now_ms(),
             );
-        },
+        }
 
         NeocortexToDaemon::Pong { uptime_ms } => {
             tracing::debug!(uptime_ms, "neocortex pong");
-        },
+        }
 
         NeocortexToDaemon::MemoryWarning {
             used_mb,
@@ -5745,7 +5745,7 @@ async fn handle_ipc_inbound(
                     }
                 }
             }
-        },
+        }
 
         NeocortexToDaemon::TokenBudgetExhausted => {
             tracing::warn!("neocortex token budget exhausted");
@@ -5754,11 +5754,11 @@ async fn handle_ipc_inbound(
                 .token_counters
                 .cloud_tokens
                 .saturating_add(1);
-        },
+        }
 
         NeocortexToDaemon::Embedding { .. } => {
             tracing::debug!("embedding received, storing");
-        },
+        }
 
         NeocortexToDaemon::ReActDecision {
             done,
@@ -5806,13 +5806,13 @@ async fn handle_ipc_inbound(
                     }
                 }
             }
-        },
+        }
 
         NeocortexToDaemon::Summary { text, .. } => {
             tracing::debug!(len = text.len(), "neocortex summary received");
             subs.memory
                 .store_working(text, EventSource::Internal, 0.6, now_ms());
-        },
+        }
 
         NeocortexToDaemon::PlanScore { score } => {
             // Unsolicited PlanScore — the normal path handles this via
@@ -5821,7 +5821,7 @@ async fn handle_ipc_inbound(
                 score = score,
                 "unexpected unsolicited PlanScore on inbound channel — ignored"
             );
-        },
+        }
 
         NeocortexToDaemon::FailureClassification { category } => {
             // Unsolicited FailureClassification — same reasoning as PlanScore.
@@ -5829,7 +5829,7 @@ async fn handle_ipc_inbound(
                 category = %category,
                 "unexpected unsolicited FailureClassification on inbound channel — ignored"
             );
-        },
+        }
     }
 
     // Flush any outcomes published during IPC handling.
@@ -5908,7 +5908,7 @@ fn handle_health_event(event: DaemonEvent, subs: &mut LoopSubsystems) {
                     "MemoryPressure(warn) — memory elevated but not critical"
                 );
             }
-        },
+        }
 
         // ── Battery events ───────────────────────────────────────────────
         DaemonEvent::BatteryLow { pct } => {
@@ -5916,14 +5916,14 @@ fn handle_health_event(event: DaemonEvent, subs: &mut LoopSubsystems) {
             if let Some(ref mut proactive) = subs.proactive {
                 proactive.cap_budget(0.2);
             }
-        },
+        }
 
         DaemonEvent::BatteryCritical { pct } => {
             tracing::error!(pct, "BatteryCritical — zeroing initiative budget");
             if let Some(ref mut proactive) = subs.proactive {
                 proactive.cap_budget(0.0);
             }
-        },
+        }
 
         // ── Thermal ──────────────────────────────────────────────────────
         DaemonEvent::ThermalCritical => {
@@ -5935,7 +5935,7 @@ fn handle_health_event(event: DaemonEvent, subs: &mut LoopSubsystems) {
                 "ThermalCritical — device temperature critical; \
                  LLM inference pause NOT YET IMPLEMENTED (see TODO)"
             );
-        },
+        }
 
         // ── Heartbeat (informational — already logged by the loop) ───────
         DaemonEvent::Heartbeat(snapshot) => {
@@ -5945,15 +5945,15 @@ fn handle_health_event(event: DaemonEvent, subs: &mut LoopSubsystems) {
                 thermal_level = snapshot.thermal_level,
                 "heartbeat received"
             );
-        },
+        }
 
         // ── Lifecycle events (not emitted by heartbeat loop — log only) ──
         DaemonEvent::DaemonReady { version } => {
             tracing::info!(version, "DaemonReady event received");
-        },
+        }
         DaemonEvent::DaemonShutdown { reason } => {
             tracing::info!(reason, "DaemonShutdown event received");
-        },
+        }
     }
 }
 
@@ -5987,7 +5987,7 @@ fn handle_db_write(
                 "INSERT INTO telemetry (payload) VALUES (?1)",
                 rusqlite::params![payload],
             )?;
-        },
+        }
 
         DbWriteRequest::Episode {
             content,
@@ -6018,7 +6018,7 @@ fn handle_db_write(
                 "INSERT INTO episodes (content, importance) VALUES (?1, ?2)",
                 rusqlite::params![content, clamped_importance],
             )?;
-        },
+        }
 
         DbWriteRequest::AmygdalaBaseline { app, score } => {
             if app.trim().is_empty() {
@@ -6045,7 +6045,7 @@ fn handle_db_write(
                 "INSERT OR REPLACE INTO amygdala_baselines (app, score) VALUES (?1, ?2)",
                 rusqlite::params![app, clamped_score],
             )?;
-        },
+        }
 
         DbWriteRequest::RawSql { sql, params } => {
             let sql_upper = sql.trim().to_uppercase();
@@ -6070,7 +6070,7 @@ fn handle_db_write(
                 .collect();
 
             state.db.execute(&sql, param_refs.as_slice())?;
-        },
+        }
     }
 
     Ok(())
@@ -6345,21 +6345,21 @@ async fn cron_handle_health_report(
             Ok(aura_types::ipc::NeocortexToDaemon::Pong { .. }) => {
                 tracing::debug!("ping_neocortex: IPC ping successful — neocortex alive");
                 true
-            },
+            }
             Ok(unexpected) => {
                 tracing::warn!(
                     ?unexpected,
                     "ping_neocortex: unexpected response to Ping — treating as dead"
                 );
                 false
-            },
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     "ping_neocortex: IPC ping failed — treating neocortex as dead"
                 );
                 false
-            },
+            }
         };
         let report = subs.health_monitor.check_with_ping(ts, neocortex_alive);
         tracing::info!(
@@ -6451,7 +6451,7 @@ async fn cron_handle_health_report(
                         blocked_count
                     );
                 }
-            },
+            }
             HealthStatus::Degraded(ref _msg) => {
                 let trigger = ProactiveTrigger::HealthAlert {
                     metric: "system".to_string(),
@@ -6464,10 +6464,10 @@ async fn cron_handle_health_report(
                 if let Err(e) = subs.neocortex.send(&ipc_msg).await {
                     tracing::warn!(error = %e, "proactive: failed to dispatch HealthAlert Degraded");
                 }
-            },
+            }
             HealthStatus::Healthy => {
                 tracing::debug!("health status: Healthy — no alert needed");
-            },
+            }
         }
     }
 
@@ -6563,7 +6563,7 @@ async fn cron_handle_memory_compaction(
                                 relevance = relevance_score,
                                 "MemoryInsight proactive trigger dispatched"
                             );
-                        },
+                        }
                         Ok(Err(e)) => tracing::warn!(
                             error = %e,
                             "MemoryInsight: IPC send failed"
@@ -6689,7 +6689,7 @@ async fn cron_handle_proactive(
                             );
                             let msg = format!("[Suggestion] {}", suggestion.text);
                             send_response(&subs.response_tx, InputSource::Direct, msg).await;
-                        },
+                        }
                         ProactiveAction::Briefing(sections) => {
                             tracing::info!(
                                 sections = sections.len(),
@@ -6700,7 +6700,7 @@ async fn cron_handle_proactive(
                                 brief.push_str(&format!("• {}\n", section.key()));
                             }
                             send_response(&subs.response_tx, InputSource::Direct, brief).await;
-                        },
+                        }
                         ProactiveAction::RunAutomation {
                             routine_id,
                             actions: auto_actions,
@@ -6767,7 +6767,7 @@ async fn cron_handle_proactive(
                                             now_ms(),
                                         ));
                                         flush_outcome_bus(subs).await;
-                                    },
+                                    }
                                     BoundaryGateResult::Allow => {
                                         if let Err(policy_reason) =
                                             check_task_policy_gate(subs, &desc)
@@ -6823,7 +6823,7 @@ async fn cron_handle_proactive(
                                                     ),
                                                     react::TaskOutcome::CycleAborted { .. } => {
                                                         (OutcomeResult::Failure, 0, 0.0)
-                                                    },
+                                                    }
                                                 };
 
                                             match &outcome {
@@ -6832,7 +6832,7 @@ async fn cron_handle_proactive(
                                                         desc = %desc,
                                                         "proactive action execution succeeded"
                                                     )
-                                                },
+                                                }
                                                 react::TaskOutcome::Failed { reason, .. } => {
                                                     tracing::warn!(
                                                         desc = %desc,
@@ -6845,13 +6845,13 @@ async fn cron_handle_proactive(
                                                         &desc,
                                                         now_ms(),
                                                     );
-                                                },
+                                                }
                                                 react::TaskOutcome::Cancelled { .. } => {
                                                     tracing::info!(
                                                         desc = %desc,
                                                         "proactive action execution cancelled"
                                                     )
-                                                },
+                                                }
                                                 react::TaskOutcome::CycleAborted {
                                                     cycle_reason,
                                                     ..
@@ -6867,7 +6867,7 @@ async fn cron_handle_proactive(
                                                         &desc,
                                                         now_ms(),
                                                     );
-                                                },
+                                                }
                                             }
 
                                             subs.outcome_bus.publish(
@@ -6883,10 +6883,10 @@ async fn cron_handle_proactive(
                                             );
                                             flush_outcome_bus(subs).await;
                                         }
-                                    },
+                                    }
                                 }
                             }
-                        },
+                        }
                         ProactiveAction::Alert {
                             domain,
                             message,
@@ -6896,13 +6896,13 @@ async fn cron_handle_proactive(
                             let msg =
                                 format!("[Alert — {} (urgency {})] {}", domain, urgency, message);
                             send_response(&subs.response_tx, InputSource::Direct, msg).await;
-                        },
+                        }
                     }
                 }
-            },
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "ProactiveEngine tick failed");
-            },
+            }
         }
     } else {
         tracing::debug!("proactive engine not available — skipping tick");
@@ -6939,15 +6939,15 @@ async fn cron_handle_dreaming(
 
     // ── Guard 2: charging ────────────────────────────────────────────────────
     match crate::platform::jni_bridge::jni_is_charging() {
-        Ok(true) => {}, // continue
+        Ok(true) => {} // continue
         Ok(false) => {
             tracing::debug!("dreaming skipped — device not charging");
             return Ok(());
-        },
+        }
         Err(e) => {
             tracing::debug!(error = %e, "dreaming skipped — could not determine charge state");
             return Ok(());
-        },
+        }
     }
 
     // ── Guard 3: battery ≥ 30% ───────────────────────────────────────────────
@@ -6968,18 +6968,18 @@ async fn cron_handle_dreaming(
                 "dreaming skipped — thermal too high (> 45°C)"
             );
             return Ok(());
-        },
+        }
         Ok(temp_c) if temp_c >= 35.0 => {
             tracing::debug!(
                 temp_c = temp_c,
                 "dreaming downgraded to Light — thermal warm (35–45°C)"
             );
             ConsolidationLevel::Light
-        },
+        }
         Ok(_) => {
             tracing::debug!("dreaming at Deep level — thermal nominal (< 35°C)");
             ConsolidationLevel::Deep
-        },
+        }
         Err(e) => {
             // Cannot determine thermal state — play it safe with Light level.
             tracing::debug!(
@@ -6987,7 +6987,7 @@ async fn cron_handle_dreaming(
                 "thermal probe failed — defaulting to Light consolidation"
             );
             ConsolidationLevel::Light
-        },
+        }
     };
 
     // ── Guard 5: user idle ≥ 30 minutes ──────────────────────────────────────
@@ -7068,12 +7068,12 @@ async fn cron_handle_dreaming(
                 count = events.len(),
                 "dreaming: drained episodic retrieval feedback"
             );
-        },
+        }
         Err(_) => {
             tracing::error!(
                 "dreaming: episodic feedback buffer lock poisoned — skipping weight adjustment"
             );
-        },
+        }
     }
 
     // Semantic feedback
@@ -7096,12 +7096,12 @@ async fn cron_handle_dreaming(
                 count = events.len(),
                 "dreaming: drained semantic retrieval feedback"
             );
-        },
+        }
         Err(_) => {
             tracing::error!(
                 "dreaming: semantic feedback buffer lock poisoned — skipping weight adjustment"
             );
-        },
+        }
     }
 
     // Persist updated weights to checkpoint so they survive restarts.
@@ -7124,7 +7124,7 @@ async fn cron_handle_dreaming(
             Ok(Ok(())) => tracing::debug!("dreaming: checkpoint saved after weight update"),
             Ok(Err(e)) => {
                 tracing::error!(error = %e, "dreaming: checkpoint save failed after weight update — weights will be recalculated next session")
-            },
+            }
             Err(e) => tracing::error!(error = %e, "dreaming: checkpoint save task panicked"),
         }
     } else {
@@ -7248,7 +7248,7 @@ async fn cron_handle_health_score(
                     tracing::error!(error = %e, "arc state store update failed for health domain — non-fatal");
                 }
                 tracing::info!(health_score = score, "health domain score updated");
-            },
+            }
             Err(e) => tracing::warn!(error = %e, "health score computation failed"),
         }
     } else {
@@ -7409,7 +7409,7 @@ async fn cron_handle_birthday(
                     )
                     .await;
                 }
-            },
+            }
             Err(e) => tracing::warn!(error = %e, "birthday scan failed"),
         }
     } else {
@@ -7438,7 +7438,7 @@ async fn cron_handle_social_score(
                     tracing::error!(error = %e, "arc state store update failed for social domain — non-fatal");
                 }
                 tracing::info!(social_score = score, "social domain score updated");
-            },
+            }
             Err(e) => tracing::warn!(error = %e, "social score computation failed"),
         }
     } else {
@@ -7585,7 +7585,7 @@ async fn cron_handle_trigger_rules(
                         );
                     }
                 }
-            },
+            }
             Err(e) => tracing::warn!(error = %e, "trigger rule evaluation failed"),
         }
     } else {
@@ -7614,7 +7614,7 @@ async fn cron_handle_patterns(
                             "opportunity detection produced new actions"
                         );
                     }
-                },
+                }
                 Err(e) => tracing::warn!(error = %e, "opportunity detection failed"),
             }
         } else {
@@ -7998,18 +7998,18 @@ async fn cron_handle_bdi_deliberation(
                                 }
                                 state.checkpoint.goals.push(sub.goal.clone());
                             }
-                        },
+                        }
                         Err(e) => {
                             tracing::warn!(
                                 goal_id = intention_id,
                                 error = %e,
                                 "BDI: goal decomposition failed"
                             );
-                        },
+                        }
                     }
                 }
             }
-        },
+        }
         DeliberationResult::Reconsider {
             drop_intentions,
             reason,
@@ -8027,10 +8027,10 @@ async fn cron_handle_bdi_deliberation(
                     goal.status = aura_types::goals::GoalStatus::Cancelled;
                 }
             }
-        },
+        }
         DeliberationResult::Maintain => {
             tracing::trace!("BDI deliberation: maintain current intentions");
-        },
+        }
     }
 
     // ── Conflict detection ──────────────────────────────────────────────────

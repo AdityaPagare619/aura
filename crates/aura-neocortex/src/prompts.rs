@@ -325,26 +325,26 @@ fn identity_section(mode: InferenceMode) -> &'static str {
             "\
 You are AURA's Planner module -- an autonomous Android assistant that creates \
 step-by-step action plans to accomplish the user's goal."
-        },
+        }
 
         InferenceMode::Strategist => {
             "\
 You are AURA's Strategist module -- you analyse why a previous plan failed and \
 propose an alternative approach."
-        },
+        }
 
         InferenceMode::Composer => {
             "\
 You are AURA's Composer module -- you translate high-level plan steps into \
 precise DSL action scripts that the execution engine can run."
-        },
+        }
 
         InferenceMode::Conversational => {
             "\
 You are AURA -- an autonomous Android assistant that lives on the user's \
 phone and can control it. You hold conversations with the user and help \
 them with their goals."
-        },
+        }
     }
 }
 
@@ -705,24 +705,24 @@ fn context_section(mode: InferenceMode, slots: &PromptSlots) -> String {
             sections.push(format!("- Screen: {}", guarded_screen));
             sections.push(format!("- Recent history: {}", slots.history));
             sections.push(format!("- Memory: {}", slots.memory));
-        },
+        }
         InferenceMode::Strategist => {
             sections.push(format!("- Original goal: {}", slots.goal));
             sections.push(format!("- Failure info: {}", slots.failure_info));
             sections.push(format!("- Current screen: {}", guarded_screen));
-        },
+        }
         InferenceMode::Composer => {
             sections.push(format!("- Template / plan step: {}", slots.template));
             sections.push(format!("- Screen: {}", guarded_screen));
             sections.push(format!("- Goal: {}", slots.goal));
             sections.push(format!("- Recent history: {}", slots.history));
-        },
+        }
         InferenceMode::Conversational => {
             sections.push(format!("- Screen: {}", guarded_screen));
             sections.push(format!("- Recent conversation: {}", slots.history));
             sections.push(format!("- Memory: {}", slots.memory));
             sections.push(format!("- User message: {}", slots.user_message));
-        },
+        }
     }
 
     format!("CONTEXT:\n{}", sections.join("\n"))
@@ -980,19 +980,19 @@ pub fn build_bon_prompt(
 PERSPECTIVE: Conservative approach.
 Prioritize safety and reliability. Choose the most straightforward path. \
 Prefer well-known UI patterns and established navigation paths."
-        },
+        }
         1 => {
             "\
 PERSPECTIVE: Balanced approach.
 Consider both efficiency and reliability. Take the most natural path a \
 typical user would follow."
-        },
+        }
         _ => {
             "\
 PERSPECTIVE: Creative approach.
 Consider alternative paths and shortcuts. Think about what an expert user \
 would do. Try less obvious but potentially more efficient routes."
-        },
+        }
     };
 
     // Build the base prompt
@@ -1020,7 +1020,7 @@ pub fn build_dgs_prompt(mode: InferenceMode, slots: &PromptSlots) -> (String, Mo
         None => {
             // Fallback to regular prompt if no template
             return build_prompt(mode, slots);
-        },
+        }
     };
 
     let mut sections: Vec<String> = Vec::with_capacity(11);
@@ -1165,14 +1165,14 @@ pub fn build_self_contrast_prompt(
 PERSPECTIVE: User Goal Priority.
 Focus entirely on accomplishing the user's stated goal in the most direct \
 and efficient way possible. Assume the user knows what they want."
-        },
+        }
         SelfContrastPerspective::SystemSafety => {
             "\
 PERSPECTIVE: System Safety Priority.
 Focus on safety, reversibility, and minimizing risk. Flag any actions that \
 modify data, send messages, make purchases, or change system settings. \
 Prefer cautious approaches over efficient ones."
-        },
+        }
     };
 
     let (base_prompt, config) = build_prompt(mode, slots);

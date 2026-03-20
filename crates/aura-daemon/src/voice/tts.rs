@@ -412,10 +412,10 @@ impl TextToSpeech {
                         sample_rate: piper.sample_rate,
                         engine: TtsEngine::Piper,
                     });
-                },
+                }
                 Err(e) => {
                     tts_warn!("Piper TTS failed, falling back to eSpeak: {e}");
-                },
+                }
             }
         }
 

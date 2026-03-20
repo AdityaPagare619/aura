@@ -266,7 +266,7 @@ mod tests {
                 assert!(html.contains("AURA Status Dashboard"));
                 assert!(html.contains("Uptime"));
                 assert!(html.contains("unlocked"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -282,7 +282,7 @@ mod tests {
         match handle_health(&ctx).unwrap() {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("healthy"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -309,7 +309,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("AURA Daemon"));
                 assert!(html.contains("Version"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }

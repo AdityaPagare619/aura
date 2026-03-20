@@ -188,7 +188,7 @@ impl CounterSet {
             Some(c) => {
                 c.increment();
                 Ok(())
-            },
+            }
             None => Err(CounterError::NotFound(name.to_string())),
         }
     }
@@ -202,7 +202,7 @@ impl CounterSet {
             Some(c) => {
                 c.increment_by(delta);
                 Ok(())
-            },
+            }
             None => Err(CounterError::NotFound(name.to_string())),
         }
     }
@@ -264,7 +264,7 @@ impl fmt::Display for CounterError {
             CounterError::NotFound(n) => write!(f, "counter not found: {n}"),
             CounterError::CapacityExceeded { max } => {
                 write!(f, "counter capacity exceeded: max {max}")
-            },
+            }
             CounterError::AlreadyExists(n) => write!(f, "counter already exists: {n}"),
         }
     }

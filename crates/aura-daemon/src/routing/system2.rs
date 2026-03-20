@@ -36,7 +36,7 @@ impl fmt::Display for RoutingError {
         match self {
             Self::PendingCapacityExceeded { current, max } => {
                 write!(f, "pending request capacity exceeded: {current} / {max}")
-            },
+            }
         }
     }
 }
@@ -287,7 +287,7 @@ mod tests {
         let cancel_msg = s2.cancel_request(r.request_id);
         assert!(cancel_msg.is_some());
         match cancel_msg.expect("just checked is_some") {
-            DaemonToNeocortex::Cancel => { /* correct */ },
+            DaemonToNeocortex::Cancel => { /* correct */ }
             other => panic!("expected Cancel, got {:?}", other),
         }
         assert_eq!(s2.pending_count(), 0);
@@ -309,7 +309,7 @@ mod tests {
                     context.conversation_history[0].content,
                     "what is the weather"
                 );
-            },
+            }
             other => panic!("expected Converse, got {:?}", other),
         }
     }
@@ -329,7 +329,7 @@ mod tests {
             DaemonToNeocortex::Plan { context, failure } => {
                 assert_eq!(context.inference_mode, InferenceMode::Planner);
                 assert!(failure.is_none());
-            },
+            }
             other => panic!("expected Plan, got {:?}", other),
         }
     }

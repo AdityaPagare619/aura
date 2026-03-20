@@ -172,7 +172,7 @@ where
     let mut last_error = match operation(0) {
         Ok(value) => {
             return RetryOutcome::Success { value, attempt: 1 };
-        },
+        }
         Err(e) => e,
     };
 
@@ -188,10 +188,10 @@ where
                     value,
                     attempt: attempt + 1,
                 };
-            },
+            }
             Err(e) => {
                 last_error = e;
-            },
+            }
         }
     }
 
@@ -222,7 +222,7 @@ where
     let mut last_error = match operation(0).await {
         Ok(value) => {
             return RetryOutcome::Success { value, attempt: 1 };
-        },
+        }
         Err(e) => e,
     };
 
@@ -238,10 +238,10 @@ where
                     value,
                     attempt: attempt + 1,
                 };
-            },
+            }
             Err(e) => {
                 last_error = e;
-            },
+            }
         }
     }
 
@@ -406,7 +406,7 @@ impl FailureLedger {
             Some(entries) => {
                 let unrecovered = entries.iter().filter(|r| !r.recovered).count();
                 unrecovered as f32 / entries.len() as f32
-            },
+            }
         }
     }
 
@@ -588,7 +588,7 @@ impl CircuitBreaker {
                 } else {
                     false
                 }
-            },
+            }
             CircuitState::HalfOpen => true,
         }
     }
@@ -598,7 +598,7 @@ impl CircuitBreaker {
         match self.state {
             CircuitState::Closed => {
                 self.failure_count = 0;
-            },
+            }
             CircuitState::HalfOpen => {
                 self.half_open_successes += 1;
                 if self.half_open_successes >= self.half_open_threshold {
@@ -606,10 +606,10 @@ impl CircuitBreaker {
                     self.failure_count = 0;
                     info!("circuit breaker: HalfOpen → Closed (recovered)");
                 }
-            },
+            }
             CircuitState::Open => {
                 // Should not happen, but handle gracefully
-            },
+            }
         }
     }
 
@@ -632,18 +632,18 @@ impl CircuitBreaker {
                         "circuit breaker: Closed → Open"
                     );
                 }
-            },
+            }
             CircuitState::HalfOpen => {
                 // Any failure in HalfOpen → back to Open
                 self.state = CircuitState::Open;
                 self.opened_at_ms = now_ms;
                 self.half_open_successes = 0;
                 warn!("circuit breaker: HalfOpen → Open (failed during recovery)");
-            },
+            }
             CircuitState::Open => {
                 // Already open, update timestamp
                 self.opened_at_ms = now_ms;
-            },
+            }
         }
     }
 
@@ -791,7 +791,7 @@ impl IntelligentRetry {
                 RetryStrategy::Abort {
                     reason: format!("structural error, no alternatives: {error}"),
                 }
-            },
+            }
             ErrorClass::Transient => {
                 // Check if circuit is now open
                 if breaker.state() == CircuitState::Open {
@@ -800,7 +800,7 @@ impl IntelligentRetry {
                     };
                 }
                 RetryStrategy::RetryWithBackoff
-            },
+            }
         }
     }
 
@@ -1111,31 +1111,31 @@ impl RecoveryAction {
         match self {
             RecoveryAction::RetryWithBackoff { policy } => {
                 format!("retry(max={})", policy.max_retries)
-            },
+            }
             RecoveryAction::Replan { reason, .. } => {
                 format!("replan: {reason}")
-            },
+            }
             RecoveryAction::RestartEnvironment { target, wait_ms } => {
                 format!("restart({target}, wait={wait_ms}ms)")
-            },
+            }
             RecoveryAction::NotifyUser { severity, message } => {
                 format!("notify[{severity}]: {message}")
-            },
+            }
             RecoveryAction::HaltAndLog { category, reason } => {
                 format!("HALT[{category}]: {reason}")
-            },
+            }
             RecoveryAction::EscalateToStrategic {
                 from_category,
                 context,
             } => {
                 format!("escalate({from_category} → Strategic): {context}")
-            },
+            }
             RecoveryAction::TryAlternative {
                 alternative,
                 reason,
             } => {
                 format!("alternative({alternative}): {reason}")
-            },
+            }
         }
     }
 }
@@ -1417,7 +1417,7 @@ impl StrategicRecovery {
                     Err(e) => {
                         warn!(error = %e, "classify_failure_via_llm: connect failed");
                         return None;
-                    },
+                    }
                 };
 
                 // Provide a compact env summary as context for the LLM.
@@ -1449,26 +1449,26 @@ impl StrategicRecovery {
                             other => {
                                 warn!(label = other, "classify_failure_via_llm: unknown label");
                                 return None;
-                            },
+                            }
                         };
                         debug!(category = ?fc, "classify_failure_via_llm: LLM classified failure");
                         Some(fc)
-                    },
+                    }
                     Ok(Ok(other)) => {
                         warn!(
                             resp = ?std::mem::discriminant(&other),
                             "classify_failure_via_llm: unexpected IPC response"
                         );
                         None
-                    },
+                    }
                     Ok(Err(e)) => {
                         warn!(error = %e, "classify_failure_via_llm: request error");
                         None
-                    },
+                    }
                     Err(_elapsed) => {
                         warn!("classify_failure_via_llm: 5-second timeout");
                         None
-                    },
+                    }
                 }
             })
         })
@@ -1516,7 +1516,7 @@ impl StrategicRecovery {
                         ),
                     }
                 }
-            },
+            }
 
             FailureCategory::Strategic => {
                 if self.should_escalate(&ctx.operation) {
@@ -1554,7 +1554,7 @@ impl StrategicRecovery {
                         ),
                     }
                 }
-            },
+            }
 
             FailureCategory::Environmental => {
                 let env = &ctx.environment_state;
@@ -1604,7 +1604,7 @@ impl StrategicRecovery {
                     ),
                     severity: RecoverySeverity::Warning,
                 }
-            },
+            }
 
             FailureCategory::Capability => {
                 info!(
@@ -1618,7 +1618,7 @@ impl StrategicRecovery {
                     ),
                     severity: RecoverySeverity::Error,
                 }
-            },
+            }
 
             FailureCategory::Safety => {
                 warn!(
@@ -1630,7 +1630,7 @@ impl StrategicRecovery {
                     reason: format!("safety halt for '{}': {}", ctx.operation, ctx.last_error),
                     category: FailureCategory::Safety,
                 }
-            },
+            }
         }
     }
 
@@ -1822,7 +1822,7 @@ mod tests {
             RetryOutcome::Success { value, attempt } => {
                 assert_eq!(value, 42);
                 assert_eq!(attempt, 1);
-            },
+            }
             _ => panic!("expected success"),
         }
     }
@@ -1850,7 +1850,7 @@ mod tests {
             RetryOutcome::Success { value, attempt } => {
                 assert_eq!(value, 99);
                 assert_eq!(attempt, 2);
-            },
+            }
             _ => panic!("expected success"),
         }
     }
@@ -1870,7 +1870,7 @@ mod tests {
             RetryOutcome::Exhausted { error, attempts } => {
                 assert_eq!(error, "always fails");
                 assert_eq!(attempts, 3); // 1 initial + 2 retries
-            },
+            }
             _ => panic!("expected exhausted"),
         }
     }
@@ -2217,7 +2217,7 @@ mod tests {
         match strategy {
             RetryStrategy::Abort { reason } => {
                 assert!(reason.contains("no alternatives"));
-            },
+            }
             _ => panic!("expected abort, got {strategy:?}"),
         }
     }
@@ -2237,7 +2237,7 @@ mod tests {
         match strategy {
             RetryStrategy::Abort { reason } => {
                 assert!(reason.contains("fatal"));
-            },
+            }
             _ => panic!("expected abort"),
         }
     }
@@ -2594,7 +2594,7 @@ mod tests {
             default_env(),
         );
         match sr.determine_recovery(&ctx) {
-            RecoveryAction::RetryWithBackoff { .. } => {},
+            RecoveryAction::RetryWithBackoff { .. } => {}
             other => panic!("expected RetryWithBackoff, got {}", other.summary()),
         }
     }
@@ -2612,7 +2612,7 @@ mod tests {
         match sr.determine_recovery(&ctx) {
             RecoveryAction::EscalateToStrategic { from_category, .. } => {
                 assert_eq!(from_category, FailureCategory::Transient);
-            },
+            }
             other => panic!("expected EscalateToStrategic, got {}", other.summary()),
         }
     }
@@ -2631,7 +2631,7 @@ mod tests {
             RecoveryAction::Replan { reason, context } => {
                 assert!(reason.contains("click_button"));
                 assert!(context.contains("element missing"));
-            },
+            }
             other => panic!("expected Replan, got {}", other.summary()),
         }
     }
@@ -2659,7 +2659,7 @@ mod tests {
         match sr.determine_recovery(&ctx) {
             RecoveryAction::NotifyUser { severity, .. } => {
                 assert_eq!(severity, RecoverySeverity::Error);
-            },
+            }
             other => panic!("expected NotifyUser, got {}", other.summary()),
         }
     }
@@ -2682,7 +2682,7 @@ mod tests {
             RecoveryAction::NotifyUser { severity, message } => {
                 assert_eq!(severity, RecoverySeverity::Critical);
                 assert!(message.contains("Battery"));
-            },
+            }
             other => panic!("expected NotifyUser(Critical), got {}", other.summary()),
         }
     }
@@ -2705,7 +2705,7 @@ mod tests {
             RecoveryAction::NotifyUser { severity, message } => {
                 assert_eq!(severity, RecoverySeverity::Warning);
                 assert!(message.contains("internet"));
-            },
+            }
             other => panic!("expected NotifyUser(Warning), got {}", other.summary()),
         }
     }
@@ -2727,7 +2727,7 @@ mod tests {
         match sr.determine_recovery(&ctx) {
             RecoveryAction::RestartEnvironment { wait_ms, .. } => {
                 assert_eq!(wait_ms, DEFAULT_RESTART_WAIT_MS);
-            },
+            }
             other => panic!("expected RestartEnvironment, got {}", other.summary()),
         }
     }
@@ -2747,7 +2747,7 @@ mod tests {
                 assert_eq!(severity, RecoverySeverity::Error);
                 assert!(message.contains("use_camera"));
                 assert!(message.contains("hardware not available"));
-            },
+            }
             other => panic!("expected NotifyUser, got {}", other.summary()),
         }
     }
@@ -2766,7 +2766,7 @@ mod tests {
             RecoveryAction::HaltAndLog { category, reason } => {
                 assert_eq!(category, FailureCategory::Safety);
                 assert!(reason.contains("send_message"));
-            },
+            }
             other => panic!("expected HaltAndLog, got {}", other.summary()),
         }
     }
@@ -2960,7 +2960,7 @@ mod tests {
             );
             let action = sr.determine_recovery(&ctx);
             match &action {
-                RecoveryAction::RetryWithBackoff { .. } => {},
+                RecoveryAction::RetryWithBackoff { .. } => {}
                 other => panic!("attempt {attempt}: expected retry, got {}", other.summary()),
             }
             sr.record_recovery_outcome("fetch_data", &action, false, attempt as u64 * 1000);
@@ -2976,7 +2976,7 @@ mod tests {
         );
         let action = sr.determine_recovery(&ctx);
         match &action {
-            RecoveryAction::EscalateToStrategic { .. } => {},
+            RecoveryAction::EscalateToStrategic { .. } => {}
             other => panic!("expected escalation, got {}", other.summary()),
         }
 
@@ -2990,7 +2990,7 @@ mod tests {
         );
         let action = sr.determine_recovery(&ctx);
         match &action {
-            RecoveryAction::Replan { .. } => {},
+            RecoveryAction::Replan { .. } => {}
             other => panic!("expected replan, got {}", other.summary()),
         }
 

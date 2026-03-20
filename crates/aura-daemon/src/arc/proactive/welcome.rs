@@ -493,7 +493,7 @@ fn daily_tip_content(index: usize, personality: &OceanTraits) -> (&'static str, 
                 "daily_tip_0_neutral"
             };
             (greeting, "daily_tip_0_tip")
-        },
+        }
         1 => {
             let greeting = if direct {
                 "daily_tip_1_direct"
@@ -501,7 +501,7 @@ fn daily_tip_content(index: usize, personality: &OceanTraits) -> (&'static str, 
                 "daily_tip_1_friendly"
             };
             (greeting, "daily_tip_1_tip")
-        },
+        }
         2 => ("daily_tip_2", "daily_tip_2_tip"),
         3 => ("daily_tip_3", "daily_tip_3_tip"),
         4 => ("daily_tip_4", "daily_tip_4_tip"),
@@ -512,7 +512,7 @@ fn daily_tip_content(index: usize, personality: &OceanTraits) -> (&'static str, 
                 "daily_tip_5_neutral"
             };
             (greeting, "daily_tip_5_tip")
-        },
+        }
         6 => ("daily_tip_6", "daily_tip_6_tip"),
         _ => ("daily_tip_default", "daily_tip_default_tip"),
     }
@@ -533,7 +533,7 @@ fn weekly_highlight_content(
                 "weekly_0_calm"
             };
             (greeting, "weekly_0_tip")
-        },
+        }
         1 => ("weekly_1", "weekly_1_tip"),
         2 => ("weekly_2", "weekly_2_tip"),
         _ => ("weekly_default", "weekly_default_tip"),
@@ -554,7 +554,7 @@ fn milestone_message(days: u32, personality: &OceanTraits) -> &'static str {
             } else {
                 "milestone_30d_neutral"
             }
-        },
+        }
         60 => "milestone_60d",
         90 => "milestone_90d",
         180 => {
@@ -563,7 +563,7 @@ fn milestone_message(days: u32, personality: &OceanTraits) -> &'static str {
             } else {
                 "milestone_180d_neutral"
             }
-        },
+        }
         365 => "milestone_365d",
         _ => "milestone_generic",
     }

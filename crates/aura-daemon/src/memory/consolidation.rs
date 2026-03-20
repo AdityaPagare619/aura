@@ -263,11 +263,11 @@ pub async fn consolidate(
     match level {
         ConsolidationLevel::Micro => {
             run_micro(working, now_ms, &mut report);
-        },
+        }
         ConsolidationLevel::Light => {
             run_micro(working, now_ms, &mut report);
             run_light(working, episodic, semantic, patterns, now_ms, &mut report).await;
-        },
+        }
         ConsolidationLevel::Deep => {
             run_micro(working, now_ms, &mut report);
             run_light(working, episodic, semantic, patterns, now_ms, &mut report).await;
@@ -281,10 +281,10 @@ pub async fn consolidate(
                 &mut report,
             )
             .await;
-        },
+        }
         ConsolidationLevel::Emergency => {
             run_emergency(working, episodic, archive, now_ms, &mut report).await;
-        },
+        }
     }
 
     report.duration_ms = start.elapsed().as_millis() as u64;
@@ -370,10 +370,10 @@ async fn run_light(
                     } else {
                         report.patterns_recorded += 1;
                     }
-                },
+                }
                 Err(e) => {
                     report.push_error(format!("promote slot {} failed: {}", idx, e));
-                },
+                }
             }
         }
     }
@@ -412,11 +412,11 @@ async fn run_light(
                         report.patterns_recorded += 1;
                     }
                 }
-            },
+            }
             Err(e) => {
                 report.push_error(format!("semantic concept search failed: {}", e));
-            },
-            _ => {}, // No match — nothing to reinforce
+            }
+            _ => {} // No match — nothing to reinforce
         }
     }
 }
@@ -505,13 +505,13 @@ async fn run_emergency(
                 {
                     Ok(_) => {
                         archived_ids.push(episode.id);
-                    },
+                    }
                     Err(e) => {
                         report.push_error(format!(
                             "emergency archive ep {} failed: {}",
                             episode.id, e
                         ));
-                    },
+                    }
                 }
             }
 
@@ -520,16 +520,16 @@ async fn run_emergency(
                     Ok(deleted) => {
                         report.episodes_archived += deleted;
                         report.bytes_freed += total_content_bytes;
-                    },
+                    }
                     Err(e) => {
                         report.push_error(format!("emergency delete episodes failed: {}", e));
-                    },
+                    }
                 }
             }
-        },
+        }
         Err(e) => {
             report.push_error(format!("emergency archival candidates failed: {}", e));
-        },
+        }
     }
 
     info!(
@@ -761,7 +761,7 @@ async fn run_generalization(
         Err(e) => {
             report.push_error(format!("episode fetch for clustering failed: {}", e));
             return;
-        },
+        }
     };
 
     if episodes.len() < MIN_CLUSTER_SIZE {
@@ -819,12 +819,12 @@ async fn run_generalization(
                 semantic
                     .try_generalize_with_llm(&episode_data, &concept_hint, now_ms, nc)
                     .await
-            },
+            }
             None => {
                 semantic
                     .try_generalize(&episode_data, &concept_hint, now_ms)
                     .await
-            },
+            }
         };
 
         match generalize_result {
@@ -849,20 +849,20 @@ async fn run_generalization(
                 } else {
                     report.patterns_recorded += 1;
                 }
-            },
+            }
             Ok(None) => {
                 // Rejected — episodes not similar enough to each other
                 debug!(
                     "deep: generalization rejected for cluster (concept: {})",
                     concept_hint
                 );
-            },
+            }
             Err(e) => {
                 report.push_error(format!(
                     "generalization failed for '{}': {}",
                     concept_hint, e
                 ));
-            },
+            }
         }
     }
 }
@@ -914,10 +914,10 @@ async fn run_archival(
                             "deep: archived episode {} -> archive blob {}",
                             episode.id, archive_id
                         );
-                    },
+                    }
                     Err(e) => {
                         report.push_error(format!("archive episode {} failed: {}", episode.id, e));
-                    },
+                    }
                 }
             }
 
@@ -926,16 +926,16 @@ async fn run_archival(
                 match episodic.delete_episodes(&archived_ids).await {
                     Ok(deleted) => {
                         report.episodes_archived += deleted;
-                    },
+                    }
                     Err(e) => {
                         report.push_error(format!("delete archived episodes failed: {}", e));
-                    },
+                    }
                 }
             }
-        },
+        }
         Err(e) => {
             report.push_error(format!("get archival candidates failed: {}", e));
-        },
+        }
     }
 }
 

@@ -246,7 +246,7 @@ mod tests {
                 // Must NOT contain misleading "Processing" or "Thinking"
                 assert!(!html.contains("Processing via Neocortex"));
                 assert!(!html.contains("Thinking about"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -264,7 +264,7 @@ mod tests {
                 assert!(html.contains("Cognitive Engine Unavailable"));
                 assert!(html.contains("halting problem"));
                 assert!(html.contains("not"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -282,7 +282,7 @@ mod tests {
                 assert!(html.contains("Cognitive Engine Unavailable"));
                 assert!(html.contains("es"));
                 assert!(html.contains("hello world"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }

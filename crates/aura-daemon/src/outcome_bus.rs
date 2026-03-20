@@ -188,19 +188,19 @@ impl OutcomeBus {
             match outcome.result {
                 OutcomeResult::Success => {
                     self.recent_successes = self.recent_successes.saturating_add(1);
-                },
+                }
                 OutcomeResult::Failure | OutcomeResult::PartialSuccess => {
                     self.recent_failures = self.recent_failures.saturating_add(1);
-                },
+                }
                 OutcomeResult::UserCancelled => {
                     // Cancellations don't count as success or failure.
-                },
+                }
                 OutcomeResult::PolicyBlocked => {
                     self.recent_failures = self.recent_failures.saturating_add(1);
-                },
+                }
                 OutcomeResult::Timeout => {
                     self.recent_failures = self.recent_failures.saturating_add(1);
-                },
+                }
             }
 
             // Capture capability summary for GoalRegistry wiring.
@@ -405,14 +405,14 @@ async fn dispatch_to_memory(memory: &AuraMemory, outcome: &ExecutionOutcome, now
     {
         Ok(episode_id) => {
             debug!(episode_id, intent = %outcome.intent, "episodic memory stored");
-        },
+        }
         Err(e) => {
             warn!(
                 intent = %outcome.intent,
                 error = %e,
                 "failed to store episodic memory for outcome"
             );
-        },
+        }
     }
 }
 

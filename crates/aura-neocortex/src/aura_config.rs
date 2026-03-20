@@ -142,14 +142,14 @@ impl NeocortexRuntimeConfig {
                 let mut config = Self::from_raw(raw);
                 config.config_source = ConfigSource::File(config_path.to_path_buf());
                 Ok(config)
-            },
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 warn!(
                     path = %config_path.display(),
                     "aura.config.toml not found — using defaults and auto-scan"
                 );
                 Ok(Self::with_auto_scan())
-            },
+            }
             Err(e) => {
                 warn!(
                     path = %config_path.display(),
@@ -157,7 +157,7 @@ impl NeocortexRuntimeConfig {
                     "could not read aura.config.toml — using defaults"
                 );
                 Ok(Self::with_auto_scan())
-            },
+            }
         }
     }
 
@@ -255,7 +255,7 @@ fn auto_scan_for_model() -> Option<PathBuf> {
             Err(e) => {
                 warn!(dir = dir_str, error = %e, "cannot read auto-scan dir");
                 continue;
-            },
+            }
         };
 
         for entry in read_dir.flatten() {

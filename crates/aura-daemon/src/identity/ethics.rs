@@ -169,7 +169,7 @@ impl PolicyGate {
                 PolicyVerdict::Block {
                     reason: format!("{} (escalated: trust={:.2})", reason, t),
                 }
-            },
+            }
             // Medium/high trust (ACQUAINTANCE, FRIEND, CLOSEFRIEND, SOULMATE): no change
             // Audit verdicts stand as-is — trust NEVER bypasses ethics
             _ => base_verdict,
@@ -501,7 +501,7 @@ impl TruthFramework {
                             domain_name
                         ));
                     }
-                },
+                }
                 super::epistemic::EpistemicLevel::Uncertain => {
                     // AURA doesn't know but COULD find out
                     let has_hedge = lower.contains("i could check")
@@ -514,7 +514,7 @@ impl TruthFramework {
                             domain_name
                         ));
                     }
-                },
+                }
                 super::epistemic::EpistemicLevel::Probable => {
                     // AURA has some evidence but not strong — mild penalty
                     // without hedge language
@@ -528,10 +528,10 @@ impl TruthFramework {
                             domain_name
                         ));
                     }
-                },
+                }
                 super::epistemic::EpistemicLevel::Certain => {
                     // Full confidence — no penalty needed
-                },
+                }
             }
         }
 

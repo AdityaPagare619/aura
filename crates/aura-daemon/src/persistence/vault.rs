@@ -388,7 +388,7 @@ impl std::fmt::Display for VaultError {
             Self::VaultFull => write!(f, "vault is full ({MAX_VAULT_ENTRIES} entries)"),
             Self::TierMismatch { expected, got } => {
                 write!(f, "tier mismatch: expected {expected}, got {got}")
-            },
+            }
             Self::EncryptionFailed(msg) => write!(f, "encryption failed: {msg}"),
             Self::DecryptionFailed(msg) => write!(f, "decryption failed: {msg}"),
             Self::HashFailed(msg) => write!(f, "hash operation failed: {msg}"),
@@ -1171,7 +1171,7 @@ impl CriticalVault {
                     return Err(VaultError::EncryptionFailed(
                         "vault encryption key not configured".into(),
                     ));
-                },
+                }
             }
         } else {
             // Tier 0 (Ephemeral): RAM-only, no encryption needed.
@@ -1368,14 +1368,14 @@ impl CriticalVault {
         };
 
         let mut old_key = match &self.encryption_key {
-            Some(sk) => sk.as_bytes().clone(),
+            Some(sk) => *sk.as_bytes(),
             None => {
                 tracing::warn!(
                     target: "VAULT",
                     "cryptographic key erasure skipped: no encryption key"
                 );
                 return Ok(());
-            },
+            }
         };
 
         let mut new_salt = [0u8; 16];

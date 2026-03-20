@@ -50,7 +50,7 @@ impl std::fmt::Display for LoaderError {
             Self::ManifestRejected(msg) => write!(f, "manifest rejected: {msg}"),
             Self::RegistryFull { kind, max } => {
                 write!(f, "{kind} registry full (max {max})")
-            },
+            }
             Self::SandboxError(msg) => write!(f, "sandbox error: {msg}"),
             Self::LifecycleError(msg) => write!(f, "lifecycle error: {msg}"),
             Self::PermissionError(msg) => write!(f, "permission error: {msg}"),
@@ -438,7 +438,7 @@ impl CapabilityLoader {
                             manifest.name, perm
                         )));
                     }
-                },
+                }
                 ExecutionTier::Observer => {
                     if matches!(
                         perm,
@@ -453,10 +453,10 @@ impl CapabilityLoader {
                             manifest.name, perm
                         )));
                     }
-                },
+                }
                 ExecutionTier::Advisor | ExecutionTier::Autonomous => {
                     // No tier restrictions for Advisor/Autonomous.
-                },
+                }
             }
         }
         Ok(())
@@ -478,15 +478,15 @@ impl CapabilityLoader {
                         "third-party '{}' cannot request WriteSemanticMemory",
                         manifest.name
                     )));
-                },
+                }
                 Permission::NetworkAccess => {
                     return Err(LoaderError::PermissionError(format!(
                         "third-party '{}' cannot request unrestricted NetworkAccess \
                          (use NetworkEgress with specific hosts)",
                         manifest.name
                     )));
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
         Ok(())

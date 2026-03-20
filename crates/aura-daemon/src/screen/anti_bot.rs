@@ -280,7 +280,7 @@ impl AntiBot {
                 match oldest {
                     None => oldest = Some(ts),
                     Some(o) if ts < o => oldest = Some(ts),
-                    _ => {},
+                    _ => {}
                 }
             }
         }
@@ -298,7 +298,7 @@ impl AntiBot {
         let extra = match action {
             ActionType::Type { text } => {
                 text.len() as u64 * self.profile.type_delay_per_char_ms as u64
-            },
+            }
             _ => 0,
         };
 

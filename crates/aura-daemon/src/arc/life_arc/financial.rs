@@ -163,22 +163,22 @@ impl FinancialArc {
                     .total_savings_this_month_cents
                     .saturating_add(amount_cents);
                 self.push_savings_timestamp(now_ms);
-            },
+            }
             FinancialEvent::SpendingAction { .. } => {
                 self.push_spending_timestamp(now_ms);
-            },
+            }
             FinancialEvent::DebtPayment { .. } => {
                 self.recent_debt_payments = self.recent_debt_payments.saturating_add(1);
-            },
+            }
             FinancialEvent::IncomeReceived { .. } => {
                 // Income is a positive signal but we don't track amounts.
                 // Just noted for potential future scoring.
-            },
+            }
             FinancialEvent::BudgetGoalSet {
                 monthly_savings_target_cents,
             } => {
                 self.monthly_savings_target_cents = Some(monthly_savings_target_cents);
-            },
+            }
         }
 
         // Recompute rolling window counts from timestamps.
@@ -300,7 +300,7 @@ impl FinancialArc {
             Some(target) => {
                 let actual = self.total_savings_this_month_cents.max(0) as f32;
                 (actual / target as f32).clamp(0.0, 1.0)
-            },
+            }
         };
 
         // --- Weighted composite ---

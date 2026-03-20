@@ -392,14 +392,14 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        },
+        }
         Some(ExpectedChange::NoChange) => {
             if !screen_changed {
                 0.9
             } else {
                 0.5
             }
-        },
+        }
         Some(ExpectedChange::ActivityChange) => {
             if activity_changed {
                 0.95
@@ -408,7 +408,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        },
+        }
         Some(ExpectedChange::AppChange) => {
             if app_changed {
                 0.95
@@ -417,7 +417,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        },
+        }
         Some(ExpectedChange::TextAppears(expected_text)) => {
             let quality = text_match_quality(after, expected_text);
             if quality >= 0.9 {
@@ -433,7 +433,7 @@ fn compute_confidence(
             } else {
                 0.1 // Nothing changed
             }
-        },
+        }
         Some(ExpectedChange::TextDisappears(expected_text)) => {
             let was_present = text_match_quality(before, expected_text) > 0.3;
             let still_present = text_match_quality(after, expected_text) > 0.3;
@@ -444,7 +444,7 @@ fn compute_confidence(
             } else {
                 0.1 // Text is still present
             }
-        },
+        }
         Some(ExpectedChange::ElementAppears(_)) => {
             if nodes_added > 0 {
                 0.7
@@ -453,7 +453,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        },
+        }
         Some(ExpectedChange::TextInElementChanges(_)) => {
             if text_changes > 0 {
                 0.8
@@ -462,7 +462,7 @@ fn compute_confidence(
             } else {
                 0.1
             }
-        },
+        }
         None => {
             // No expectation — just report whether something changed
             if app_changed || activity_changed {
@@ -472,7 +472,7 @@ fn compute_confidence(
             } else {
                 0.3
             }
-        },
+        }
     }
 }
 
@@ -1071,7 +1071,7 @@ mod tests {
 
         // Verify monotonic decrease
         assert!(
-            exact.confidence > partial.confidence || exact.confidence == partial.confidence,
+            exact.confidence >= partial.confidence,
             "exact({}) >= partial({})",
             exact.confidence,
             partial.confidence
@@ -1083,7 +1083,7 @@ mod tests {
             wrong.confidence
         );
         assert!(
-            wrong.confidence > screen.confidence || wrong.confidence == screen.confidence,
+            wrong.confidence >= screen.confidence,
             "wrong({}) >= screen({})",
             wrong.confidence,
             screen.confidence

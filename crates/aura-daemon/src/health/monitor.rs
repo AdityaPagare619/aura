@@ -596,13 +596,13 @@ impl HealthMonitor {
                     consecutive = self.consecutive_healthy,
                     "health check: healthy"
                 );
-            },
+            }
             HealthStatus::Degraded(reason) => {
                 warn!(reason = reason.as_str(), "health check: degraded");
-            },
+            }
             HealthStatus::Critical(reason) => {
                 error!(reason = reason.as_str(), "health check: CRITICAL");
-            },
+            }
         }
 
         report
@@ -683,19 +683,19 @@ impl HealthMonitor {
                     consecutive = self.consecutive_healthy,
                     "health check (with ping): healthy"
                 );
-            },
+            }
             HealthStatus::Degraded(reason) => {
                 warn!(
                     reason = reason.as_str(),
                     "health check (with ping): degraded"
                 );
-            },
+            }
             HealthStatus::Critical(reason) => {
                 error!(
                     reason = reason.as_str(),
                     "health check (with ping): CRITICAL"
                 );
-            },
+            }
         }
 
         report
@@ -1041,7 +1041,7 @@ impl HealthMonitor {
             Err(_) => {
                 warn!("ping_neocortex: no Tokio runtime — assuming neocortex alive");
                 return true;
-            },
+            }
         };
 
         // block_on drives the async IPC call to completion from this sync
@@ -1054,7 +1054,7 @@ impl HealthMonitor {
                 Err(e) => {
                     debug!(error = %e, "ping_neocortex: connect failed — treating as dead");
                     return false;
-                },
+                }
             };
 
             let result = tokio::time::timeout(
@@ -1067,22 +1067,22 @@ impl HealthMonitor {
                 Ok(Ok(NeocortexToDaemon::Pong { .. })) => {
                     debug!("ping_neocortex: Pong received — neocortex alive");
                     true
-                },
+                }
                 Ok(Ok(unexpected)) => {
                     warn!(
                         resp = ?std::mem::discriminant(&unexpected),
                         "ping_neocortex: unexpected response — treating as dead"
                     );
                     false
-                },
+                }
                 Ok(Err(e)) => {
                     warn!(error = %e, "ping_neocortex: request error — treating as dead");
                     false
-                },
+                }
                 Err(_elapsed) => {
                     warn!("ping_neocortex: 5-second timeout — treating as dead");
                     false
-                },
+                }
             }
         })
     }
@@ -1358,7 +1358,7 @@ pub async fn run_heartbeat_loop(
                         .await,
                         Ok(Ok(NeocortexToDaemon::Pong { .. }))
                     )
-                },
+                }
                 Err(_) => false,
             }
         };

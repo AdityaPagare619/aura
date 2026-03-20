@@ -97,14 +97,14 @@ impl ConversationContext {
             match entity.entity_type {
                 EntityType::Contact => {
                     self.last_contact = Some(entity.value.clone());
-                },
+                }
                 EntityType::App => {
                     self.last_app = Some(entity.value.clone());
-                },
+                }
                 EntityType::Time => {
                     self.last_time = Some(entity.value.clone());
-                },
-                _ => {},
+                }
+                _ => {}
             }
             self.recent_entities.push(entity.clone());
         }
@@ -148,7 +148,7 @@ impl SlotFiller {
                     missing: vec![tool_name.to_string()],
                     clarification: Some(format!("Unknown tool: {}", tool_name)),
                 };
-            },
+            }
         };
 
         let mut slots = build_slots(tool);

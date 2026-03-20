@@ -63,17 +63,17 @@ impl MoodEvent {
                 } else {
                     None // Silence not long enough to affect mood.
                 }
-            },
+            }
             // Stress lowers valence and raises arousal proportionally.
             MoodEvent::VoiceStressDetected { level } => {
                 let l = level.clamp(0.0, 1.0);
                 Some((-0.10 * l, 0.15 * l))
-            },
+            }
             // Fatigue lowers both valence and arousal proportionally.
             MoodEvent::VoiceFatigueDetected { level } => {
                 let l = level.clamp(0.0, 1.0);
                 Some((-0.05 * l, -0.10 * l))
-            },
+            }
         }
     }
 }
@@ -131,7 +131,7 @@ impl AffectiveEngine {
                 // No mood effect; just update timestamp.
                 self.state.last_update_ms = now_ms;
                 return;
-            },
+            }
         };
 
         // Apply stability gate.
@@ -330,7 +330,7 @@ impl AffectiveEngine {
             None => {
                 self.state.last_update_ms = now_ms;
                 return;
-            },
+            }
         };
 
         // 4. Apply personality modifiers.

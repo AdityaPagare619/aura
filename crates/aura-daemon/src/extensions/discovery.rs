@@ -160,7 +160,7 @@ impl ExtensionDiscovery {
             match summary.state {
                 SandboxState::Active => active += 1,
                 SandboxState::Suspended | SandboxState::Disabled => degraded += 1,
-                _ => {},
+                _ => {}
             }
 
             extensions.push(ExtensionCapability {

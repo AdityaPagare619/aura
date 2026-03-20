@@ -486,7 +486,7 @@ impl UserProfile {
                 let profile = Self::from_json(&data)?;
                 debug!("user profile loaded from DB");
                 Ok(Some(profile))
-            },
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::PersistenceFailed(format!(
                 "load profile: {e}"
@@ -700,16 +700,16 @@ impl UserProfile {
                             // Merge sensitive fields back into profile.
                             profile.interests = sensitive.interests;
                             debug!("user profile sensitive data loaded from vault");
-                        },
+                        }
                         Err(e) => {
                             warn!("failed to parse sensitive profile from vault: {e}");
-                        },
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     // Not found or vault not configured — not an error on first run.
                     debug!("sensitive profile not in vault (may be first run): {e:?}");
-                },
+                }
             }
         }
 
@@ -779,7 +779,7 @@ impl UserProfile {
             None => {
                 warn!("vault not available — skipping sensitive profile save");
                 return Ok(());
-            },
+            }
         };
 
         let sensitive = ProfileSensitive {

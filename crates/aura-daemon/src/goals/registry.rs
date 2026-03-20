@@ -700,14 +700,14 @@ impl GoalRegistry {
                 } else {
                     Some(format!("expected boolean, got '{}'", value))
                 }
-            },
+            }
             ParamType::Enum(variants) => {
                 if variants.iter().any(|v| v.eq_ignore_ascii_case(value)) {
                     None
                 } else {
                     Some(format!("expected one of {:?}, got '{}'", variants, value))
                 }
-            },
+            }
             ParamType::PhoneNumber => {
                 let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
                 if digits.len() >= 7 {
@@ -715,7 +715,7 @@ impl GoalRegistry {
                 } else {
                     Some(format!("invalid phone number: '{}'", value))
                 }
-            },
+            }
             ParamType::Url => {
                 if value.starts_with("http://") || value.starts_with("https://") {
                     None
@@ -725,7 +725,7 @@ impl GoalRegistry {
                         value
                     ))
                 }
-            },
+            }
             ParamType::TimeOfDay => {
                 // Accept HH:MM or H:MM patterns.
                 let parts: Vec<&str> = value.split(':').collect();
@@ -737,7 +737,7 @@ impl GoalRegistry {
                 } else {
                     Some(format!("expected time HH:MM, got '{}'", value))
                 }
-            },
+            }
         }
     }
 
@@ -797,13 +797,13 @@ impl GoalRegistry {
             match provided {
                 None if def.required && def.default_value.is_none() => {
                     missing.push(def.name.clone());
-                },
+                }
                 Some((_, value)) => {
                     if let Some(err) = Self::validate_param_type(&def.param_type, value) {
                         invalid.push((def.name.clone(), err));
                     }
-                },
-                _ => {}, // Optional or has default — ok.
+                }
+                _ => {} // Optional or has default — ok.
             }
         }
 

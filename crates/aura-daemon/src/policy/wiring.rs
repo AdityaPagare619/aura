@@ -772,7 +772,7 @@ mod tests {
         let engine = test_identity();
         let verdict = engine.policy_gate.check_action("user_chat", "conversation");
         match verdict {
-            crate::identity::PolicyVerdict::Allow => {}, // expected
+            crate::identity::PolicyVerdict::Allow => {} // expected
             other => panic!("expected Allow, got {:?}", other),
         }
     }

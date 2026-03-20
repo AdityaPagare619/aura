@@ -331,21 +331,21 @@ impl Executor {
                         reason,
                         elapsed_ms,
                     });
-                },
+                }
                 MonitorDecision::Replan { reason } => {
                     // Log replan suggestion; without Neocortex IPC we continue
                     // but record it so the monitor tracks the deviation.
                     warn!(step = step_num, reason = %reason, "enhanced monitor suggests replan");
                     self.enhanced_monitor.base.record_replan();
-                },
+                }
                 MonitorDecision::Throttle => {
                     debug!(
                         step = step_num,
                         "enhanced monitor throttle — adding 500ms delay"
                     );
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                },
-                MonitorDecision::Continue => {},
+                }
+                MonitorDecision::Continue => {}
             }
 
             // Execute the step through the full pipeline
@@ -376,7 +376,7 @@ impl Executor {
                         duration_ms = result.duration_ms,
                         "step completed"
                     );
-                },
+                }
                 Err(StepFailure::Abort(reason)) => {
                     let elapsed_ms = task_start.elapsed().as_millis() as u64;
                     // Record failure in enhanced monitor
@@ -391,18 +391,18 @@ impl Executor {
                         reason,
                         elapsed_ms,
                     });
-                },
+                }
                 Err(StepFailure::CycleEscalation(tier)) => {
                     warn!(step = step_num, ?tier, "cycle detected — escalating");
                     return Ok(ExecutionOutcome::CycleDetected {
                         step: step_num,
                         tier: tier as u8,
                     });
-                },
+                }
                 Err(StepFailure::Skipped) => {
                     debug!(step = step_num, "step skipped per failure strategy");
                     steps_executed += 1; // Count skipped steps as "executed"
-                },
+                }
                 Err(StepFailure::AskUser(msg)) => {
                     let elapsed_ms = task_start.elapsed().as_millis() as u64;
                     return Ok(ExecutionOutcome::Failed {
@@ -410,10 +410,10 @@ impl Executor {
                         reason: format!("user input needed: {}", msg),
                         elapsed_ms,
                     });
-                },
+                }
                 Err(StepFailure::ScreenError(e)) => {
                     return Err(AuraError::Screen(e));
-                },
+                }
             }
         }
 
@@ -507,7 +507,7 @@ impl Executor {
                             retries_used: attempt,
                             duration_ms,
                         });
-                    },
+                    }
                     Ok(result) => {
                         // Action executed but verification failed
                         last_error = Some(format!(
@@ -518,29 +518,29 @@ impl Executor {
                                 .map(|v| v.confidence)
                                 .unwrap_or(0.0)
                         ));
-                    },
+                    }
                     Err(AttemptError::TargetNotFound(selector_desc)) => {
                         last_error = Some(format!("target not found: {}", selector_desc));
-                    },
+                    }
                     Err(AttemptError::ActionFailed(reason)) => {
                         last_error = Some(format!("action failed: {}", reason));
-                    },
+                    }
                     Err(AttemptError::ScreenUnavailable(e)) => {
                         return Err(StepFailure::ScreenError(e));
-                    },
+                    }
                     Err(AttemptError::RateLimited(wait_ms)) => {
                         // Rate limited — sleep and retry (don't count as a retry)
                         debug!(wait_ms, "rate limited, waiting");
                         tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
                         last_error = Some(format!("rate limited for {}ms", wait_ms));
-                    },
+                    }
                     Err(AttemptError::SandboxDenied(reason)) => {
                         // Sandbox denial is non-retryable — abort immediately.
                         // Fail-secure: never retry a denied action.
                         return Err(StepFailure::Abort(format!(
                             "sandbox containment denied action: {reason}"
                         )));
-                    },
+                    }
                 }
 
                 // Consult intelligent retry for failure classification and strategy
@@ -559,7 +559,7 @@ impl Executor {
                     match strategy {
                         RetryStrategy::Abort { reason } => {
                             return Err(StepFailure::Abort(reason));
-                        },
+                        }
                         RetryStrategy::UseAlternative { alternative } => {
                             // Log the suggestion; runtime step-switching is not yet
                             // supported, so we fall through to the normal failure strategy.
@@ -568,10 +568,10 @@ impl Executor {
                                 alt = %alternative,
                                 "intelligent retry suggests alternative path"
                             );
-                        },
+                        }
                         RetryStrategy::RetryWithBackoff => {
                             // Continue with next attempt in the loop
-                        },
+                        }
                     }
                 }
             }
@@ -636,7 +636,7 @@ impl Executor {
                 return Err(AttemptError::SandboxDenied(format!(
                     "action classified as {containment} at step {step_num}"
                 )));
-            },
+            }
             ContainmentLevel::Restricted => {
                 // L2: Preview + confirm — the executor cannot await user
                 // input, so we DENY here (fail-secure).  Task-level L2
@@ -656,7 +656,7 @@ impl Executor {
                     "action classified as {containment} at step {step_num} — \
                      confirmation not available at execution level (fail-secure)"
                 )));
-            },
+            }
             ContainmentLevel::Monitored => {
                 // L1: Execute + log — audit trail for monitored actions.
                 tracing::debug!(
@@ -666,10 +666,10 @@ impl Executor {
                     step = step_num,
                     "sandbox: action monitored at L1"
                 );
-            },
+            }
             ContainmentLevel::Direct => {
                 // L0: Auto-approve — trusted action, no special handling.
-            },
+            }
         }
 
         // ── Stage 3: Anti-bot rate limiting ──
@@ -681,10 +681,10 @@ impl Executor {
                     tokio::time::sleep(tokio::time::Duration::from_millis(recommended_delay_ms))
                         .await;
                 }
-            },
+            }
             Err(must_wait_ms) => {
                 return Err(AttemptError::RateLimited(must_wait_ms));
-            },
+            }
         }
 
         // ── Stage 5: Execute action ──
@@ -743,24 +743,24 @@ impl Executor {
             );
             // Handle cycle tiers
             match cycle_result.tier {
-                CycleTier::None => {}, // unreachable here
+                CycleTier::None => {} // unreachable here
                 CycleTier::Micro => {
                     // Micro: acknowledge and let retry handle it
                     let _can_retry = self.cycle_detector.acknowledge_recovery();
                     // Fall through — the step retry logic will handle re-attempt
-                },
+                }
                 CycleTier::Strategic => {
                     // Strategic: would need replan from Neocortex
                     self.enhanced_monitor.base.record_replan();
                     // For now, we don't have IPC to Neocortex, so we continue
                     // and let the monitor's replan limit catch runaway replans
-                },
+                }
                 CycleTier::GracefulAbort | CycleTier::Emergency => {
                     // Tiers 3-4: abort execution
                     // (Recording partial progress is done at the plan level)
                     // Don't return error here — let the step result propagate
                     // The caller will see the cycle tier in the result
-                },
+                }
             }
         }
 
@@ -897,11 +897,11 @@ impl Executor {
                         "step {} failed after retries: {}",
                         step_num, reason
                     )))
-                },
+                }
                 FailureStrategy::Skip => {
                     debug!(step = step_num, reason, "skipping failed step");
                     Err(StepFailure::Skipped)
-                },
+                }
                 FailureStrategy::Abort => Err(StepFailure::Abort(format!(
                     "step {} aborted: {}",
                     step_num, reason
@@ -921,13 +921,13 @@ impl Executor {
                         {
                             Ok(result) if result.success => {
                                 debug!(step = step_num, fb_idx, "fallback step succeeded");
-                            },
+                            }
                             Ok(_) => {
                                 return Err(StepFailure::Abort(format!(
                                     "fallback step {} for step {} failed verification",
                                     fb_idx, step_num
                                 )));
-                            },
+                            }
                             Err(e) => return Err(e),
                         }
                     }
@@ -939,7 +939,7 @@ impl Executor {
                         retries_used: 0,
                         duration_ms: 0,
                     })
-                },
+                }
                 FailureStrategy::AskUser(prompt) => Err(StepFailure::AskUser(prompt.clone())),
             }
         }) // Box::pin
@@ -1060,11 +1060,11 @@ fn postcondition_to_expected_change(condition: Option<&DslCondition>) -> Option<
     match cond {
         DslCondition::ElementExists(selector) => {
             Some(ExpectedChange::ElementAppears(format!("{:?}", selector)))
-        },
+        }
         DslCondition::ElementNotExists(_) => Some(ExpectedChange::ScreenChange),
         DslCondition::TextEquals { expected, .. } => {
             Some(ExpectedChange::TextAppears(expected.clone()))
-        },
+        }
         DslCondition::AppInForeground(_) => Some(ExpectedChange::AppChange),
         DslCondition::ScreenContainsText(text) => Some(ExpectedChange::TextAppears(text.clone())),
         DslCondition::And(conditions) => {
@@ -1072,7 +1072,7 @@ fn postcondition_to_expected_change(condition: Option<&DslCondition>) -> Option<
             conditions
                 .first()
                 .and_then(|c| postcondition_to_expected_change(Some(c)))
-        },
+        }
         DslCondition::Or(conditions) => conditions
             .first()
             .and_then(|c| postcondition_to_expected_change(Some(c))),
@@ -1093,11 +1093,11 @@ fn is_action_verified(action: &ActionType, verification: &VerificationResult) ->
         // Navigation actions: expect screen to change
         ActionType::Back | ActionType::Home | ActionType::Recents | ActionType::OpenApp { .. } => {
             verification.screen_changed || verification.app_changed || verification.activity_changed
-        },
+        }
         // NoChange for type into same field is expected
         ActionType::Type { .. } => {
             verification.confidence >= MIN_VERIFICATION_CONFIDENCE || verification.text_changes > 0
-        },
+        }
         // General: use confidence threshold
         _ => verification.confidence >= MIN_VERIFICATION_CONFIDENCE || verification.screen_changed,
     }
@@ -1243,7 +1243,7 @@ mod tests {
             } => {
                 assert_eq!(steps_executed, 0);
                 assert_eq!(elapsed_ms, 0);
-            },
+            }
             other => panic!("expected Success, got {:?}", other),
         }
     }
@@ -1272,7 +1272,7 @@ mod tests {
             ExecutionOutcome::Failed { step, reason, .. } => {
                 assert_eq!(step, 0);
                 assert!(reason.contains("exceeds max"));
-            },
+            }
             other => panic!("expected Failed, got {:?}", other),
         }
     }
@@ -1305,7 +1305,7 @@ mod tests {
         match outcome {
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 1);
-            },
+            }
             other => panic!("expected Success, got {:?}", other),
         }
 
@@ -1360,7 +1360,7 @@ mod tests {
         match outcome {
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 2);
-            },
+            }
             other => panic!("expected Success, got {:?}", other),
         }
     }
@@ -1412,10 +1412,10 @@ mod tests {
         match outcome {
             ExecutionOutcome::Failed { reason, .. } => {
                 assert!(reason.contains("action failed"));
-            },
+            }
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 2);
-            },
+            }
             other => panic!("unexpected: {:?}", other),
         }
     }
@@ -1472,7 +1472,7 @@ mod tests {
             ExecutionOutcome::Failed { step, reason, .. } => {
                 assert_eq!(step, 0);
                 assert!(reason.contains("action failed"));
-            },
+            }
             other => panic!("expected Failed, got {:?}", other),
         }
     }
@@ -1605,7 +1605,7 @@ mod tests {
                     reason.contains("PolicyGate denied"),
                     "reason should mention PolicyGate denial, got: {reason}"
                 );
-            },
+            }
             other => panic!(
                 "expected ExecutionOutcome::Failed from PolicyGate denial, got: {:?}",
                 other
@@ -1657,7 +1657,7 @@ mod tests {
         match outcome {
             ExecutionOutcome::Success { steps_executed, .. } => {
                 assert_eq!(steps_executed, 1, "one tap step should have executed");
-            },
+            }
             other => panic!(
                 "expected ExecutionOutcome::Success with allow rule, got: {:?}",
                 other

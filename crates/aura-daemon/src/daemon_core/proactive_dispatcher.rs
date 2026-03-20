@@ -264,7 +264,7 @@ fn to_ipc_trigger(trigger: &ProactiveTrigger) -> IpcProactiveTrigger {
                 // phrase this for the user.
                 description: format!("expected at {expected_at}, {abs_mins} minutes {direction}"),
             }
-        },
+        }
     }
 }
 
@@ -369,10 +369,10 @@ mod tests {
                         assert_eq!(goal_id, 42);
                         assert_eq!(title, "Learn Rust");
                         assert_eq!(stalled_days, 5);
-                    },
+                    }
                     other => panic!("expected GoalStalled, got {other:?}"),
                 }
-            },
+            }
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -392,7 +392,7 @@ mod tests {
             } => match ipc_trigger {
                 IpcProactiveTrigger::GoalOverdue { overdue_days, .. } => {
                     assert_eq!(overdue_days, 3);
-                },
+                }
                 other => panic!("expected GoalOverdue, got {other:?}"),
             },
             other => panic!("expected ProactiveContext, got {other:?}"),
@@ -420,10 +420,10 @@ mod tests {
                         // contact_name is the placeholder until name resolution is wired
                         assert!(contact_name.contains("99"));
                         assert_eq!(days_since_contact, 14);
-                    },
+                    }
                     other => panic!("expected SocialGap, got {other:?}"),
                 }
-            },
+            }
             other => panic!("expected ProactiveContext, got {other:?}"),
         }
     }
@@ -450,7 +450,7 @@ mod tests {
                     assert_eq!(metric, "error_rate");
                     assert!((value - 0.85).abs() < f32::EPSILON);
                     assert!((threshold - 0.70).abs() < f32::EPSILON);
-                },
+                }
                 other => panic!("expected HealthAlert, got {other:?}"),
             },
             other => panic!("expected ProactiveContext, got {other:?}"),
@@ -472,7 +472,7 @@ mod tests {
             } => match ipc_trigger {
                 IpcProactiveTrigger::MemoryInsight { summary } => {
                     assert!(summary.contains("9pm"));
-                },
+                }
                 other => panic!("expected MemoryInsight, got {other:?}"),
             },
             other => panic!("expected ProactiveContext, got {other:?}"),
@@ -499,7 +499,7 @@ mod tests {
                     assert_eq!(rule_name, "morning_run");
                     assert!(description.contains("45"));
                     assert!(description.contains("late"));
-                },
+                }
                 other => panic!("expected TriggerRuleFired, got {other:?}"),
             },
             other => panic!("expected ProactiveContext, got {other:?}"),

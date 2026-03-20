@@ -1479,7 +1479,7 @@ mod tests {
         match decision {
             SchedulerDecision::Activate { goal_id, .. } => {
                 assert_eq!(goal_id, 1);
-            },
+            }
             other => panic!("expected Activate, got {:?}", other),
         }
         assert_eq!(scheduler.active_count(), 1);
@@ -1771,7 +1771,7 @@ mod tests {
                     !new_intentions.is_empty(),
                     "should commit at least one intention"
                 );
-            },
+            }
             other => panic!("expected Commit, got {:?}", other),
         }
     }
@@ -2041,7 +2041,7 @@ mod tests {
 
     #[test]
     fn test_bdi_extended_score_no_dependencies() {
-        let mut bdi = make_bdi();
+        let bdi = make_bdi();
 
         let now = 1_700_000_000_000;
         let goal = make_goal(1, GoalPriority::High, GoalSource::UserExplicit);
@@ -2110,12 +2110,12 @@ mod tests {
 
         // With low battery, goals should be filtered as infeasible
         match result {
-            DeliberationResult::Maintain => {}, // OK - no feasible goals
+            DeliberationResult::Maintain => {} // OK - no feasible goals
             DeliberationResult::Commit { new_intentions: _ } => {
                 // If commit, check that infeasible goals weren't committed
                 // Low battery makes goals infeasible
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -2138,16 +2138,14 @@ mod tests {
         let result = bdi.deliberate(&goals, 1_700_000_000_000, 0.5);
 
         // Should reconsider low-commitment stale intention
-        match result {
-            DeliberationResult::Reconsider {
-                drop_intentions, ..
-            } => {
-                assert!(
-                    drop_intentions.contains(&1),
-                    "should drop stale low-commitment"
-                );
-            },
-            _ => {},
+        if let DeliberationResult::Reconsider {
+            drop_intentions, ..
+        } = result
+        {
+            assert!(
+                drop_intentions.contains(&1),
+                "should drop stale low-commitment"
+            );
         }
     }
 

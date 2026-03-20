@@ -111,26 +111,26 @@ impl AppCatalog {
                         "app catalog loaded from disk"
                     );
                     catalog
-                },
+                }
                 Err(e) => {
                     warn!("app catalog parse error ({e}), starting fresh");
                     let mut c = Self::new();
                     c.path = path;
                     c
-                },
+                }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!("app catalog not found, starting fresh");
                 let mut c = Self::new();
                 c.path = path;
                 c
-            },
+            }
             Err(e) => {
                 warn!("app catalog read error ({e}), starting fresh");
                 let mut c = Self::new();
                 c.path = path;
                 c
-            },
+            }
         }
     }
 

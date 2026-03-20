@@ -869,7 +869,7 @@ fn query_episodes_hnsw(
             .unwrap_or_else(|| match &episode.embedding {
                 Some(emb) if emb.len() == query_embedding.len() => {
                     cosine_similarity(&query_embedding, emb)
-                },
+                }
                 _ => embeddings::jaccard_trigram_similarity(query_text, &episode.content),
             });
 
@@ -941,11 +941,11 @@ fn query_episodes_sync(
         let similarity = match &episode.embedding {
             Some(emb) if emb.len() == query_embedding.len() => {
                 cosine_similarity(&query_embedding, emb)
-            },
+            }
             _ => {
                 // Fallback to Jaccard trigram similarity
                 embeddings::jaccard_trigram_similarity(query_text, &episode.content)
-            },
+            }
         };
 
         // Compute recall score

@@ -342,7 +342,7 @@ fn execute_action_jni(action: &ActionType) -> Result<ActionResult, ScreenError> 
                 error!("JNI tap failed: {e}");
                 ScreenError::ActionNotSupported(format!("{action:?}"))
             })?
-        },
+        }
         ActionType::Swipe {
             from_x,
             from_y,
@@ -365,7 +365,7 @@ fn execute_action_jni(action: &ActionType) -> Result<ActionResult, ScreenError> 
                 error!("JNI type failed: {e}");
                 ScreenError::ActionNotSupported(format!("{action:?}"))
             })?
-        },
+        }
         ActionType::Back => crate::platform::jni_bridge::jni_press_back().map_err(|e| {
             error!("JNI back failed: {e}");
             ScreenError::ActionNotSupported(format!("{action:?}"))
@@ -382,7 +382,7 @@ fn execute_action_jni(action: &ActionType) -> Result<ActionResult, ScreenError> 
             // For actions not yet mapped to dedicated JNI calls, fall back to
             // the JSON-serialised generic path.
             execute_action_generic_jni(action)?
-        },
+        }
     };
 
     let duration_ms = start.elapsed().as_millis() as u32;

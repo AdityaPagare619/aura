@@ -241,11 +241,11 @@ impl TelegramPoller {
                                         "pre-downloaded voice message"
                                     );
                                     update.voice_data = Some(bytes);
-                                },
+                                }
                                 Err(e) => {
                                     warn!(error = %e, "failed to download voice file — handler will use text fallback");
                                     // voice_data stays None — handler falls back gracefully.
-                                },
+                                }
                             }
                         }
 
@@ -260,11 +260,11 @@ impl TelegramPoller {
                             return Ok(());
                         }
                     }
-                },
+                }
                 Err(e) => {
                     warn!(error = %e, "getUpdates failed — will retry after backoff");
                     tokio::time::sleep(Duration::from_secs(5)).await;
-                },
+                }
             }
         }
     }
@@ -466,7 +466,7 @@ impl TelegramPoller {
                 } => {
                     self.edit_message(msg.chat_id, *message_id, text, parse_mode.as_deref())
                         .await
-                },
+                }
                 MessageContent::Voice {
                     data,
                     duration_secs,
@@ -481,11 +481,11 @@ impl TelegramPoller {
                 Ok(()) => {
                     queue.mark_sent(msg.id)?;
                     debug!(id = msg.id, "message sent from queue");
-                },
+                }
                 Err(e) => {
                     warn!(id = msg.id, error = %e, "failed to send queued message");
                     queue.mark_failed(msg.id)?;
-                },
+                }
             }
         }
 
@@ -748,7 +748,7 @@ mod tests {
             }) => {
                 assert_eq!(file_id, "AwACAgIAAxkBAAI_voice_id");
                 assert_eq!(*duration_secs, 5);
-            },
+            }
             other => panic!("expected Voice, got {:?}", other),
         }
     }
@@ -773,7 +773,7 @@ mod tests {
         match &update.non_text_content {
             Some(NonTextContent::Photo { file_id }) => {
                 assert_eq!(file_id, "large_id", "should pick the largest photo");
-            },
+            }
             other => panic!("expected Photo, got {:?}", other),
         }
     }
@@ -798,7 +798,7 @@ mod tests {
         match &update.non_text_content {
             Some(NonTextContent::Sticker { emoji }) => {
                 assert_eq!(emoji.as_deref(), Some("😀"));
-            },
+            }
             other => panic!("expected Sticker, got {:?}", other),
         }
     }

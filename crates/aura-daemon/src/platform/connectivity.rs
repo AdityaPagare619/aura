@@ -314,7 +314,7 @@ impl ConnectivityManager {
                     // WiFi without RSSI data — assume Good.
                     NetworkQuality::Good
                 }
-            },
+            }
             NetworkType::Cellular => {
                 // Cellular is always at most Fair if metered, Good if unmetered.
                 if self.is_metered {
@@ -322,7 +322,7 @@ impl ConnectivityManager {
                 } else {
                     NetworkQuality::Good
                 }
-            },
+            }
             NetworkType::Ethernet => NetworkQuality::Excellent,
             NetworkType::None => NetworkQuality::Offline,
         }

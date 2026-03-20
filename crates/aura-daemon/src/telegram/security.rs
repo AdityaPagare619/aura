@@ -44,10 +44,10 @@ impl std::fmt::Display for SecurityError {
                     f,
                     "insufficient permission: need {required:?}, have {actual:?}"
                 )
-            },
+            }
             Self::RateLimited { retry_after_secs } => {
                 write!(f, "rate limited — retry after {retry_after_secs}s")
-            },
+            }
             Self::InvalidPin => write!(f, "invalid PIN"),
             Self::PinNotConfigured => write!(f, "no PIN configured — use /pin set first"),
         }
@@ -239,7 +239,7 @@ impl PinStore {
             Some(stored) => {
                 let candidate = Self::hash_pin(pin, &self.salt);
                 constant_time_eq(stored, &candidate)
-            },
+            }
             None => false,
         }
     }

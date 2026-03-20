@@ -214,7 +214,7 @@ impl InterestModel {
                 self.interests.remove(&key);
                 debug!(evicted = %key, "evicted weakest interest");
                 Ok(())
-            },
+            }
             None => Err(ArcError::CapacityExceeded {
                 collection: "interests".into(),
                 max: MAX_INTERESTS,

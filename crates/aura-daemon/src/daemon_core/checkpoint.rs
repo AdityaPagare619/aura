@@ -212,20 +212,20 @@ fn migrate_checkpoint(mut cp: DaemonCheckpoint) -> Result<DaemonCheckpoint, Chec
                 cp.last_memory_insight_ms = 0;
                 cp.version = 2;
                 tracing::info!("migrated checkpoint v1→v2");
-            },
+            }
             // v2→v3: consolidation_weights added (serde default handles it).
             2 => {
                 cp.consolidation_weights = ConsolidationWeights::default();
                 cp.version = 3;
                 tracing::info!("migrated checkpoint v2→v3: consolidation_weights initialized");
-            },
+            }
             unsupported => {
                 tracing::warn!(
                     version = unsupported,
                     "no migration path from this version — resetting to defaults"
                 );
                 return Ok(DaemonCheckpoint::default());
-            },
+            }
         }
     }
     Ok(cp)
@@ -289,7 +289,7 @@ pub fn load_checkpoint(path: &Path) -> Result<DaemonCheckpoint, CheckpointError>
                 "checkpoint restored"
             );
             Ok(cp)
-        },
+        }
         Err(e) => {
             tracing::warn!(
                 error = %e,
@@ -297,7 +297,7 @@ pub fn load_checkpoint(path: &Path) -> Result<DaemonCheckpoint, CheckpointError>
                 "corrupt checkpoint — falling back to defaults"
             );
             Ok(DaemonCheckpoint::default())
-        },
+        }
     }
 }
 

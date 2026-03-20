@@ -202,11 +202,11 @@ impl TelegramBridge {
                     )
                     .map_err(|e| BridgeError::Upstream(format!("queue enqueue failed: {e}")))?;
                 Ok(())
-            },
+            }
             None => {
                 debug!(chat_id, len = text.len(), "no queue — response logged only");
                 Ok(())
-            },
+            }
         }
     }
 
@@ -305,15 +305,15 @@ impl InputChannel for TelegramBridge {
                             warn!(error = %e, chat_id, "failed to deliver response");
                         }
                     }
-                },
+                }
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
                     // No response pending — yield and check again.
                     tokio::task::yield_now().await;
-                },
+                }
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     info!("response channel closed — telegram bridge exiting");
                     break;
-                },
+                }
             }
         }
 
@@ -442,7 +442,7 @@ mod tests {
                 assert_eq!(text, "hello world");
                 assert_eq!(source, InputSource::Telegram { chat_id: 42 });
                 assert!(voice_meta.is_none());
-            },
+            }
             _ => panic!("expected Chat, got {uc:?}"),
         }
     }
@@ -462,7 +462,7 @@ mod tests {
                 assert_eq!(description, "open calculator");
                 assert_eq!(priority, 1);
                 assert_eq!(source, InputSource::Telegram { chat_id: 99 });
-            },
+            }
             _ => panic!("expected TaskRequest, got {uc:?}"),
         }
     }

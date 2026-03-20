@@ -504,7 +504,7 @@ impl SkillRegistry {
                             break; // Cycle detected
                         }
                         current = pid;
-                    },
+                    }
                     None => break,
                 },
                 None => break,

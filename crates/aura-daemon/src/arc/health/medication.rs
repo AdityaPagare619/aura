@@ -337,7 +337,7 @@ impl MedicationManager {
                 } else {
                     Some(scheduled)
                 }
-            },
+            }
             Frequency::MultiDaily { hours, count } => {
                 let day_start = (now / 86400) * 86400;
                 let valid_count = (count as usize).min(hours.len());
@@ -355,7 +355,7 @@ impl MedicationManager {
                 } else {
                     None
                 }
-            },
+            }
             Frequency::EveryNHours { n } => {
                 if n == 0 {
                     return None;
@@ -369,7 +369,7 @@ impl MedicationManager {
                     .max()
                     .unwrap_or(0);
                 Some(last_dose_time + (n as i64) * 3600)
-            },
+            }
             Frequency::AsNeeded => None,
         }
     }

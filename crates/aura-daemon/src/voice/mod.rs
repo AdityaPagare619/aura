@@ -289,7 +289,7 @@ impl VoiceEngine {
                     self.stt.reset_streaming();
                 }
                 Ok(None)
-            },
+            }
 
             ModalityState::ActiveListening { .. } => {
                 // Run VAD
@@ -304,7 +304,7 @@ impl VoiceEngine {
                 };
 
                 self.process_vad_frame(vad_frame, frame)
-            },
+            }
 
             ModalityState::Speaking { .. } => {
                 // While speaking, still monitor for barge-in via wake word
@@ -317,7 +317,7 @@ impl VoiceEngine {
                     self.stt.reset_streaming();
                 }
                 Ok(None)
-            },
+            }
 
             _ => Ok(None),
         }
@@ -340,11 +340,11 @@ impl VoiceEngine {
                 };
                 self.state_machine
                     .transition(VoiceEvent::CallStarted { call_state })?;
-            },
+            }
             CallEvent::CallEnded => {
                 self.state_machine.transition(VoiceEvent::CallEnded)?;
-            },
-            _ => {},
+            }
+            _ => {}
         }
 
         self.call_handler.on_call_event(event);
@@ -396,7 +396,7 @@ impl VoiceEngine {
                 let _ = self.stt.feed_audio(original_frame);
 
                 Ok(None)
-            },
+            }
 
             VadEvent::SpeechEnded { duration_ms } => {
                 self.state_machine.transition(VoiceEvent::SpeechEnded)?;
@@ -430,7 +430,7 @@ impl VoiceEngine {
                     biomarkers,
                     emotional_signal,
                 }))
-            },
+            }
 
             VadEvent::Silence => Ok(None),
         }

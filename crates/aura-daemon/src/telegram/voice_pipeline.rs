@@ -104,13 +104,13 @@ pub fn decode_ogg_opus(ogg_bytes: &[u8]) -> Result<Vec<i16>, VoicePipelineError>
                     .map_err(|e| VoicePipelineError::OpusDecode(format!("frame: {e}")))?;
 
                 pcm_out.extend_from_slice(&decode_buf[..decoded_samples]);
-            },
+            }
             Ok(None) => break, // End of stream.
             Err(e) => {
                 // Some OGG streams have minor issues — log and continue.
                 warn!(error = %e, "OGG packet read error (continuing)");
                 break;
-            },
+            }
         }
     }
 

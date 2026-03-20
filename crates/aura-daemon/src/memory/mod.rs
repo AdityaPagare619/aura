@@ -306,7 +306,7 @@ impl AuraMemory {
                             });
                         }
                     }
-                },
+                }
                 MemoryTier::Episodic => {
                     match self
                         .episodic
@@ -321,9 +321,9 @@ impl AuraMemory {
                         Ok(results) => all_results.extend(results),
                         Err(e) => {
                             warn!("episodic query failed: {}", e);
-                        },
+                        }
                     }
-                },
+                }
                 MemoryTier::Semantic => {
                     match self
                         .semantic
@@ -338,9 +338,9 @@ impl AuraMemory {
                         Ok(results) => all_results.extend(results),
                         Err(e) => {
                             warn!("semantic query failed: {}", e);
-                        },
+                        }
                     }
-                },
+                }
                 MemoryTier::Archive => {
                     match self
                         .archive
@@ -350,9 +350,9 @@ impl AuraMemory {
                         Ok(results) => all_results.extend(results),
                         Err(e) => {
                             warn!("archive query failed: {}", e);
-                        },
+                        }
                     }
-                },
+                }
             }
         }
 
@@ -568,11 +568,11 @@ impl AuraMemory {
                     ));
                 }
                 sections.push(sec);
-            },
-            Ok(_) => {}, // No results
+            }
+            Ok(_) => {} // No results
             Err(e) => {
                 warn!("episodic query for LLM context failed: {}", e);
-            },
+            }
         }
 
         // ----- Semantic memory -----
@@ -592,11 +592,11 @@ impl AuraMemory {
                     ));
                 }
                 sections.push(sec);
-            },
-            Ok(_) => {},
+            }
+            Ok(_) => {}
             Err(e) => {
                 warn!("semantic query for LLM context failed: {}", e);
-            },
+            }
         }
 
         let context = sections.join("\n");
@@ -667,12 +667,16 @@ impl AuraMemory {
     }
 
     /// Export all semantic memories (for GDPR data portability).
-    pub async fn export_semantic(&self) -> Result<Vec<aura_types::memory::SemanticEntry>, MemError> {
+    pub async fn export_semantic(
+        &self,
+    ) -> Result<Vec<aura_types::memory::SemanticEntry>, MemError> {
         self.semantic.get_all_entries().await
     }
 
     /// Export all archive metadata (for GDPR data portability).
-    pub async fn export_archive(&self) -> Result<Vec<crate::memory::archive::ArchiveBlobExport>, MemError> {
+    pub async fn export_archive(
+        &self,
+    ) -> Result<Vec<crate::memory::archive::ArchiveBlobExport>, MemError> {
         self.archive.get_all_blobs().await
     }
 

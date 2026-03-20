@@ -155,36 +155,36 @@ pub fn mood_to_tts_params(mood_hint: Option<f32>, context: &SpeechContext) -> Tt
                 // calm / neutral
                 (0.95_f32, 1.0_f32, 0.8_f32)
             }
-        },
+        }
         // No hint from LLM → neutral defaults
         None => (1.0_f32, 1.0_f32, 0.8_f32),
     };
 
     // -- Context adjustments --------------------------------------------
     match context {
-        SpeechContext::Casual => {}, // no adjustments
+        SpeechContext::Casual => {} // no adjustments
         SpeechContext::Notification => {
             speed *= 1.05;
             volume = volume.max(0.7);
-        },
+        }
         SpeechContext::Alert => {
             speed *= 0.95;
             pitch *= 1.05;
             volume = 0.95;
-        },
+        }
         SpeechContext::LongForm => {
             speed *= 0.95;
             volume *= 0.9;
-        },
+        }
         SpeechContext::Whisper => {
             speed *= 0.85;
             volume = 0.3;
             pitch *= 0.95;
-        },
+        }
         SpeechContext::PhoneCall => {
             speed *= 0.95;
             volume = 0.85;
-        },
+        }
     }
 
     TtsParams {

@@ -1,4 +1,10 @@
 //! AURA Neocortex — LLM inference binary.
+
+// Clippy configuration for aura-neocortex.
+#![allow(clippy::assertions_on_constants)] // Test assertions on compile-time constants
+#![allow(clippy::manual_range_contains)] // Explicit range contains for readability
+#![allow(clippy::len_zero)] // len() comparisons for test clarity
+#![allow(unused_imports)] // Some imports used conditionally or in tests
 //!
 //! This is a **separate process** from the AURA daemon.  It communicates via
 //! IPC (Unix domain socket on Android, TCP on host) and can be killed by the
@@ -74,28 +80,28 @@ impl Args {
                 "--socket" | "-s" => {
                     i += 1;
                     socket = args.get(i).ok_or("--socket requires a value")?.clone();
-                },
+                }
                 "--model-dir" | "-m" => {
                     i += 1;
                     model_dir = PathBuf::from(args.get(i).ok_or("--model-dir requires a value")?);
-                },
+                }
                 "--config" | "-c" => {
                     i += 1;
                     config_path = Some(PathBuf::from(
                         args.get(i).ok_or("--config requires a value")?,
                     ));
-                },
+                }
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
-                },
+                }
                 "--version" | "-V" => {
                     println!("aura-neocortex {}", env!("CARGO_PKG_VERSION"));
                     std::process::exit(0);
-                },
+                }
                 other => {
                     return Err(format!("unknown argument: {other}"));
-                },
+                }
             }
             i += 1;
         }
@@ -144,7 +150,7 @@ fn main() {
             eprintln!("error: {e}");
             print_usage();
             std::process::exit(1);
-        },
+        }
     };
 
     // ── Step 2: Install panic hook ──────────────────────────────────────────
@@ -204,7 +210,7 @@ fn main() {
                 "runtime config loaded"
             );
             cfg
-        },
+        }
         Err(e) => {
             // ParseError on a malformed TOML — log warning and use defaults.
             warn!(
@@ -212,7 +218,7 @@ fn main() {
                 "failed to parse aura.config.toml — falling back to defaults"
             );
             NeocortexRuntimeConfig::default_fallback()
-        },
+        }
     };
 
     // Resolve the effective model directory:
@@ -426,7 +432,7 @@ fn run_server(
                         info!(peer = %addr, "daemon connected (TCP)");
                         stream.set_nonblocking(false)?;
                         return Ok(Some(stream));
-                    },
+                    }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         // No pending connection — poll again after a short sleep.
                         //
@@ -439,7 +445,7 @@ fn run_server(
                         // waiting for a NEW connection.
                         std::thread::sleep(std::time::Duration::from_millis(50));
                         continue;
-                    },
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -459,11 +465,11 @@ fn run_server(
             Ok(None) => {
                 info!("shutdown during accept — stopping server");
                 break;
-            },
+            }
             Err(e) => {
                 error!(error = %e, "accept failed");
                 return Err(e.into());
-            },
+            }
         };
 
         let mut handler = IpcHandler::new(stream, mgr, cancel_token.clone(), current_caps.clone())?;

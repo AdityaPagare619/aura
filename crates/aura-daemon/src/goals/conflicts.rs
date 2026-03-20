@@ -271,7 +271,7 @@ impl ConflictResolver {
                     winner,
                     deferred,
                 )
-            },
+            }
             ConflictType::Temporal => {
                 // Try temporal scheduling — if both have deadlines, schedule sequentially.
                 let (winner, deferred) = if conflict.score_a >= conflict.score_b {
@@ -285,7 +285,7 @@ impl ConflictResolver {
                     winner,
                     deferred,
                 )
-            },
+            }
             ConflictType::Logical => {
                 // Logical conflicts are harder — if scores are close, ask user.
                 let score_diff = (conflict.score_a - conflict.score_b).abs();
@@ -311,7 +311,7 @@ impl ConflictResolver {
                         deferred,
                     )
                 }
-            },
+            }
         };
 
         conflict.resolved = true;
@@ -483,7 +483,7 @@ impl ConflictResolver {
             Err(_) => {
                 tracing::warn!("conflict capacity exceeded, dropping new conflict");
                 None
-            },
+            }
         }
     }
 

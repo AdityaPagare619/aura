@@ -422,7 +422,7 @@ impl WorkingMemory {
                     .collect();
                 ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
                 ranked
-            },
+            }
             None => by_importance.clone(), // fallback: use importance as relevance
         };
 
@@ -562,8 +562,8 @@ impl WorkingMemory {
                         None => best = Some((idx, slot.importance)),
                         Some((_, imp)) if slot.importance < imp => {
                             best = Some((idx, slot.importance));
-                        },
-                        _ => {},
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -599,8 +599,8 @@ impl WorkingMemory {
                         None => best_expired = Some((idx, slot.importance)),
                         Some((_, imp)) if slot.importance < imp => {
                             best_expired = Some((idx, slot.importance));
-                        },
-                        _ => {},
+                        }
+                        _ => {}
                     }
                 }
 
@@ -609,8 +609,8 @@ impl WorkingMemory {
                     None => best_overall = Some((idx, slot.importance)),
                     Some((_, imp)) if slot.importance < imp => {
                         best_overall = Some((idx, slot.importance));
-                    },
-                    _ => {},
+                    }
+                    _ => {}
                 }
             }
         }

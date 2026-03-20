@@ -54,18 +54,18 @@ impl Args {
                     config_path = Some(PathBuf::from(
                         args.get(i).ok_or("--config requires a value")?,
                     ));
-                },
+                }
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
-                },
+                }
                 "--version" | "-V" => {
                     println!("aura-daemon {}", env!("CARGO_PKG_VERSION"));
                     std::process::exit(0);
-                },
+                }
                 other => {
                     return Err(format!("unknown argument: {other}"));
-                },
+                }
             }
             i += 1;
         }
@@ -76,7 +76,7 @@ impl Args {
             // Defensive fallback: don't use "." as it creates confusing paths.
             let candidates = [
                 std::env::var("HOME").ok(),
-                std::env::var("PREFIX").ok(),   // Termux-specific
+                std::env::var("PREFIX").ok(), // Termux-specific
                 std::env::current_dir()
                     .map(|p| p.to_string_lossy().into_owned())
                     .ok(),
@@ -126,7 +126,7 @@ fn main() {
             eprintln!("error: {e}");
             print_usage();
             std::process::exit(1);
-        },
+        }
     };
 
     // ── Step 3: Initialize tracing ─────────────────────────────────────────
@@ -149,7 +149,7 @@ fn main() {
         Err(e) => {
             tracing::error!(error = %e, path = %args.config_path.display(), "failed to load config");
             std::process::exit(1);
-        },
+        }
     };
 
     // Set up SIGTERM/SIGINT handler for graceful shutdown.
@@ -169,7 +169,7 @@ fn main() {
             Err(e) => {
                 tracing::error!(error = %e, "startup failed");
                 std::process::exit(1);
-            },
+            }
         };
 
         tracing::info!(
@@ -225,7 +225,7 @@ fn load_config(
 fn setup_signal_handler(shutdown: Arc<AtomicBool>) {
     // Use a simple thread-based approach that works everywhere.
     // ctrlc/signal-hook crates would be better but we avoid extra deps.
-    let flag = shutdown.clone();
+    let _flag = shutdown.clone();
     std::thread::Builder::new()
         .name("signal-handler".into())
         .spawn(move || {

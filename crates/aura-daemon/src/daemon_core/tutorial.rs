@@ -195,14 +195,14 @@ impl TutorialEngine {
                     self.progress.current_step_index = 0;
                     self.progress.updated_at_ms = now_ms;
                     info!(module = %module.id, "tutorial started");
-                },
+                }
                 None => {
                     // All required modules done.
                     self.progress.all_complete = true;
                     self.progress.updated_at_ms = now_ms;
                     info!("all required tutorial modules complete");
                     return Ok(None);
-                },
+                }
             }
         }
 
@@ -285,12 +285,12 @@ impl TutorialEngine {
                     self.progress.current_module = nm.id.clone();
                     self.progress.current_step_index = 0;
                     info!(module = %nm.id, "starting next tutorial module");
-                },
+                }
                 None => {
                     self.progress.current_module.clear();
                     self.progress.all_complete = true;
                     info!("all tutorial modules complete");
-                },
+                }
             }
         }
 
@@ -410,7 +410,7 @@ impl TutorialEngine {
                 let progress: TutorialProgress = serde_json::from_slice(&data)
                     .map_err(|e| OnboardingError::PersistenceFailed(format!("deserialize: {e}")))?;
                 Ok(Some(progress))
-            },
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::PersistenceFailed(format!("load: {e}"))),
         }

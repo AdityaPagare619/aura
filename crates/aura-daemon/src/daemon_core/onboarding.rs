@@ -700,7 +700,7 @@ impl OnboardingEngine {
                 let state: OnboardingState = serde_json::from_slice(&data)
                     .map_err(|e| OnboardingError::PersistenceFailed(format!("deserialize: {e}")))?;
                 Ok(Some(state))
-            },
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(OnboardingError::PersistenceFailed(format!("load: {e}"))),
         }

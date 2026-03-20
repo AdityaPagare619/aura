@@ -241,7 +241,7 @@ impl DialogueManager {
             None => {
                 self.active.remove(&chat_id);
                 return DialogueOutcome::InvalidInput("Dialogue already complete.".into());
-            },
+            }
         };
 
         match &step.expect {
@@ -251,7 +251,7 @@ impl DialogueManager {
                         "Please type exactly: <b>{expected}</b>\nOr type /cancel to abort."
                     ));
                 }
-            },
+            }
             ExpectedInput::YesNo => {
                 if trimmed != "yes" && trimmed != "no" {
                     return DialogueOutcome::InvalidInput(
@@ -262,18 +262,18 @@ impl DialogueManager {
                     self.active.remove(&chat_id);
                     return DialogueOutcome::Cancelled;
                 }
-            },
+            }
             ExpectedInput::FreeText => {
                 // Any non-empty input is accepted.
                 if trimmed.is_empty() {
                     return DialogueOutcome::InvalidInput("Please enter some text.".into());
                 }
-            },
+            }
             ExpectedInput::Pin => {
                 if trimmed.is_empty() {
                     return DialogueOutcome::InvalidInput("Please enter a PIN.".into());
                 }
-            },
+            }
         }
 
         // Accept the response and advance.
@@ -400,7 +400,7 @@ mod tests {
             DialogueOutcome::Completed { kind, responses } => {
                 assert_eq!(kind, DialogueKind::ForgetAll);
                 assert_eq!(responses.len(), 3);
-            },
+            }
             other => panic!("expected Completed, got {other:?}"),
         }
 
@@ -420,7 +420,7 @@ mod tests {
         match mgr.process_input(42, "wrong phrase") {
             DialogueOutcome::InvalidInput(msg) => {
                 assert!(msg.contains("DELETE ALL"));
-            },
+            }
             other => panic!("expected InvalidInput, got {other:?}"),
         }
 
@@ -435,7 +435,7 @@ mod tests {
         mgr.start(42, kind, steps);
 
         match mgr.process_input(42, "/cancel") {
-            DialogueOutcome::Cancelled => {},
+            DialogueOutcome::Cancelled => {}
             other => panic!("expected Cancelled, got {other:?}"),
         }
 
@@ -449,7 +449,7 @@ mod tests {
         mgr.start(42, kind, steps);
 
         match mgr.process_input(42, "no") {
-            DialogueOutcome::Cancelled => {},
+            DialogueOutcome::Cancelled => {}
             other => panic!("expected Cancelled, got {other:?}"),
         }
     }
@@ -466,7 +466,7 @@ mod tests {
             DialogueOutcome::Completed { kind, .. } => match kind {
                 DialogueKind::GenericConfirm { action } => {
                     assert_eq!(action, "restart daemon");
-                },
+                }
                 other => panic!("expected GenericConfirm, got {other:?}"),
             },
             other => panic!("expected Completed, got {other:?}"),
@@ -483,7 +483,7 @@ mod tests {
             DialogueOutcome::InvalidInput(msg) => {
                 assert!(msg.contains("yes"));
                 assert!(msg.contains("no"));
-            },
+            }
             other => panic!("expected InvalidInput, got {other:?}"),
         }
     }

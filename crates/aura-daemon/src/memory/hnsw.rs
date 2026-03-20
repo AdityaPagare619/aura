@@ -369,10 +369,10 @@ impl HnswIndex {
             match fresh.insert(embedding) {
                 Ok(new_id) => {
                     id_map.push((*old_id, new_id));
-                },
+                }
                 Err(e) => {
                     warn!(old_id, ?e, "compact: failed to re-insert node, skipping");
-                },
+                }
             }
         }
 

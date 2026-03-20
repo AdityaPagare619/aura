@@ -14,7 +14,7 @@
 //!
 //! # Precise System Modeling
 //! - State: `AttentionState` (HealthyInteraction, ContextThrashing, AttentionLockIn,
-//!           NotificationSpiral, CompulsiveAppReturn, PreSleepScreen)
+//!   NotificationSpiral, CompulsiveAppReturn, PreSleepScreen)
 //! - Events: `AppSwitch`, `SessionDurationExceeded`, `RapidScrollSpike`, `Notification`, `ScreenOn`
 //!
 //! # Pattern Detection (5 patterns)
@@ -41,10 +41,7 @@ pub enum AttentionState {
     /// High dwell time in infinite-scroll interfaces with repetitive actions.
     AttentionLockIn(Duration),
     /// Excessive notifications in a short time window.
-    NotificationSpiral {
-        count: u32,
-        window_secs: u64,
-    },
+    NotificationSpiral { count: u32, window_secs: u64 },
     /// Repeatedly returning to the same app obsessively.
     CompulsiveAppReturn {
         app_package: String,
@@ -52,17 +49,15 @@ pub enum AttentionState {
         window_mins: u64,
     },
     /// Screen active during pre-sleep hours.
-    PreSleepScreen {
-        sleep_hour: u8,
-        current_hour: u8,
-    },
+    PreSleepScreen { sleep_hour: u8, current_hour: u8 },
 }
 
 /// Intervention level for escalating responses.
 /// AURA HELPS but never COERCES — each level is a suggestion, never forced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum InterventionLevel {
     /// No intervention needed.
+    #[default]
     None = 0,
     /// L1 (0.15): Gentle reminder — first threshold breach.
     L1GentleReminder = 1,
@@ -83,12 +78,6 @@ impl InterventionLevel {
             InterventionLevel::L3ClearConcern => 0.30,
             InterventionLevel::L4MindfulnessPrompt => 0.40,
         }
-    }
-}
-
-impl Default for InterventionLevel {
-    fn default() -> Self {
-        InterventionLevel::None
     }
 }
 
@@ -162,14 +151,19 @@ impl ForestGuardian {
         let timestamps = self
             .app_return_timestamps
             .entry(app_package.to_string())
-            .or_insert_with(VecDeque::new);
+            .or_default();
         timestamps.push_back(now);
         self.cleanup_old_app_returns(app_package, now);
     }
 
     fn cleanup_old_notifications(&mut self, now: Instant) {
         let cutoff = now - Duration::from_secs(self.notification_window_secs);
-        while self.notification_timestamps.front().map(|t| *t < cutoff).unwrap_or(false) {
+        while self
+            .notification_timestamps
+            .front()
+            .map(|t| *t < cutoff)
+            .unwrap_or(false)
+        {
             self.notification_timestamps.pop_front();
         }
     }
@@ -243,17 +237,17 @@ impl ForestGuardian {
 
     pub fn reset_if_healthy(&mut self, healthy_duration_secs: u64) {
         let now = Instant::now();
-        if now.duration_since(self.last_breach_time) > Duration::from_secs(healthy_duration_secs) {
-            if self.current_level != InterventionLevel::None {
-                warn!("ForestGuardian: User returned to healthy state. Resetting level.");
-                self.current_level = InterventionLevel::None;
-                self.breach_count = 0;
-            }
+        if now.duration_since(self.last_breach_time) > Duration::from_secs(healthy_duration_secs)
+            && self.current_level != InterventionLevel::None
+        {
+            warn!("ForestGuardian: User returned to healthy state. Resetting level.");
+            self.current_level = InterventionLevel::None;
+            self.breach_count = 0;
         }
     }
 
     /// Evaluates the user's current attention state based on raw ETG events.
-    /// 
+    ///
     /// # Arguments
     /// * `app_package` - The package name of the currently active app
     /// * `is_infinite_scroll_app` - Whether the app is an infinite-scroll interface
@@ -292,10 +286,7 @@ impl ForestGuardian {
                 "ForestGuardian: Notification spiral detected! {} notifications in {} seconds.",
                 count, window_secs
             );
-            return AttentionState::NotificationSpiral {
-                count,
-                window_secs,
-            };
+            return AttentionState::NotificationSpiral { count, window_secs };
         }
 
         if let Some((ref app, count, window_mins)) = self.detect_compulsive_app_return() {
@@ -382,7 +373,10 @@ impl ForestGuardian {
                 neuroticism: aura_traits.neuroticism,
                 conscientiousness: aura_traits.conscientiousness,
             }),
-            AttentionState::NotificationSpiral { count, window_secs } => Some(AttentionContext {
+            AttentionState::NotificationSpiral {
+                count,
+                window_secs: _,
+            } => Some(AttentionContext {
                 intervention_kind: InterventionKind::NotificationSpiral,
                 intervention_level: self.current_level,
                 detected_patterns: vec![DetectedPattern::NotificationSpiral],
@@ -400,7 +394,7 @@ impl ForestGuardian {
             AttentionState::CompulsiveAppReturn {
                 app_package,
                 return_count,
-                window_mins,
+                window_mins: _,
             } => Some(AttentionContext {
                 intervention_kind: InterventionKind::CompulsiveAppReturn,
                 intervention_level: self.current_level,

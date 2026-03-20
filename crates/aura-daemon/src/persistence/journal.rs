@@ -168,11 +168,11 @@ impl std::fmt::Display for JournalError {
                 actual_crc,
             } => {
                 write!(f, "corrupt entry at offset {offset}: expected CRC {expected_crc:#010X}, got {actual_crc:#010X}")
-            },
+            }
             Self::Truncated { offset } => write!(f, "truncated entry at offset {offset}"),
             Self::PayloadTooLarge { size } => {
                 write!(f, "payload too large: {size} bytes (max 65536)")
-            },
+            }
         }
     }
 }
@@ -379,11 +379,11 @@ impl WriteAheadJournal {
             // Try to read entry header: length(4) + checksum(4).
             let mut header_buf = [0u8; ENTRY_HEADER_SIZE];
             match read_exact_or_eof(&mut self.file, &mut header_buf) {
-                Ok(true) => {}, // got full header
+                Ok(true) => {} // got full header
                 Ok(false) => {
                     // Clean EOF — no more entries.
                     break;
-                },
+                }
                 Err(e) => return Err(JournalError::Io(e)),
             }
 
@@ -408,14 +408,14 @@ impl WriteAheadJournal {
             // Read body.
             let mut body = vec![0u8; body_len];
             match read_exact_or_eof(&mut self.file, &mut body) {
-                Ok(true) => {},
+                Ok(true) => {}
                 Ok(false) => {
                     // Truncated entry — treat as incomplete write.
                     tracing::warn!(offset, "journal: truncated entry body");
                     corruption_detected = true;
                     corruption_offset = offset;
                     break;
-                },
+                }
                 Err(e) => return Err(JournalError::Io(e)),
             }
 
@@ -609,7 +609,7 @@ fn read_exact_or_eof(file: &mut File, buf: &mut [u8]) -> std::io::Result<bool> {
                     std::io::ErrorKind::UnexpectedEof,
                     format!("read {total}/{} bytes before EOF", buf.len()),
                 ));
-            },
+            }
             Ok(n) => total += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),

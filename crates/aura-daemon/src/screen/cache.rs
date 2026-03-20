@@ -197,12 +197,12 @@ impl ScreenCache {
                 self.hits += 1;
                 trace!(state_hash, "cache hit");
                 Some(&self.entries[0].tree)
-            },
+            }
             None => {
                 self.misses += 1;
                 trace!(state_hash, "cache miss");
                 None
-            },
+            }
         }
     }
 

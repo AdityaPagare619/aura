@@ -262,7 +262,7 @@ impl MessageQueue {
                         Err(e) => {
                             warn!(id, "failed to deserialize queued message: {e}");
                             continue;
-                        },
+                        }
                     };
 
                 ids_to_mark.push(id);

@@ -437,19 +437,19 @@ pub async fn embed_neural_or_tfidf(
                              Check ModelCapabilities.embedding_dim matches the loaded GGUF."
                         );
                     }
-                },
+                }
                 Ok(_) => {
                     tracing::warn!(
                         "Neocortex returned unexpected response to Embed request; \
                          falling back to TF-IDF."
                     );
-                },
+                }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
                         "Neural embedding IPC call failed; falling back to TF-IDF."
                     );
-                },
+                }
             }
         }
     }

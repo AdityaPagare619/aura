@@ -672,7 +672,7 @@ impl ThermalManager {
                 if temp_c >= self.thresholds.warm_c {
                     return ThermalState::Warm;
                 }
-            },
+            }
             ThermalState::Warm => {
                 if temp_c >= self.thresholds.hot_c {
                     return ThermalState::Hot;
@@ -681,7 +681,7 @@ impl ThermalManager {
                 if temp_c < self.thresholds.warm_c - self.hysteresis_c {
                     return ThermalState::Cool;
                 }
-            },
+            }
             ThermalState::Hot => {
                 if temp_c >= self.thresholds.critical_c {
                     return ThermalState::Critical;
@@ -689,13 +689,13 @@ impl ThermalManager {
                 if temp_c < self.thresholds.hot_c - self.hysteresis_c {
                     return ThermalState::Warm;
                 }
-            },
+            }
             ThermalState::Critical => {
                 // Only recover from critical if well below the threshold.
                 if temp_c < self.thresholds.critical_c - self.hysteresis_c {
                     return ThermalState::Hot;
                 }
-            },
+            }
         }
 
         self.state

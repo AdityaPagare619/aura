@@ -97,7 +97,7 @@ impl System1 {
                     response_text: None,
                     execution_time_ms: 0,
                 };
-            },
+            }
             Intent::ActionRequest => {
                 // Try ETG lookup.
                 if let Some(plan) = self.try_etg_lookup(&event.content, now_ms) {
@@ -108,8 +108,8 @@ impl System1 {
                         execution_time_ms: 0,
                     };
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
 
         // Fast path couldn't handle it.

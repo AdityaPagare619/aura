@@ -217,11 +217,11 @@ impl BoundaryDecision {
             Self::Allow => "allowed".to_string(),
             Self::AllowWithConfirmation { reason, .. } => {
                 format!("allowed with confirmation: {reason}")
-            },
+            }
             Self::Deny { reason, level } => format!("denied ({level}): {reason}"),
             Self::DenyAbsolute { reason, rule_id } => {
                 format!("ABSOLUTE DENY [{rule_id}]: {reason}")
-            },
+            }
         }
     }
 }
@@ -405,10 +405,10 @@ impl std::fmt::Display for UserPreference {
                     "TimeRestricted({:02}:00-{:02}:00)",
                     allowed_hours.0, allowed_hours.1
                 )
-            },
+            }
             Self::FrequencyLimited { max_per_day } => {
                 write!(f, "FrequencyLimited({max_per_day}/day)")
-            },
+            }
             Self::RequiresContext(ctx) => write!(f, "RequiresContext({ctx})"),
         }
     }
@@ -888,12 +888,12 @@ impl BoundaryReasoner {
         match decision {
             BoundaryDecision::DenyAbsolute { .. } => {
                 self.total_absolute_denials = self.total_absolute_denials.saturating_add(1);
-            },
+            }
             BoundaryDecision::AllowWithConfirmation { .. } => {
                 self.total_confirmations_requested =
                     self.total_confirmations_requested.saturating_add(1);
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -925,7 +925,7 @@ impl BoundaryReasoner {
                         "Level 3: auto-approve (learned)"
                     );
                     return Some(BoundaryDecision::Allow);
-                },
+                }
                 UserPreference::AlwaysDeny => {
                     tracing::debug!(
                         target: "BOUNDARY",
@@ -941,7 +941,7 @@ impl BoundaryReasoner {
                         ),
                         level: BoundaryLevel::Learned,
                     });
-                },
+                }
                 UserPreference::TimeRestricted { allowed_hours } => {
                     let (start, end) = *allowed_hours;
                     let hour = context.current_hour;
@@ -960,7 +960,7 @@ impl BoundaryReasoner {
                             level: BoundaryLevel::Learned,
                         });
                     }
-                },
+                }
                 UserPreference::FrequencyLimited { max_per_day } => {
                     // Count today's occurrences of this action in the decision log.
                     let now_ms = current_timestamp_ms();
@@ -992,7 +992,7 @@ impl BoundaryReasoner {
                             level: BoundaryLevel::Learned,
                         });
                     }
-                },
+                }
                 UserPreference::RequiresContext(required_ctx) => {
                     if !context.action_category.contains(required_ctx.as_str()) {
                         return Some(BoundaryDecision::Deny {
@@ -1002,7 +1002,7 @@ impl BoundaryReasoner {
                             level: BoundaryLevel::Learned,
                         });
                     }
-                },
+                }
             }
         }
         None

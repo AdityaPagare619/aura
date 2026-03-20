@@ -2,7 +2,7 @@
 //!
 //! This module controls when AURA can proactively speak/make suggestions.
 //! User consent is REQUIRED before any proactive behavior occurs.
-//! 
+//!
 //! GDPR requires consent to be specific, not all-or-nothing.
 //! This implementation supports 6 consent categories for fine-grained control.
 
@@ -43,19 +43,15 @@ impl ConsentCategory {
 /// Individual consent level for a category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ConsentLevel {
     /// User has not been asked - NO behavior allowed for this category
+    #[default]
     Unasked,
     /// User explicitly declined - NO behavior for this category
     Declined,
     /// User explicitly accepted - behavior allowed for this category
     Accepted,
-}
-
-impl Default for ConsentLevel {
-    fn default() -> Self {
-        Self::Unasked
-    }
 }
 
 /// Legacy binary consent format for backward compatibility.
@@ -64,7 +60,9 @@ impl Default for ConsentLevel {
 /// Old Unasked → all 6 categories = Unasked
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProactiveConsent {
+    #[default]
     Unasked,
     Declined,
     AcceptedAll,
@@ -73,12 +71,6 @@ pub enum ProactiveConsent {
 impl ProactiveConsent {
     pub fn is_allowed(&self) -> bool {
         matches!(self, Self::AcceptedAll)
-    }
-}
-
-impl Default for ProactiveConsent {
-    fn default() -> Self {
-        Self::Unasked
     }
 }
 
@@ -175,9 +167,7 @@ impl Consent {
     pub fn migrate_if_needed(self) -> Self {
         match self {
             Consent::Legacy(legacy) => {
-                tracing::info!(
-                    "Migrating legacy binary consent to 6-category granular consent"
-                );
+                tracing::info!("Migrating legacy binary consent to 6-category granular consent");
                 Self::Granular(Self::from_legacy(legacy))
             }
             already_granular => already_granular,
@@ -225,7 +215,10 @@ impl Default for ProactiveSettings {
 impl ProactiveSettings {
     /// Check if proactive behavior is allowed (uses ProactiveSuggestion category)
     pub fn can_proact(&self, hour: u8) -> bool {
-        if !self.consent.is_category_allowed(ConsentCategory::ProactiveSuggestion) {
+        if !self
+            .consent
+            .is_category_allowed(ConsentCategory::ProactiveSuggestion)
+        {
             return false;
         }
 
@@ -309,19 +302,23 @@ mod tests {
     #[test]
     fn test_per_category_consent() {
         let mut settings = ProactiveSettings::default();
-        
+
         settings.set_category_consent(ConsentCategory::MemoryWrite, ConsentLevel::Accepted);
         settings.set_category_consent(ConsentCategory::DeviceControl, ConsentLevel::Declined);
-        
-        assert!(settings.consent.is_category_allowed(ConsentCategory::MemoryWrite));
-        assert!(!settings.consent.is_category_allowed(ConsentCategory::DeviceControl));
+
+        assert!(settings
+            .consent
+            .is_category_allowed(ConsentCategory::MemoryWrite));
+        assert!(!settings
+            .consent
+            .is_category_allowed(ConsentCategory::DeviceControl));
     }
 
     #[test]
     fn test_legacy_migration() {
         let legacy = Consent::Legacy(ProactiveConsent::AcceptedAll);
         let migrated = legacy.migrate_if_needed();
-        
+
         assert!(migrated.is_category_allowed(ConsentCategory::Notification));
         assert!(migrated.is_category_allowed(ConsentCategory::BackgroundTask));
         assert!(migrated.is_category_allowed(ConsentCategory::DataAccess));
@@ -334,7 +331,7 @@ mod tests {
     fn test_legacy_declined_migration() {
         let legacy = Consent::Legacy(ProactiveConsent::Declined);
         let migrated = legacy.migrate_if_needed();
-        
+
         assert!(!migrated.is_category_allowed(ConsentCategory::ProactiveSuggestion));
     }
 

@@ -784,12 +784,12 @@ pub fn plan_step_to_tool_call(step: &aura_types::dsl::DslStep) -> ToolCall {
             parameters.insert("x".to_string(), x.to_string());
             parameters.insert("y".to_string(), y.to_string());
             "tap"
-        },
+        }
         aura_types::actions::ActionType::LongPress { x, y } => {
             parameters.insert("x".to_string(), x.to_string());
             parameters.insert("y".to_string(), y.to_string());
             "long_press"
-        },
+        }
         aura_types::actions::ActionType::Swipe {
             from_x,
             from_y,
@@ -803,23 +803,23 @@ pub fn plan_step_to_tool_call(step: &aura_types::dsl::DslStep) -> ToolCall {
             parameters.insert("to_y".to_string(), to_y.to_string());
             parameters.insert("duration_ms".to_string(), duration_ms.to_string());
             "swipe"
-        },
+        }
         aura_types::actions::ActionType::Type { text } => {
             parameters.insert("text".to_string(), text.clone());
             "type_text"
-        },
+        }
         aura_types::actions::ActionType::Scroll { direction, amount } => {
             parameters.insert("direction".to_string(), format!("{:?}", direction));
             parameters.insert("amount".to_string(), amount.to_string());
             "scroll"
-        },
+        }
         aura_types::actions::ActionType::Back => "back",
         aura_types::actions::ActionType::Home => "home",
         aura_types::actions::ActionType::Recents => "recents",
         aura_types::actions::ActionType::OpenApp { package } => {
             parameters.insert("package".to_string(), package.clone());
             "open_app"
-        },
+        }
         aura_types::actions::ActionType::NotificationAction {
             notification_id,
             action_index,
@@ -827,11 +827,11 @@ pub fn plan_step_to_tool_call(step: &aura_types::dsl::DslStep) -> ToolCall {
             parameters.insert("notification_id".to_string(), notification_id.to_string());
             parameters.insert("action_index".to_string(), action_index.to_string());
             "notification_action"
-        },
+        }
         aura_types::actions::ActionType::WaitForElement { timeout_ms, .. } => {
             parameters.insert("timeout_ms".to_string(), timeout_ms.to_string());
             "wait_for_element"
-        },
+        }
         aura_types::actions::ActionType::AssertElement { .. } => "assert_element",
     };
 
@@ -870,7 +870,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
             ActionType::Tap { x, y }
-        },
+        }
         "long_press" => {
             let x: i32 = tool_call
                 .parameters
@@ -883,7 +883,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
             ActionType::LongPress { x, y }
-        },
+        }
         "swipe" => {
             let from_x: i32 = tool_call
                 .parameters
@@ -917,7 +917,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 to_y,
                 duration_ms,
             }
-        },
+        }
         "type_text" => {
             let text = tool_call
                 .parameters
@@ -925,7 +925,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 .cloned()
                 .unwrap_or_default();
             ActionType::Type { text }
-        },
+        }
         "scroll" => {
             let direction = match tool_call
                 .parameters
@@ -945,7 +945,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1);
             ActionType::Scroll { direction, amount }
-        },
+        }
         "back" => ActionType::Back,
         "home" => ActionType::Home,
         "recents" => ActionType::Recents,
@@ -956,7 +956,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 .cloned()
                 .unwrap_or_default();
             ActionType::OpenApp { package }
-        },
+        }
         "notification_action" => {
             let notification_id: u32 = tool_call
                 .parameters
@@ -972,7 +972,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 notification_id,
                 action_index,
             }
-        },
+        }
         "wait_for_element" => {
             let timeout_ms: u32 = tool_call
                 .parameters
@@ -1001,7 +1001,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 selector,
                 timeout_ms,
             }
-        },
+        }
         "assert_element" => {
             let selector = if let Some(text) = tool_call.parameters.get("text") {
                 TargetSelector::Text(text.clone())
@@ -1044,7 +1044,7 @@ fn tool_call_to_dsl_step(tool_call: &ToolCall) -> aura_types::dsl::DslStep {
                 _ => ElementAssertion::Exists,
             };
             ActionType::AssertElement { selector, expected }
-        },
+        }
         _ => ActionType::Back,
     };
 
@@ -1228,11 +1228,11 @@ pub async fn execute_task(
         ExecutionMode::Dgs => {
             let outcome = execute_dgs_standalone(&mut session, plan, policy).await;
             (outcome, session)
-        },
+        }
         ExecutionMode::SemanticReact => {
             let outcome = execute_semantic_react_standalone(&mut session, plan, policy).await;
             (outcome, session)
-        },
+        }
     }
 }
 
@@ -1266,11 +1266,11 @@ impl ReactEngine {
             ExecutionMode::Dgs => {
                 let outcome = self.execute_dgs(&mut session, plan).await;
                 (outcome, session)
-            },
+            }
             ExecutionMode::SemanticReact => {
                 let outcome = self.execute_semantic_react(&mut session, plan).await;
                 (outcome, session)
-            },
+            }
         }
     }
 
@@ -1284,11 +1284,11 @@ impl ReactEngine {
             Ok(tree) => {
                 let reader_summary = extract_screen_summary(&tree);
                 Some(reader_summary_to_ipc(&reader_summary))
-            },
+            }
             Err(e) => {
                 warn!(error = %e, "screen capture failed — proceeding without screen summary");
                 None
-            },
+            }
         }
     }
 
@@ -1301,7 +1301,7 @@ impl ReactEngine {
             Err(e) => {
                 warn!(error = %e, "screen capture for hash failed");
                 0
-            },
+            }
         }
     }
 }
@@ -1330,7 +1330,7 @@ impl ReactEngine {
                 info!("no plan available for DGS — escalating to SemanticReact");
                 session.mode = ExecutionMode::SemanticReact;
                 return self.execute_semantic_react(session, None).await;
-            },
+            }
         };
 
         info!(
@@ -1433,14 +1433,14 @@ impl ReactEngine {
                         iterations_completed: session.iteration_count,
                         total_ms: elapsed_ms,
                     };
-                },
+                }
                 Ok(ExecutionOutcome::CycleDetected { step, tier }) => {
                     let reason = format!("cycle at step {} tier {}", step, tier);
                     return TaskOutcome::CycleAborted {
                         iterations_completed: session.iteration_count,
                         cycle_reason: reason,
                     };
-                },
+                }
                 Err(e) => ActionResult {
                     success: false,
                     duration_ms: elapsed_ms as u32,
@@ -1611,8 +1611,8 @@ impl ReactEngine {
                 };
             }
 
-            let context = match build_context(session, None, None) {
-                Ok(_ctx) => {},
+            match build_context(session, None, None) {
+                Ok(_ctx) => {}
                 Err(e) => {
                     warn!(error = %e, "failed to build context — aborting");
                     return TaskOutcome::Failed {
@@ -1621,7 +1621,7 @@ impl ReactEngine {
                         total_ms: start.elapsed().as_millis() as u64,
                         last_strategy: session.strategy,
                     };
-                },
+                }
             };
 
             let thought = format!(
@@ -1753,7 +1753,7 @@ impl ReactEngine {
                 })
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let (react_done, react_tokens) = send_react_step_ipc(
+            let (react_done, _react_tokens) = send_react_step_ipc(
                 &tool_call.tool_name,
                 &observation,
                 &post_screen_desc,
@@ -1862,7 +1862,7 @@ async fn execute_dgs_standalone(
             info!("no plan available for DGS — escalating to SemanticReact");
             session.mode = ExecutionMode::SemanticReact;
             return execute_semantic_react_standalone(session, None, policy).await;
-        },
+        }
     };
 
     info!(
@@ -2035,7 +2035,7 @@ async fn execute_semantic_react_standalone(
                     total_ms: start.elapsed().as_millis() as u64,
                     last_strategy: session.strategy,
                 };
-            },
+            }
         };
 
         let thought = format!(
@@ -2200,7 +2200,7 @@ async fn send_react_step_ipc(
         Err(e) => {
             debug!(error = %e, "neocortex not reachable for ReActStep — using heuristic fallback");
             return (None, 0);
-        },
+        }
     };
 
     match client.request(&msg).await {
@@ -2217,15 +2217,15 @@ async fn send_react_step_ipc(
                 "received ReActDecision from neocortex"
             );
             (Some(done), tokens_used)
-        },
+        }
         Ok(other) => {
             warn!(resp = ?std::mem::discriminant(&other), "unexpected response to ReActStep");
             (None, 0)
-        },
+        }
         Err(e) => {
             warn!(error = %e, "ReActStep request failed — using heuristic fallback");
             (None, 0)
-        },
+        }
     }
 }
 

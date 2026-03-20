@@ -880,7 +880,7 @@ impl StubBackend {
                 // Fallback: pick a random content word (skip special tokens)
                 let idx = ((self.next_random() * (self.vocab.len() - 3) as f64) as usize) + 3;
                 return idx as LlamaToken;
-            },
+            }
         };
 
         // Apply temperature to probabilities
@@ -1784,7 +1784,7 @@ pub mod stubs {
             Err(e) => {
                 error!(error = %e, "stub model load failed");
                 std::ptr::null_mut()
-            },
+            }
         }
     }
 

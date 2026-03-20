@@ -68,7 +68,7 @@ mod inner {
             Err(e) => {
                 eprintln!("AURA JNI_OnLoad: failed to wrap JavaVM: {e}");
                 return -1;
-            },
+            }
         };
 
         // Cache the VM for later `jni_env()` calls.
@@ -87,7 +87,7 @@ mod inner {
                             "AURA JNI_OnLoad: verified bridge class '{}'",
                             BRIDGE_CLASS_PATH
                         );
-                    },
+                    }
                     Err(e) => {
                         error!(
                             "AURA JNI_OnLoad: bridge class '{}' not found — \
@@ -97,12 +97,12 @@ mod inner {
                         // Return -1 to abort library load; the JVM will throw
                         // UnsatisfiedLinkError, making the misconfiguration obvious.
                         return -1;
-                    },
+                    }
                 }
-            },
+            }
             Err(e) => {
                 error!("AURA JNI_OnLoad: could not obtain JNIEnv for class verification: {e}");
-            },
+            }
         }
 
         info!("AURA JNI_OnLoad: native library loaded");
@@ -150,7 +150,7 @@ mod inner {
                     format!("bad config string: {e}"),
                 );
                 return 0;
-            },
+            }
         };
 
         let config: aura_types::config::AuraConfig = match serde_json::from_str(&config_str) {
@@ -159,19 +159,19 @@ mod inner {
                 // Fall back to default config if JSON parsing fails.
                 warn!("config JSON parse failed ({e}), using defaults");
                 aura_types::config::AuraConfig::default()
-            },
+            }
         };
 
         match crate::startup(config) {
             Ok((state, report)) => {
                 info!("daemon started via JNI; startup took {}ms", report.total_ms);
                 Box::into_raw(Box::new(state)) as jlong
-            },
+            }
             Err(e) => {
                 error!("daemon startup failed: {e}");
                 let _ = env.throw_new("java/lang/RuntimeException", format!("startup: {e}"));
                 0
-            },
+            }
         }
     }
 
@@ -200,7 +200,7 @@ mod inner {
             Err(e) => {
                 error!("nativeRun: failed to build tokio runtime: {e}");
                 return;
-            },
+            }
         };
 
         rt.block_on(async {

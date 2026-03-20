@@ -371,13 +371,13 @@ pub fn startup(config: AuraConfig) -> Result<(DaemonState, StartupReport), Start
     match onboarding_status {
         OnboardingStatus::FirstRun => {
             tracing::info!("onboarding: first run detected — onboarding required");
-        },
+        }
         OnboardingStatus::Interrupted => {
             tracing::info!("onboarding: interrupted session detected — will resume");
-        },
+        }
         OnboardingStatus::Completed => {
             tracing::debug!("onboarding: already completed");
-        },
+        }
     }
 
     let total_ms = overall_start.elapsed().as_millis() as u64;
@@ -550,11 +550,11 @@ fn phase_subsystems_init(config: &AuraConfig) -> Result<SubSystems, StartupError
             Ok(store) => {
                 tracing::info!(path = %etg_path_str, "ETG: persistent store opened");
                 store
-            },
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "ETG: persistent open failed, using in-memory");
                 EtgStore::in_memory()
-            },
+            }
         }
     };
 
@@ -692,7 +692,7 @@ where
                 subsystem: name,
                 reason: msg,
             })
-        },
+        }
     }
 }
 
@@ -712,7 +712,7 @@ where
                 "non-critical subsystem init failed — running in degraded mode"
             );
             None
-        },
+        }
     }
 }
 
@@ -775,7 +775,7 @@ fn phase_onboarding_check(db: &Connection) -> OnboardingStatus {
             // treat as first run — onboarding will create the table.
             tracing::warn!(error = %e, "onboarding status check failed — assuming first run");
             OnboardingStatus::FirstRun
-        },
+        }
     }
 }
 

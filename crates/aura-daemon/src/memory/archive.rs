@@ -146,7 +146,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, MemError> {
                 "unknown compression algorithm: 0x{:02X}",
                 algo
             )));
-        },
+        }
     };
 
     if decoded.len() != orig_len {
@@ -375,7 +375,7 @@ impl ArchiveMemory {
                 Some((summary, compressed)) => {
                     let data = decompress(&compressed)?;
                     Ok(Some((summary, data)))
-                },
+                }
                 None => Ok(None),
             }
         })

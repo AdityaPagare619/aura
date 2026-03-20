@@ -264,7 +264,7 @@ impl ModelScanner {
             Err(e) => {
                 debug!(dir = %model_dir.display(), error = %e, "model dir not readable, using fallback filenames");
                 return Self::default();
-            },
+            }
         };
 
         for entry in read_dir.flatten() {
@@ -283,10 +283,10 @@ impl ModelScanner {
                         "scanned GGUF model"
                     );
                     entries.push((path, meta));
-                },
+                }
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "skipping non-parseable GGUF file");
-                },
+                }
             }
         }
 
@@ -297,7 +297,7 @@ impl ModelScanner {
         match entries.len() {
             0 => {
                 debug!("no GGUF files found in model dir");
-            },
+            }
             1 => {
                 // Only one model — map it to all tiers
                 let (path, meta) = entries.remove(0);
@@ -305,7 +305,7 @@ impl ModelScanner {
                 models.insert(ModelTier::Brainstem1_5B, (path.clone(), meta.clone()));
                 models.insert(ModelTier::Standard4B, (path.clone(), meta.clone()));
                 models.insert(ModelTier::Full8B, (path, meta));
-            },
+            }
             2 => {
                 // Two models: small → Brainstem, large → Full + Standard
                 let (small_path, small_meta) = entries.remove(0);
@@ -316,7 +316,7 @@ impl ModelScanner {
                     (large_path.clone(), large_meta.clone()),
                 );
                 models.insert(ModelTier::Full8B, (large_path, large_meta));
-            },
+            }
             _ => {
                 // 3+ models: pick smallest, middle, largest
                 let (small_path, small_meta) = entries.remove(0);
@@ -329,7 +329,7 @@ impl ModelScanner {
                 models.insert(ModelTier::Brainstem1_5B, (small_path, small_meta));
                 models.insert(ModelTier::Standard4B, (mid_path, mid_meta));
                 models.insert(ModelTier::Full8B, (large_path, large_meta));
-            },
+            }
         }
 
         Self { models }
@@ -1107,11 +1107,11 @@ fn load_model_ffi(
                 "model loaded via backend"
             );
             (model_ptr, ctx_ptr)
-        },
+        }
         Err(e) => {
             error!(error = %e, path = %path_str, "model load failed");
             (std::ptr::null_mut(), std::ptr::null_mut())
-        },
+        }
     }
 }
 

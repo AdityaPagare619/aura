@@ -336,7 +336,7 @@ impl AudioIo {
             Some(output) => {
                 output.enqueue(samples);
                 Ok(())
-            },
+            }
             None => Err(AudioError::StreamNotInitialized),
         }
     }

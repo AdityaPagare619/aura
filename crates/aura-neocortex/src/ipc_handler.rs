@@ -117,7 +117,7 @@ impl IpcHandler {
                             return Err(e);
                         }
                     }
-                },
+                }
                 Err(e) => {
                     if e.kind() == io::ErrorKind::UnexpectedEof
                         || e.kind() == io::ErrorKind::ConnectionReset
@@ -139,7 +139,7 @@ impl IpcHandler {
                     }
                     error!(error = %e, "IPC read error");
                     return Err(e);
-                },
+                }
             }
         }
     }
@@ -281,25 +281,25 @@ impl IpcHandler {
                             model_name,
                             memory_used_mb,
                         })
-                    },
+                    }
                     Err(e) => {
                         error!(error = %e, "model load failed");
                         Some(NeocortexToDaemon::LoadFailed { reason: e })
-                    },
+                    }
                 }
-            },
+            }
 
             DaemonToNeocortex::Unload => {
                 info!("unloading model (graceful)");
                 self.model_manager.unload();
                 Some(NeocortexToDaemon::Unloaded)
-            },
+            }
 
             DaemonToNeocortex::UnloadImmediate => {
                 info!("unloading model (immediate)");
                 self.model_manager.unload();
                 Some(NeocortexToDaemon::Unloaded)
-            },
+            }
 
             // ── Inference requests ──────────────────────────────────────
             DaemonToNeocortex::Plan { context, failure } => {
@@ -309,22 +309,22 @@ impl IpcHandler {
                     "plan request"
                 );
                 Some(self.handle_inference(&context, None, failure.as_ref()))
-            },
+            }
 
             DaemonToNeocortex::Replan { context, failure } => {
                 info!(mode = ?context.inference_mode, "replan request");
                 Some(self.handle_inference(&context, None, Some(&failure)))
-            },
+            }
 
             DaemonToNeocortex::Converse { context } => {
                 info!("converse request");
                 Some(self.handle_inference(&context, None, None))
-            },
+            }
 
             DaemonToNeocortex::Compose { context, template } => {
                 info!(template = %template, "compose request");
                 Some(self.handle_inference(&context, Some(&template), None))
-            },
+            }
 
             // ── Control messages ────────────────────────────────────────
             DaemonToNeocortex::Cancel => {
@@ -333,13 +333,13 @@ impl IpcHandler {
                 // No direct response — the running inference will detect
                 // cancellation and send an Error response.
                 None
-            },
+            }
 
             DaemonToNeocortex::Ping => {
                 let uptime_ms = self.start_time.elapsed().as_millis() as u64;
                 debug!(uptime_ms, "pong");
                 Some(NeocortexToDaemon::Pong { uptime_ms })
-            },
+            }
 
             // ── Embedding request ───────────────────────────────────────
             DaemonToNeocortex::Embed { text } => {
@@ -352,9 +352,9 @@ impl IpcHandler {
                             code: 1, // MODEL_NOT_LOADED
                             message: reason,
                         })
-                    },
+                    }
                 }
-            },
+            }
 
             // ── ReAct loop step ──────────────────────────────────────────
             // Daemon executed one action, captured real screen state, and sends
@@ -430,7 +430,7 @@ impl IpcHandler {
                     other => {
                         warn!(?other, "unexpected inference result during react step");
                         (false, "inference error during react step".to_string(), None)
-                    },
+                    }
                 };
 
                 Some(NeocortexToDaemon::ReActDecision {
@@ -439,7 +439,7 @@ impl IpcHandler {
                     next_action,
                     tokens_used: 0,
                 })
-            },
+            }
 
             // ── Proactive context ────────────────────────────────────────────
             // A daemon subsystem detected a proactive opportunity (goal stall,
@@ -526,7 +526,7 @@ impl IpcHandler {
                 );
 
                 Some(result)
-            },
+            }
 
             // ── Memory consolidation / dreaming phase summarization ───────────
             // During the dreaming phase the daemon asks the LLM to synthesize raw
@@ -572,21 +572,21 @@ impl IpcHandler {
                     NeocortexToDaemon::Error { message, .. } => {
                         warn!(error = %message, "summarize inference failed");
                         return Some(NeocortexToDaemon::Error { code: 2, message });
-                    },
+                    }
                     other => {
                         warn!(?other, "unexpected result during summarize");
                         return Some(NeocortexToDaemon::Error {
                             code: 3,
                             message: "unexpected inference result type".to_string(),
                         });
-                    },
+                    }
                 };
 
                 Some(NeocortexToDaemon::Summary {
                     text,
                     tokens_used: 0,
                 })
-            },
+            }
 
             // ── Plan scoring ─────────────────────────────────────────────────
             // The daemon asks the LLM to evaluate a candidate ActionPlan and
@@ -645,14 +645,14 @@ impl IpcHandler {
                     NeocortexToDaemon::Error { message, .. } => {
                         warn!(error = %message, "score_plan inference failed");
                         return Some(NeocortexToDaemon::Error { code: 4, message });
-                    },
+                    }
                     other => {
                         warn!(?other, "unexpected result during score_plan");
                         return Some(NeocortexToDaemon::Error {
                             code: 5,
                             message: "unexpected inference result type".to_string(),
                         });
-                    },
+                    }
                 };
 
                 // Parse the first float found in the response.
@@ -664,7 +664,7 @@ impl IpcHandler {
 
                 info!(score, "plan scored");
                 Some(NeocortexToDaemon::PlanScore { score })
-            },
+            }
 
             // ── Failure classification ────────────────────────────────────────
             // The daemon asks the LLM to classify a failure string into one of
@@ -711,14 +711,14 @@ impl IpcHandler {
                     NeocortexToDaemon::Error { message, .. } => {
                         warn!(error = %message, "classify_failure inference failed");
                         return Some(NeocortexToDaemon::Error { code: 6, message });
-                    },
+                    }
                     other => {
                         warn!(?other, "unexpected result during classify_failure");
                         return Some(NeocortexToDaemon::Error {
                             code: 7,
                             message: "unexpected inference result type".to_string(),
                         });
-                    },
+                    }
                 };
 
                 // Extract the category word from the response.
@@ -738,7 +738,7 @@ impl IpcHandler {
 
                 info!(%category, "failure classified");
                 Some(NeocortexToDaemon::FailureClassification { category })
-            },
+            }
         }
     }
 
@@ -874,7 +874,7 @@ impl IpcHandler {
                     code: 500,
                     message: format!("failed to clone stream for progress: {e}"),
                 };
-            },
+            }
         };
 
         let mut progress_sender: ProgressSender = Box::new(move |msg| {
@@ -883,7 +883,7 @@ impl IpcHandler {
                 Err(e) => {
                     warn!(error = %e, "failed to serialize progress");
                     return;
-                },
+                }
             };
             let len = body.len() as u32;
             if stream_clone.write_all(&len.to_le_bytes()).is_err() {
@@ -976,7 +976,7 @@ fn describe_trigger(trigger: &ProactiveTrigger) -> String {
                  Goal title: \"{title}\"\n\
                  Days without progress: {stalled_days}"
             )
-        },
+        }
         ProactiveTrigger::GoalOverdue {
             goal_id,
             title,
@@ -988,7 +988,7 @@ fn describe_trigger(trigger: &ProactiveTrigger) -> String {
                  Goal title: \"{title}\"\n\
                  Days overdue: {overdue_days}"
             )
-        },
+        }
         ProactiveTrigger::SocialGap {
             contact_name,
             days_since_contact,
@@ -998,7 +998,7 @@ fn describe_trigger(trigger: &ProactiveTrigger) -> String {
                  Contact: {contact_name}\n\
                  Days since last contact: {days_since_contact}"
             )
-        },
+        }
         ProactiveTrigger::HealthAlert {
             metric,
             value,
@@ -1010,13 +1010,13 @@ fn describe_trigger(trigger: &ProactiveTrigger) -> String {
                  Current value: {value:.3}\n\
                  Threshold: {threshold:.3}"
             )
-        },
+        }
         ProactiveTrigger::MemoryInsight { summary } => {
             format!(
                 "Trigger: memory_insight\n\
                  Pattern: \"{summary}\""
             )
-        },
+        }
         ProactiveTrigger::TriggerRuleFired {
             rule_name,
             description,
@@ -1026,7 +1026,7 @@ fn describe_trigger(trigger: &ProactiveTrigger) -> String {
                  Rule: {rule_name}\n\
                  Details: {description}"
             )
-        },
+        }
     }
 }
 
@@ -1059,7 +1059,7 @@ mod tests {
                 assert_eq!(params.n_ctx, 2048);
                 assert_eq!(params.n_threads, 4);
                 assert!(matches!(params.model_tier, ModelTier::Standard4B));
-            },
+            }
             _ => panic!("wrong variant"),
         }
     }
@@ -1074,7 +1074,7 @@ mod tests {
         match decoded {
             NeocortexToDaemon::Pong { uptime_ms } => {
                 assert_eq!(uptime_ms, 12345);
-            },
+            }
             _ => panic!("wrong variant"),
         }
     }
@@ -1096,7 +1096,7 @@ mod tests {
             } => {
                 assert_eq!(model_name, "qwen3.5-4b-q4_k_m.gguf");
                 assert_eq!(memory_used_mb, 2400);
-            },
+            }
             _ => panic!("wrong variant"),
         }
     }
@@ -1115,7 +1115,7 @@ mod tests {
             NeocortexToDaemon::Error { code, message } => {
                 assert_eq!(code, 503);
                 assert_eq!(message, "model not loaded");
-            },
+            }
             _ => panic!("wrong variant"),
         }
     }
@@ -1214,11 +1214,11 @@ mod tests {
             },
             DaemonToNeocortex::Plan {
                 context: context.clone(),
-                failure: Some(failure.clone()),
+                failure: Some(failure), // FailureContext is Copy, no .clone() needed
             },
             DaemonToNeocortex::Replan {
                 context: context.clone(),
-                failure: failure.clone(),
+                failure, // Copy type — move is fine
             },
             DaemonToNeocortex::Converse {
                 context: context.clone(),
@@ -1348,7 +1348,7 @@ mod tests {
         match decoded {
             NeocortexToDaemon::Pong { uptime_ms } => {
                 assert_eq!(uptime_ms, 999);
-            },
+            }
             _ => panic!("wrong variant"),
         }
     }

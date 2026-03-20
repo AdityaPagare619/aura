@@ -183,21 +183,21 @@ impl Personality {
             PersonalityEvent::PositiveInteraction => {
                 self.nudge_all(POSITIVE_DELTA_BASE * attenuation);
                 self.apply_micro_drift(MICRO_DRIFT_BASE * attenuation);
-            },
+            }
             PersonalityEvent::NegativeInteraction => {
                 self.nudge_all(NEGATIVE_DELTA_BASE * attenuation);
                 self.apply_micro_drift(-MICRO_DRIFT_BASE * attenuation);
-            },
+            }
             PersonalityEvent::ContextualPressure {
                 ref trait_name,
                 direction,
             } => {
                 // User-directed pressure is NOT attenuated — respect explicit intent.
                 self.nudge_trait(trait_name, direction);
-            },
+            }
             PersonalityEvent::UserFeedback(ref _msg) => {
                 tracing::debug!("user feedback recorded (no trait change yet)");
-            },
+            }
         }
         self.traits.clamp_all();
         self.evolution_count += 1;
@@ -219,35 +219,35 @@ impl Personality {
             PersonalityOutcome::RoutineFollowed => {
                 self.traits.conscientiousness = (self.traits.conscientiousness + n).min(0.9);
                 self.traits.openness = (self.traits.openness - n * 0.5).max(0.1);
-            },
+            }
             PersonalityOutcome::RoutineDeviatedPositive => {
                 self.traits.openness = (self.traits.openness + n).min(0.9);
                 self.traits.conscientiousness = (self.traits.conscientiousness - n * 0.5).max(0.1);
-            },
+            }
             PersonalityOutcome::RoutineDeviatedNegative => {
                 self.traits.neuroticism = (self.traits.neuroticism + n).min(0.9);
                 self.traits.conscientiousness = (self.traits.conscientiousness + n * 0.5).min(0.9);
-            },
+            }
             PersonalityOutcome::ExploredNew => {
                 self.traits.openness = (self.traits.openness + n).min(0.9);
-            },
+            }
             PersonalityOutcome::AvoidedNew => {
                 self.traits.openness = (self.traits.openness - n * 0.5).max(0.1);
                 self.traits.conscientiousness = (self.traits.conscientiousness + n * 0.5).min(0.9);
-            },
+            }
             PersonalityOutcome::EmotionalPositive => {
                 self.traits.extraversion = (self.traits.extraversion + n * 0.7).min(0.9);
                 self.traits.agreeableness = (self.traits.agreeableness + n).min(0.9);
                 self.traits.neuroticism = (self.traits.neuroticism - n * 0.5).max(0.1);
-            },
+            }
             PersonalityOutcome::EmotionalNegative => {
                 self.traits.neuroticism = (self.traits.neuroticism + n).min(0.9);
                 self.traits.extraversion = (self.traits.extraversion - n * 0.3).max(0.1);
-            },
+            }
             PersonalityOutcome::CooperativeAct => {
                 self.traits.agreeableness = (self.traits.agreeableness + n).min(0.9);
                 self.traits.extraversion = (self.traits.extraversion + n * 0.3).min(0.9);
-            },
+            }
         }
         // No clamp_all needed — all branches already enforce [0.1, 0.9] per trait.
         self.evolution_count += 1;
@@ -419,7 +419,7 @@ impl Personality {
             "neuroticism" => self.traits.neuroticism += direction,
             other => {
                 tracing::warn!(trait_name = other, "unknown trait in contextual pressure");
-            },
+            }
         }
     }
 

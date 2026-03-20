@@ -1365,7 +1365,7 @@ mod tests {
         match result {
             Err(GoalError::DecompositionFailed(msg)) => {
                 assert!(msg.contains("max depth"));
-            },
+            }
             other => panic!("expected DecompositionFailed, got {:?}", other),
         }
     }

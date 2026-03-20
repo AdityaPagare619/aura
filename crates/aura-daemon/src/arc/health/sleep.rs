@@ -804,7 +804,7 @@ mod tests {
         for i in 0..7 {
             // Vary onset wildly for inconsistency
             let base_onset = 86400 * (i + 1);
-            let onset = base_onset + (18 + (i % 6) as i64) * 3600;
+            let onset = base_onset + (18 + (i % 6)) * 3600;
             let r = make_record(onset, onset + 3 * 3600, 45.0, 6);
             tracker.record(r).expect("record");
         }

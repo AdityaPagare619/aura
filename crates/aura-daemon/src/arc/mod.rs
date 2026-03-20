@@ -163,23 +163,23 @@ impl std::fmt::Display for ArcError {
         match self {
             ArcError::InsufficientData { domain, detail } => {
                 write!(f, "arc: insufficient data in {domain}: {detail}")
-            },
+            }
             ArcError::PowerTierBlocked { required, current } => {
                 write!(
                     f,
                     "arc: power tier blocked (need {required}, have {current})"
                 )
-            },
+            }
             ArcError::CapacityExceeded { collection, max } => {
                 write!(f, "arc: capacity exceeded for {collection} (max {max})")
-            },
+            }
             ArcError::NotFound { entity, id } => {
                 write!(f, "arc: {entity} not found: {id}")
-            },
+            }
             ArcError::SerdeError(msg) => write!(f, "arc: serde error: {msg}"),
             ArcError::DomainError { domain, detail } => {
                 write!(f, "arc: domain error in {domain}: {detail}")
-            },
+            }
         }
     }
 }

@@ -1,53 +1,34 @@
 # rustfmt configuration for AURA v4
-# Requires nightly rustfmt (nightly-2026-03-01)
+# STABLE-compatible options only (CI uses stable Rust)
 # Applied by: cargo fmt --check (CI) and cargo fmt (local)
 
 edition = "2021"
 
 # ── Line width ──────────────────────────────────────────────────────────────
 max_width = 100
-comment_width = 100
-wrap_comments = true
 
 # ── Imports ──────────────────────────────────────────────────────────────────
-imports_granularity = "Crate"    # Group all imports from same crate
-group_imports = "StdExternalCrate"  # std → external → crate
 reorder_imports = true
 reorder_modules = true
 
 # ── Trailing commas ───────────────────────────────────────────────────────────
-trailing_comma = "Vertical"     # Trailing comma on multiline, not on single-line
-trailing_semicolon = true
 
 # ── Braces and blocks ─────────────────────────────────────────────────────────
 brace_style = "PreferSameLine"
 control_brace_style = "AlwaysSameLine"
 empty_item_single_line = true
-fn_single_line = false
-where_single_line = false
 
 # ── Match and arms ────────────────────────────────────────────────────────────
-match_block_trailing_comma = true
-match_arm_blocks = true
 match_arm_leading_pipes = "Never"
 
-# ── Functions ─────────────────────────────────────────────────────────────────
-fn_params_layout = "Tall"         # One arg per line if they don't fit
-fn_call_width = 60
+# ── Functions ──────────────────────────────────────────────────────────────────
 newline_style = "Unix"          # LF everywhere (matches .gitattributes)
 
 # ── Structs and enums ─────────────────────────────────────────────────────────
-struct_field_align_threshold = 0   # Don't align struct fields
-enum_discrim_align_threshold = 0
 
 # ── Strings ───────────────────────────────────────────────────────────────────
-format_strings = false          # Don't reformat string literals
-
-# ── Doc comments ─────────────────────────────────────────────────────────────
-normalize_doc_attributes = true
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 use_field_init_shorthand = true
 use_try_shorthand = true
 condense_wildcard_suffixes = true
-force_explicit_abi = true

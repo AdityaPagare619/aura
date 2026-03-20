@@ -124,7 +124,7 @@ pub fn load_rules(config: &PolicyConfig, strict: bool) -> Result<Vec<PolicyRule>
                 } else {
                     tracing::warn!("skipping invalid policy rule: {}", e);
                 }
-            },
+            }
         }
     }
 
@@ -188,21 +188,21 @@ fn glob_match_inner(p: &[char], t: &[char], pi: usize, ti: usize) -> bool {
                 }
             }
             false
-        },
+        }
         '?' => {
             if ti < tlen {
                 glob_match_inner(p, t, pi + 1, ti + 1)
             } else {
                 false
             }
-        },
+        }
         ch => {
             if ti < tlen && t[ti] == ch {
                 glob_match_inner(p, t, pi + 1, ti + 1)
             } else {
                 false
             }
-        },
+        }
     }
 }
 

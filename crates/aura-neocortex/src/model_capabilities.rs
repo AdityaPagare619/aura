@@ -122,7 +122,7 @@ impl ModelCapabilities {
                     }
                 }
                 (v, ModelCapabilitySource::GgufMetadata)
-            },
+            }
             None => match user_override_embedding_dim {
                 Some(v) => {
                     warn!(
@@ -131,7 +131,7 @@ impl ModelCapabilities {
                          verify model file integrity"
                     );
                     (v, ModelCapabilitySource::UserConfigOverride)
-                },
+                }
                 None => {
                     warn!(
                         fallback_value = fallback.embedding_dim,
@@ -142,7 +142,7 @@ impl ModelCapabilities {
                         fallback.embedding_dim,
                         ModelCapabilitySource::CompiledFallback,
                     )
-                },
+                }
             },
         };
 
@@ -166,7 +166,7 @@ impl ModelCapabilities {
                     "GGUF block_count absent — using compiled fallback"
                 );
                 fallback.block_count
-            },
+            }
         };
 
         // ── feed_forward_length ───────────────────────────────────────────
@@ -178,7 +178,7 @@ impl ModelCapabilities {
                     "GGUF feed_forward_length absent — using compiled fallback"
                 );
                 fallback.feed_forward_length
-            },
+            }
         };
 
         // ── architecture ──────────────────────────────────────────────────

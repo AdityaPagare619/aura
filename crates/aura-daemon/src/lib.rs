@@ -23,7 +23,19 @@
 #![allow(clippy::ptr_arg)] // Some &String/&Vec params are needed for trait compat
 #![allow(clippy::len_without_is_empty)] // Feedback buffers don't need is_empty
 #![allow(clippy::manual_strip)] // Some strip patterns are clearer inline
-#![allow(clippy::needless_range_loop)] // Index loops are clearer for DSP/math code
+#![allow(clippy::needless_range_loop)]
+// Index loops are clearer for DSP/math code
+// Test-specific lints — intentionally testing constants and ranges in test code:
+#![allow(clippy::assertions_on_constants)] // Test assertions on compile-time constants
+#![allow(clippy::manual_range_contains)] // Explicit range contains for readability in tests
+#![allow(clippy::len_zero)] // len() == 0 pattern used in tests for clarity
+#![allow(clippy::redundant_closure)] // Named closures preferred for test clarity
+#![allow(clippy::single_char_pattern)] // str::contains used explicitly in tests
+#![allow(clippy::suspicious_else_formatting)]
+// Some test else branches formatted differently
+// General unused lints — some modules conditionally use imports:
+#![allow(unused_imports)] // Some imports used conditionally via cfg flags
+#![allow(unused_variables)] // Some variables used conditionally in tests
 
 pub mod arc;
 pub mod bridge;
@@ -139,12 +151,12 @@ mod jni_bridge {
                 let _ = CANCEL_FLAG.set(state.cancel_flag.clone());
                 let boxed = Box::new(state);
                 Box::into_raw(boxed) as jlong
-            },
+            }
             Err(e) => {
                 let msg = format!("AURA startup failed: {e}");
                 let _ = env.throw_new("java/lang/RuntimeException", &msg);
                 0
-            },
+            }
         }
     }
 
@@ -174,7 +186,7 @@ mod jni_bridge {
                 // Panic across FFI is undefined behavior — log and bail instead.
                 tracing::error!("FATAL: tokio runtime failed to initialize in JNI run(): {e}");
                 return;
-            },
+            }
         };
 
         rt.block_on(async {

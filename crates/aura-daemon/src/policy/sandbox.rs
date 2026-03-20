@@ -143,22 +143,22 @@ impl RollbackEntry {
         match self {
             Self::TextTyped { char_count } => {
                 format!("delete {char_count} characters (backspace)")
-            },
+            }
             Self::SettingChanged {
                 setting_key,
                 previous_value,
             } => {
                 format!("restore {setting_key} to '{previous_value}'")
-            },
+            }
             Self::AppOpened { previous_package } => {
                 format!("return to {previous_package}")
-            },
+            }
             Self::ScrollPerformed {
                 inverse_direction,
                 amount,
             } => {
                 format!("scroll {inverse_direction} by {amount}")
-            },
+            }
             Self::NavigatedBack => "navigate forward".to_string(),
             Self::Custom { description, .. } => description.clone(),
         }
@@ -445,12 +445,12 @@ impl Sandbox {
             // L1: Monitored — potentially meaningful but generally safe.
             ActionType::LongPress { .. } | ActionType::Swipe { .. } | ActionType::Type { .. } => {
                 ContainmentLevel::Monitored
-            },
+            }
 
             // L2: Restricted — opens apps, interacts with notifications.
             ActionType::OpenApp { .. } | ActionType::NotificationAction { .. } => {
                 ContainmentLevel::Restricted
-            },
+            }
         }
     }
 
@@ -573,18 +573,18 @@ impl Sandbox {
         match action {
             ActionType::Tap { .. } | ActionType::LongPress { .. } => {
                 session.record_tap()?;
-            },
+            }
             ActionType::Type { text } => {
                 session.record_text(text)?;
-            },
+            }
             ActionType::OpenApp { package } => {
                 // Use empty string as "previous" since we don't know it here.
                 // In real integration, caller provides the current foreground app.
                 session.record_app_open(package, "")?;
-            },
+            }
             _ => {
                 session.record_action()?;
-            },
+            }
         }
 
         self.total_sandboxed += 1;
@@ -711,7 +711,7 @@ fn describe_action(action: &ActionType) -> (String, String, bool) {
                 "Medium risk — entering text".to_string(),
                 true,
             )
-        },
+        }
         ActionType::Scroll { direction, amount } => (
             format!("Scroll {direction:?} by {amount}"),
             "Low risk — scrolling content".to_string(),

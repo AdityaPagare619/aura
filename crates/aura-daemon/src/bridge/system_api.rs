@@ -269,7 +269,7 @@ impl fmt::Display for SystemCommand {
             Self::ContactSearch(q) => write!(f, "ContactSearch({q})"),
             Self::CalendarEvents { start_ms, end_ms } => {
                 write!(f, "CalendarEvents({start_ms}..{end_ms})")
-            },
+            }
             Self::RecentPhotos(n) => write!(f, "RecentPhotos({n})"),
             Self::NotificationList => write!(f, "NotificationList"),
             Self::SetAlarm {
@@ -278,7 +278,7 @@ impl fmt::Display for SystemCommand {
                 label,
             } => {
                 write!(f, "SetAlarm({hour:02}:{minute:02}, {label:?})")
-            },
+            }
             Self::SendSms { recipient, .. } => write!(f, "SendSms(to={recipient})"),
             Self::SetBrightness(v) => write!(f, "SetBrightness({v:.2})"),
             Self::ToggleWifi(on) => write!(f, "ToggleWifi({on})"),
@@ -568,7 +568,7 @@ impl SystemBridge {
             SystemCommand::ContactSearch(ref query) => self.execute_contact_search(query),
             SystemCommand::CalendarEvents { start_ms, end_ms } => {
                 self.execute_calendar(start_ms, end_ms)
-            },
+            }
             SystemCommand::RecentPhotos(count) => self.execute_recent_photos(count),
             SystemCommand::NotificationList => self.execute_notifications(),
             SystemCommand::SetAlarm {
@@ -1163,7 +1163,7 @@ impl SystemBridge {
                     success: true,
                     message: format!("Alarm set for {hour:02}:{minute:02} — {label}"),
                 })
-            },
+            }
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: AccessibilityService fallback.
                 warn!(
@@ -1180,7 +1180,7 @@ impl SystemBridge {
                         format!("Failed to set alarm for {hour:02}:{minute:02}")
                     },
                 })
-            },
+            }
             Ok(false) => {
                 warn!(
                     hour,
@@ -1192,7 +1192,7 @@ impl SystemBridge {
                     message: "Alarm intent failed and device is too hot for accessibility fallback"
                         .into(),
                 })
-            },
+            }
             Err(e) => {
                 warn!(error = %e, "Path A error; thermal gate blocked Path B");
                 Ok(SystemResult::ActionCompleted {
@@ -1200,7 +1200,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("Alarm failed: {e}"),
                 })
-            },
+            }
         }
     }
 
@@ -1230,7 +1230,7 @@ impl SystemBridge {
                     success: true,
                     message: format!("SMS sent to {recipient}"),
                 })
-            },
+            }
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: open SMS app via accessibility and fill fields.
                 warn!(
@@ -1247,7 +1247,7 @@ impl SystemBridge {
                         format!("Failed to send SMS to {recipient}")
                     },
                 })
-            },
+            }
             Ok(false) => {
                 warn!(
                     recipient,
@@ -1258,7 +1258,7 @@ impl SystemBridge {
                     success: false,
                     message: "SMS failed and device is too hot for accessibility fallback".into(),
                 })
-            },
+            }
             Err(e) => {
                 warn!(error = %e, recipient, "SMS JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1266,7 +1266,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("SMS failed: {e}"),
                 })
-            },
+            }
         }
     }
 
@@ -1292,7 +1292,7 @@ impl SystemBridge {
                     success: true,
                     message: format!("Brightness set to {:.0}%", level * 100.0),
                 })
-            },
+            }
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: navigate Settings UI via accessibility.
                 warn!(level, "brightness Path A failed; attempting Path B");
@@ -1306,7 +1306,7 @@ impl SystemBridge {
                         "Failed to set brightness".into()
                     },
                 })
-            },
+            }
             Ok(false) => {
                 warn!(
                     level,
@@ -1318,7 +1318,7 @@ impl SystemBridge {
                     message: "Brightness failed and device is too hot for accessibility fallback"
                         .into(),
                 })
-            },
+            }
             Err(e) => {
                 warn!(error = %e, "brightness JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1326,7 +1326,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("Brightness failed: {e}"),
                 })
-            },
+            }
         }
     }
 
@@ -1354,7 +1354,7 @@ impl SystemBridge {
                         "Wi-Fi intent dispatched but state unconfirmed".to_string()
                     },
                 })
-            },
+            }
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: navigate Settings app via accessibility.
                 warn!(enable, "Wi-Fi Path A failed; attempting Path B");
@@ -1368,7 +1368,7 @@ impl SystemBridge {
                         "Failed to toggle Wi-Fi".to_string()
                     },
                 })
-            },
+            }
             Ok(false) => {
                 warn!(
                     enable,
@@ -1380,7 +1380,7 @@ impl SystemBridge {
                     message: "Wi-Fi toggle failed and device is too hot for accessibility fallback"
                         .into(),
                 })
-            },
+            }
             Err(e) => {
                 warn!(error = %e, "Wi-Fi JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1388,7 +1388,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("Wi-Fi toggle failed: {e}"),
                 })
-            },
+            }
         }
     }
 
@@ -1420,7 +1420,7 @@ impl SystemBridge {
                         format!("Launch intent sent to {package} but not confirmed foreground")
                     },
                 })
-            },
+            }
             Ok(false) | Err(_) if thermal_ok => {
                 // Path B: open via accessibility (long-press recents, find icon, tap).
                 warn!(package, "Path A failed; attempting Path B (accessibility)");
@@ -1434,7 +1434,7 @@ impl SystemBridge {
                         format!("Failed to launch {package}")
                     },
                 })
-            },
+            }
             Ok(false) => {
                 warn!(
                     package,
@@ -1447,7 +1447,7 @@ impl SystemBridge {
                         "Launch intent failed and device is too hot for accessibility fallback"
                             .into(),
                 })
-            },
+            }
             Err(e) => {
                 warn!(error = %e, package, "launch JNI error");
                 Ok(SystemResult::ActionCompleted {
@@ -1455,7 +1455,7 @@ impl SystemBridge {
                     success: false,
                     message: format!("Launch failed: {e}"),
                 })
-            },
+            }
         }
     }
 
@@ -1473,13 +1473,13 @@ impl SystemBridge {
                 Ok(pkg) if pkg == expected_pkg => {
                     debug!(attempt, expected_pkg, "foreground package confirmed");
                     return true;
-                },
+                }
                 Ok(pkg) => {
                     trace!(attempt, expected_pkg, actual = %pkg, "foreground package mismatch");
-                },
+                }
                 Err(e) => {
                     trace!(attempt, error = %e, "foreground package query failed");
-                },
+                }
             }
         }
         warn!(
@@ -1502,10 +1502,10 @@ impl SystemBridge {
                         return true;
                     }
                     trace!(attempt, enable, net_type, "Wi-Fi state not yet changed");
-                },
+                }
                 Err(e) => {
                     trace!(attempt, error = %e, "network type query failed");
-                },
+                }
             }
         }
         warn!(enable, "could not confirm Wi-Fi state after 3 polls");
@@ -1870,7 +1870,7 @@ mod tests {
             SystemResult::Battery { level, health, .. } => {
                 assert_eq!(level, 1.0);
                 assert_eq!(health, BatteryHealth::Good);
-            },
+            }
             other => panic!("expected Battery, got {other:?}"),
         }
         assert_eq!(bridge.execution_count, 1);
@@ -1887,7 +1887,7 @@ mod tests {
             } => {
                 assert!(total_bytes > 0);
                 assert!(free_bytes <= total_bytes);
-            },
+            }
             other => panic!("expected Storage, got {other:?}"),
         }
     }

@@ -419,7 +419,7 @@ mod tests {
                 assert!(html.contains("daemon.log_level"));
                 assert!(html.contains("debug"));
                 assert!(html.contains("Config Set"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
 
@@ -427,7 +427,7 @@ mod tests {
         match handle_set(&ctx, "nonexistent", "value").unwrap() {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Unknown Key"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -453,7 +453,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("daemon.log_level"));
                 assert!(html.contains("info")); // default log level
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -469,7 +469,7 @@ mod tests {
         match handle_personality(&ctx).unwrap() {
             HandlerResponse::Text(text) => {
                 assert!(text.contains("Config unavailable"));
-            },
+            }
             other => panic!("expected Text fallback, got {other:?}"),
         }
     }
@@ -496,7 +496,7 @@ mod tests {
                 assert!(html.contains("Personality"));
                 assert!(html.contains("Mood cooldown"));
                 assert!(html.contains("Trust hysteresis"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -512,7 +512,7 @@ mod tests {
         match handle_trust_set(&ctx, 1.5).unwrap() {
             HandlerResponse::Text(text) => {
                 assert!(text.contains("must be between 0.0 and 1.0"));
-            },
+            }
             other => panic!("expected Text error, got {other:?}"),
         }
     }
@@ -529,7 +529,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Unknown Trait"));
                 assert!(html.contains("openness"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -547,7 +547,7 @@ mod tests {
                 assert!(html.contains("Personality Updated"));
                 assert!(html.contains("openness"));
                 assert!(html.contains("0.80"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -573,7 +573,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Quiet Mode"));
                 assert!(html.contains("proactive suggestions are now disabled"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -599,7 +599,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Wake Mode"));
                 assert!(html.contains("Proactive suggestions are now enabled"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }

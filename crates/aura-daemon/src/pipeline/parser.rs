@@ -595,7 +595,7 @@ impl DialogueState {
 
         // Store the intent (skip Negated/Unknown/Conversation for "do that again").
         match intent {
-            NluIntent::Unknown { .. } | NluIntent::Conversation { .. } => {},
+            NluIntent::Unknown { .. } | NluIntent::Conversation { .. } => {}
             _ => self.last_intent = Some(intent.clone()),
         }
 
@@ -787,16 +787,16 @@ fn intent_description(intent: &NluIntent) -> String {
                 .map(|a| format!(" via {}", a))
                 .unwrap_or_default();
             format!("send a message to {}{}", to, via)
-        },
+        }
         NluIntent::AppOpen { app } => format!("open {}", app),
         NluIntent::AlarmSet { time, .. } => {
             let t = time.as_deref().unwrap_or("unspecified time");
             format!("set an alarm for {}", t)
-        },
+        }
         NluIntent::TimerSet { duration, .. } => {
             let d = duration.as_deref().unwrap_or("unspecified duration");
             format!("set a timer for {}", d)
-        },
+        }
         NluIntent::SettingsToggle { setting, state } => {
             let action = match state {
                 Some(true) => "turn on",
@@ -804,7 +804,7 @@ fn intent_description(intent: &NluIntent) -> String {
                 None => "toggle",
             };
             format!("{} {}", action, setting)
-        },
+        }
         NluIntent::FileShare { file, app } => {
             let f = file.as_deref().unwrap_or("a file");
             let via = app
@@ -812,7 +812,7 @@ fn intent_description(intent: &NluIntent) -> String {
                 .map(|a| format!(" via {}", a))
                 .unwrap_or_default();
             format!("share {}{}", f, via)
-        },
+        }
         NluIntent::Negated { original, .. } => format!("NOT {}", intent_description(original)),
         _ => format!("{:?}", intent),
     }

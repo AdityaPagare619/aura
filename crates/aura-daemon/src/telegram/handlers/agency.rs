@@ -316,7 +316,7 @@ mod tests {
                 // Must NOT contain misleading action language.
                 assert!(!html.contains("Routing through approval"));
                 assert!(!html.contains("queued"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -335,7 +335,7 @@ mod tests {
                 assert!(html.contains("whatsapp"));
                 assert!(html.contains("John"));
                 assert!(html.contains("No message was sent"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -353,7 +353,7 @@ mod tests {
                 assert!(html.contains("Execution Engine Unavailable"));
                 assert!(html.contains("+1234567890"));
                 assert!(html.contains("No call was placed"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -370,7 +370,7 @@ mod tests {
             HandlerResponse::Html(html) => {
                 assert!(html.contains("Execution Engine Unavailable"));
                 assert!(html.contains("No screenshot was captured"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -388,7 +388,7 @@ mod tests {
                 assert!(html.contains("Execution Engine Unavailable"));
                 assert!(html.contains("Team meeting"));
                 assert!(html.contains("No event was scheduled"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }
@@ -406,7 +406,7 @@ mod tests {
                 assert!(html.contains("Execution Engine Unavailable"));
                 assert!(html.contains("morning_routine"));
                 assert!(html.contains("No action was taken"));
-            },
+            }
             other => panic!("expected Html, got {other:?}"),
         }
     }

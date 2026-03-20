@@ -8,6 +8,10 @@ members = [
     "crates/aura-iron-laws",
 ]
 
+# Note: This is a workspace root. SBOM is configured at crate level.
+# The [package.metadata.bom] below is for workspace-level metadata only.
+# Individual crates define their own [package] sections.
+
 [workspace.package]
 version = "4.0.0-alpha.8"
 edition = "2021"
@@ -36,21 +40,5 @@ codegen-units = 1
 strip = true
 panic = "unwind"       # CHANGED: abort → unwind (F001 fix: NDK #2073 — LTO+panic=abort causes startup SIGSEGV)
 
-# SBOM Configuration
-[package.metadata.bom]
-name = "AURA"
-description = "Autonomous Responsive Universal Agent v4"
-version = "4.0.0-alpha"
-authors = ["Aditya Pagare <aditya@example.com>"]
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/AdityaPagare619/aura"
-
-[package.metadata.bom.spdx]
-spdx-version = "SPDX-2.3"
-data-license = "CC0-1.0"
-creator = "Tool: AURA CI Pipeline"
-
-[package.metadata.bom.quality]
-min-test-coverage = 80.0
-max-critical-vulnerabilities = 0
-max-high-vulnerabilities = 5
+# SBOM Configuration: Defined at crate level, not workspace level
+# Individual crates (aura-daemon, aura-neocortex) define their own SBOM metadata

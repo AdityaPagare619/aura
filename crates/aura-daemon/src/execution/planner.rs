@@ -662,7 +662,7 @@ impl EnhancedPlanner {
         // 4. First-word penalty: different intent should score lower
         // If the first word differs, penalize to catch different verb intents
         if tokens_a[0] != tokens_b[0] {
-            score *= 0.85;
+            score *= 0.75;
         }
 
         // Clamp to [0.0, 1.0]

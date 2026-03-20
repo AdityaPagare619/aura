@@ -62,3 +62,19 @@ docs/_build/
 
 # ---- Local release inspection ----
 artifact_inspect/
+
+# ---- Infrastructure build artifacts ----
+aura-daemon-unstripped/
+infrastructure/data/
+infrastructure/*.exe
+infrastructure/*.o
+infrastructure/*.rlib
+
+# ---- Agent-generated debug reports ----
+docs/reports/AURA-DEBUG-*/
+docs/reports/AURA-DIAGNOSTIC-*.sh
+docs/reports/AURA-TERMUX-*.sh
+
+# ---- Docker ----
+.dockerignore
+

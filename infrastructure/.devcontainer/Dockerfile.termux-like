@@ -116,16 +116,16 @@ COPY . .
 # Build with EXACT settings that will be used for release
 # This mirrors the CI/release build, catching all platform issues
 # Note: lto="thin" and panic="unwind" are already set in Cargo.toml [profile.release]
-# We use RUSTFLAGS to pass additional rustc flags for verification
+# Workspace root has no package — build specific crates instead
 RUN echo "Building AURA for Android (${CARGO_TARGET}) with NDK ${NDK_VERSION}..." \
-    && RUSTFLAGS="-C lto=thin -C panic=unwind" \
-    && export RUSTFLAGS \
     && cargo build \
         --release \
         --target ${CARGO_TARGET} \
+        -p aura-daemon \
+        -p aura-neocortex \
     2>&1 | tee /tmp/build.log \
     && echo "BUILD SUCCESSFUL" \
-    && ls -lh target/${CARGO_TARGET}/release/aura-daemon 2>/dev/null || \
+    && ls -lh target/${CARGO_TARGET}/release/aura-daemon target/${CARGO_TARGET}/release/aura-neocortex 2>/dev/null || \
     (echo "BUILD FAILED - checking errors:" && cat /tmp/build.log | tail -50 && exit 1)
 
 # ── Verify Binary ───────────────────────────────────────────

@@ -530,6 +530,23 @@ impl WorkingMemory {
             .collect()
     }
 
+    /// Get all live slots with their content (for GDPR export).
+    pub fn get_all_slots(&self) -> Vec<&WorkingSlot> {
+        self.slots.iter().filter_map(|s| s.as_ref()).collect()
+    }
+
+    /// Clear all working memory slots (for GDPR erasure).
+    pub fn clear(&mut self) {
+        for slot in self.slots.iter_mut() {
+            *slot = None;
+        }
+        for score in self.activation_scores.iter_mut() {
+            *score = 0.0;
+        }
+        self.count = 0;
+        self.head = 0;
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------

@@ -810,6 +810,17 @@ impl ConsentTracker {
             })
             .count()
     }
+
+    /// Get all consent records (for GDPR export).
+    pub fn get_all_consents(&self) -> Vec<&ConsentRecord> {
+        self.consents.values().collect()
+    }
+
+    /// Clear all consent records (for GDPR erasure).
+    pub fn clear(&mut self) {
+        self.consents.clear();
+        tracing::info!("GDPR erasure: all consent records cleared");
+    }
 }
 
 impl Default for ConsentTracker {

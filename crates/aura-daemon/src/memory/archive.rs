@@ -15,6 +15,7 @@ use std::{path::Path, sync::Arc};
 use aura_types::{errors::MemError, ipc::MemoryTier, memory::MemoryResult};
 use lz4::block::{compress as lz4_compress, decompress as lz4_decompress};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -453,6 +454,73 @@ impl ArchiveMemory {
         .await
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
     }
+
+    /// Get all archive blob summaries (for GDPR export).
+    /// Returns (id, summary, original_size, importance, period_start_ms, period_end_ms).
+    /// Does NOT return the actual compressed data to avoid memory issues with large blobs.
+    pub async fn get_all_blobs(&self) -> Result<Vec<ArchiveBlobExport>, MemError> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, summary, original_size, importance,
+                            period_start_ms, period_end_ms
+                     FROM archive_blobs ORDER BY id ASC",
+                )
+                .map_err(|e| MemError::QueryFailed(format!("get_all prepare failed: {}", e)))?;
+
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(ArchiveBlobExport {
+                        id: row.get(0)?,
+                        summary: row.get(1)?,
+                        original_size: row.get::<_, i64>(2)? as u32,
+                        importance: row.get(3)?,
+                        period_start_ms: row.get::<_, i64>(4)? as u64,
+                        period_end_ms: row.get::<_, i64>(5)? as u64,
+                    })
+                })
+                .map_err(|e| MemError::QueryFailed(format!("get_all query failed: {}", e)))?;
+
+            let mut blobs = Vec::new();
+            for row in rows {
+                blobs.push(
+                    row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?,
+                );
+            }
+            Ok(blobs)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
+
+    /// Delete all archive blobs (for GDPR erasure).
+    pub async fn delete_all(&self) -> Result<u64, MemError> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let deleted = conn
+                .execute("DELETE FROM archive_blobs", [])
+                .map_err(|e| MemError::DatabaseError(format!("delete_all failed: {}", e)))?;
+            Ok(deleted as u64)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
+}
+
+/// Export structure for archive blobs (metadata only, no raw data).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveBlobExport {
+    pub id: u64,
+    pub summary: String,
+    pub original_size: u32,
+    pub importance: f32,
+    pub period_start_ms: u64,
+    pub period_end_ms: u64,
 }
 
 // ---------------------------------------------------------------------------

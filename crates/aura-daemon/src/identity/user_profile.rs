@@ -106,6 +106,51 @@ pub struct PrivacySettings {
     pub allow_learning: bool,
 }
 
+/// Comprehensive GDPR data export struct — Article 15 (Right to Access) & Article 20 (Data Portability).
+///
+/// Includes: profile data, memory tier counts + samples, vault entries, consent records.
+/// This is what gets returned to users who request their data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullGdprExport {
+    /// Timestamp of export (milliseconds since epoch).
+    pub exported_at_ms: i64,
+    /// The full user profile as JSON.
+    pub profile: serde_json::Value,
+    /// Working memory slot count.
+    pub working_memory: usize,
+    /// Episodic memory episode count.
+    pub episodic_count: u64,
+    /// Semantic memory entry count.
+    pub semantic_count: u64,
+    /// Archive memory blob count.
+    pub archive_count: u64,
+    /// All non-Critical vault entries with decrypted values.
+    pub vault_entries: Vec<crate::persistence::vault::VaultEntryExport>,
+    /// All consent records.
+    pub consent_records: Vec<crate::identity::ConsentRecord>,
+}
+
+/// Result of a GDPR erasure operation — Article 17 (Right to Erasure / "Right to be Forgotten").
+///
+/// This confirms what was deleted from each tier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GdprErasureResult {
+    /// Working memory slots cleared.
+    pub working_slots: usize,
+    /// Episodic episodes deleted.
+    pub episodic_episodes: u64,
+    /// Semantic entries deleted.
+    pub semantic_entries: u64,
+    /// Archive blobs deleted.
+    pub archive_blobs: u64,
+    /// Vault entries destroyed (cryptographic key erased).
+    pub vault_entries: usize,
+    /// Whether consent records were cleared.
+    pub consent_records_cleared: bool,
+    /// Whether the profile row was deleted from the database.
+    pub profile_deleted: bool,
+}
+
 impl Default for PrivacySettings {
     fn default() -> Self {
         Self {
@@ -450,22 +495,147 @@ impl UserProfile {
     }
 
     // -----------------------------------------------------------------------
-    // Export / Import (privacy compliance)
+    // GDPR: Right to Access (Article 15) & Data Portability (Article 20)
     // -----------------------------------------------------------------------
 
-    /// Export the full profile as a human-readable JSON string.
+    /// Comprehensive GDPR data export — includes profile, all memory tiers,
+    /// vault entries (non-Critical), and consent records.
+    ///
+    /// This is the method that should be called for GDPR Right to Access requests.
+    /// Returns a struct that can be serialized to JSON for the user.
+    pub async fn export_comprehensive(
+        &self,
+        memory: &crate::memory::AuraMemory,
+        vault: &mut crate::persistence::vault::CriticalVault,
+        consent_tracker: &crate::identity::ConsentTracker,
+    ) -> Result<FullGdprExport, OnboardingError> {
+        let profile = serde_json::to_value(self)
+            .map_err(|e| OnboardingError::ProfileError(format!("profile serialization: {e}")))?;
+
+        let working = memory.export_working();
+        let episodic = memory
+            .export_episodic()
+            .await
+            .map_err(|e| OnboardingError::ProfileError(format!("episodic export: {e}")))?;
+        let semantic = memory
+            .export_semantic()
+            .await
+            .map_err(|e| OnboardingError::ProfileError(format!("semantic export: {e}")))?;
+        let archive = memory
+            .export_archive()
+            .await
+            .map_err(|e| OnboardingError::ProfileError(format!("archive export: {e}")))?;
+        let vault_entries = vault.export_all();
+        let consent_records = consent_tracker
+            .get_all_consents()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        Ok(FullGdprExport {
+            exported_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64,
+            profile,
+            working_memory: working.len(),
+            episodic_count: episodic.len() as u64,
+            semantic_count: semantic.len() as u64,
+            archive_count: archive.len() as u64,
+            vault_entries,
+            consent_records,
+        })
+    }
+
+    /// Export the profile as a human-readable JSON string (backwards-compatible).
+    ///
+    /// NOTE: This only exports the UserProfile struct. For full GDPR Right to Access,
+    /// use [`Self::export_comprehensive()`] which includes all memory tiers, vault,
+    /// and consent records.
     pub fn export_json(&self) -> Result<String, OnboardingError> {
         serde_json::to_string_pretty(self)
             .map_err(|e| OnboardingError::ProfileError(format!("export failed: {e}")))
     }
 
-    /// Delete all profile data from the database (right to erasure).
-    pub fn delete_from_db(db: &rusqlite::Connection) -> Result<(), OnboardingError> {
+    // -----------------------------------------------------------------------
+    // GDPR: Right to Erasure (Article 17)
+    // -----------------------------------------------------------------------
+
+    /// Delete ALL user data — complete GDPR "right to be forgotten" erasure.
+    ///
+    /// This erases data from every tier:
+    /// 1. **Memory**: Working, episodic, semantic, and archive tiers
+    /// 2. **Vault**: Cryptographic key erasure + data zeroing (nuclear option)
+    /// 3. **Consent**: All consent records cleared
+    /// 4. **Profile DB**: user_profile table entry deleted
+    ///
+    /// After this operation, the user is completely unrecoverable in AURA.
+    pub async fn delete_with_gdpr(
+        db: &rusqlite::Connection,
+        memory: &mut crate::memory::AuraMemory,
+        vault: &mut crate::persistence::vault::CriticalVault,
+        consent_tracker: &mut crate::identity::ConsentTracker,
+    ) -> Result<GdprErasureResult, OnboardingError> {
+        info!("GDPR erasure: initiating complete user data deletion");
+
+        // Step 1: Erase all memory tiers
+        let memory_report = memory
+            .erase_all()
+            .await
+            .map_err(|e| OnboardingError::ProfileError(format!("memory erasure: {e}")))?;
+
+        // Step 2: Cryptographic key erasure + data zeroing (vault nuclear option)
+        let vault_deleted = vault.clear();
+
+        // Step 3: Clear all consent records
+        consent_tracker.clear();
+
+        // Step 4: Delete profile from database
         db.execute_batch("DELETE FROM user_profile WHERE id = 1;")
             .map_err(|e| OnboardingError::PersistenceFailed(format!("delete profile: {e}")))?;
 
-        info!("user profile deleted from DB (right to erasure)");
+        let result = GdprErasureResult {
+            working_slots: memory_report.working_slots_cleared,
+            episodic_episodes: memory_report.episodic_episodes_deleted,
+            semantic_entries: memory_report.semantic_entries_deleted,
+            archive_blobs: memory_report.archive_blobs_deleted,
+            vault_entries: vault_deleted,
+            consent_records_cleared: true,
+            profile_deleted: true,
+        };
+
+        info!(
+            "GDPR erasure complete: {} working, {} episodic, {} semantic, {} archive, {} vault entries",
+            result.working_slots,
+            result.episodic_episodes,
+            result.semantic_entries,
+            result.archive_blobs,
+            result.vault_entries
+        );
+
+        Ok(result)
+    }
+
+    /// Delete only the profile from the database (no memory/vault/consent erasure).
+    ///
+    /// WARNING: This is NOT a complete GDPR erasure. Use [`Self::delete_with_gdpr()`]
+    /// for actual GDPR Article 17 compliance.
+    pub fn erase_profile_only(db: &rusqlite::Connection) -> Result<(), OnboardingError> {
+        db.execute_batch("DELETE FROM user_profile WHERE id = 1;")
+            .map_err(|e| OnboardingError::PersistenceFailed(format!("delete profile: {e}")))?;
+
+        info!("profile erased from DB (profile-only — NOT a complete GDPR erasure)");
         Ok(())
+    }
+
+    /// @deprecated Use [`Self::erase_profile_only()`] instead. The old `delete_from_db`
+    /// name was misleading — it only deleted the profile, not all user data.
+    #[deprecated(
+        since = "0.4.0",
+        note = "use erase_profile_only() or delete_with_gdpr()"
+    )]
+    pub fn delete_from_db(db: &rusqlite::Connection) -> Result<(), OnboardingError> {
+        Self::erase_profile_only(db)
     }
 
     // -----------------------------------------------------------------------
@@ -944,7 +1114,7 @@ mod tests {
         p.save_to_db(&db).expect("save");
         assert!(UserProfile::load_from_db(&db).expect("load").is_some());
 
-        UserProfile::delete_from_db(&db).expect("delete");
+        UserProfile::erase_profile_only(&db).expect("delete");
         assert!(UserProfile::load_from_db(&db).expect("load").is_none());
     }
 

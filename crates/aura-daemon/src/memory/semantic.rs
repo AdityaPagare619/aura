@@ -544,6 +544,51 @@ impl SemanticMemory {
         .await
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
     }
+
+    /// Get all semantic entries (for GDPR export).
+    pub async fn get_all_entries(&self) -> Result<Vec<SemanticEntry>, MemError> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, concept, knowledge, confidence, source_episodes,
+                            created_ms, last_reinforced_ms, access_count
+                     FROM semantic_entries ORDER BY id ASC",
+                )
+                .map_err(|e| MemError::QueryFailed(format!("get_all prepare failed: {}", e)))?;
+
+            let rows = stmt
+                .query_map([], row_to_semantic_entry)
+                .map_err(|e| MemError::QueryFailed(format!("get_all query failed: {}", e)))?;
+
+            let mut entries = Vec::new();
+            for row in rows {
+                entries.push(
+                    row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?,
+                );
+            }
+            Ok(entries)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
+
+    /// Delete all semantic entries (for GDPR erasure).
+    pub async fn delete_all(&self) -> Result<u64, MemError> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let deleted = conn
+                .execute("DELETE FROM semantic_entries", [])
+                .map_err(|e| MemError::DatabaseError(format!("delete_all failed: {}", e)))?;
+            Ok(deleted as u64)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
 }
 
 // ---------------------------------------------------------------------------

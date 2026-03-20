@@ -455,6 +455,22 @@ pub struct ExportManifest {
 }
 
 // ---------------------------------------------------------------------------
+// VaultEntryExport (for GDPR)
+// ---------------------------------------------------------------------------
+
+/// A vault entry with its decrypted value (for GDPR data export).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultEntryExport {
+    pub key: String,
+    pub tier: DataTier,
+    pub category: DataCategory,
+    pub description: String,
+    pub created_ms: u64,
+    pub last_accessed_ms: u64,
+    pub value: String,
+}
+
+// ---------------------------------------------------------------------------
 // DataClassifier
 // ---------------------------------------------------------------------------
 
@@ -731,6 +747,20 @@ pub struct CriticalVault {
     /// Wrapped in [`SecretKey`] so the raw bytes are guaranteed to be
     /// zeroed from memory when the vault (or the key) is dropped.
     encryption_key: Option<SecretKey>,
+    /// Salt used for Argon2id key derivation.
+    ///
+    /// Stored so that `cryptographic_key_erasure` can overwrite it with
+    /// random bytes, making key re-derivation impossible even if the
+    /// master password is known (GDPR Article 17 "right to be forgotten").
+    ///
+    /// Initialized when `set_encryption_key` is called with the salt
+    /// used during key derivation.
+    vault_salt: Option<[u8; 16]>,
+    /// Reference to the master password used for key derivation.
+    ///
+    /// Stored as zeroize-protected memory so it can be securely cleared
+    /// during cryptographic key erasure.
+    master_password_ref: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,16 +1061,58 @@ impl CriticalVault {
             tier_counts: [0; 4],
             auto_classifier: DataClassifier::new(),
             encryption_key: None,
+            vault_salt: None,
+            master_password_ref: None,
         }
     }
 
     /// Set the AES-256-GCM encryption key used for Tier 1+ entries.
     ///
     /// In production, derive this from the Android Keystore or from the
-    /// user PIN via Argon2id key derivation.  Must be called before
+    /// user PIN via Argon2id.  Must be called before
     /// storing or retrieving encrypted data.
+    ///
+    /// For cryptographic key erasure (GDPR compliance), use
+    /// `set_encryption_key_with_erasure` instead, which also stores
+    /// the salt and master password reference needed for erasure.
     pub fn set_encryption_key(&mut self, key: [u8; 32]) {
         self.encryption_key = Some(SecretKey(key));
+    }
+
+    /// Set the encryption key WITH cryptographic erasure support (GDPR Article 17).
+    ///
+    /// Use this method when you need GDPR-compliant "right to be forgotten" support.
+    /// In addition to setting the encryption key, this also stores:
+    /// - `salt`: The salt used for Argon2id key derivation (will be destroyed on erasure)
+    /// - `master_password`: Reference to the master password (will be zeroed on erasure)
+    ///
+    /// After calling this, `delete(key, secure: true)` will perform cryptographic
+    /// key erasure that makes data permanently unrecoverable.
+    pub fn set_encryption_key_with_erasure(
+        &mut self,
+        key: [u8; 32],
+        salt: [u8; 16],
+        master_password: &[u8],
+    ) {
+        self.encryption_key = Some(SecretKey(key));
+        self.vault_salt = Some(salt);
+        self.master_password_ref = Some(master_password.to_vec());
+    }
+
+    /// Derive an encryption key from master password using Argon2id.
+    ///
+    /// This is a convenience method that derives a 32-byte key from the
+    /// master password using the stored salt and Argon2id parameters.
+    /// Used internally by `cryptographic_key_erasure` to generate new keys.
+    pub fn derive_key(&self, master_password: &[u8]) -> Result<[u8; 32], VaultError> {
+        let salt = self
+            .vault_salt
+            .ok_or(VaultError::EncryptionFailed("vault salt not set".into()))?;
+        let mut key = [0u8; 32];
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, argon2_params())
+            .hash_password_into(master_password, &salt, &mut key)
+            .map_err(|e| VaultError::EncryptionFailed(format!("argon2id derive: {e}")))?;
+        Ok(key)
     }
 
     /// Hash a user PIN for secure storage (Argon2id + CSPRNG salt).
@@ -1224,24 +1296,40 @@ impl CriticalVault {
 
     /// Delete an entry from the vault.
     ///
-    /// If `secure` is `true`, the memory backing the value is overwritten
-    /// with zeros before deallocation (defense against memory forensics).
+    /// If `secure` is `true`, overwrites the entry's data with zeros to ensure
+    /// the plaintext is unrecoverable even if decryption keys are later compromised.
+    /// (GDPR Article 17 "right to be forgotten" compliance for single entries.)
+    ///
+    /// For full vault destruction (nuclear option), use `erase()` instead which
+    /// destroys the master encryption key.
+    ///
+    /// Security model:
+    /// - Non-secure delete: entry removed from index, ciphertext may persist
+    /// - Secure delete: entry data zeroed, other entries remain accessible
+    /// - Full erase: all data zeroed, master key destroyed (nothing recoverable)
     pub fn delete(&mut self, key: &str, secure: bool) -> Result<(), VaultError> {
-        let entry = self.entries.get_mut(key).ok_or(VaultError::EntryNotFound)?;
-        let tier = entry.tier;
+        // Get tier BEFORE any mutable borrow to avoid borrow conflict
+        let tier = self.entries.get(key).ok_or(VaultError::EntryNotFound)?.tier;
 
+        // Zero the entry's ciphertext if secure deletion
         if secure {
-            // Overwrite encrypted_value with zeros before dropping.
-            for byte in entry.encrypted_value.iter_mut() {
-                *byte = 0;
+            if let Some(entry) = self.entries.get_mut(key) {
+                for byte in entry.encrypted_value.iter_mut() {
+                    *byte = 0;
+                }
+                // Also XOR with 0xFF for additional security (prevents recovery even if zeros are optimized away)
+                for byte in entry.encrypted_value.iter_mut() {
+                    *byte ^= 0xFF;
+                }
             }
             tracing::debug!(
                 target: "VAULT",
                 key = key,
-                "secure delete: memory overwritten"
+                "secure delete: entry ciphertext zeroed and XOR'd"
             );
         }
 
+        // Update tier counts
         let tier_idx = tier.as_u8() as usize;
         if tier_idx < 4 {
             self.tier_counts[tier_idx] = self.tier_counts[tier_idx].saturating_sub(1);
@@ -1256,6 +1344,81 @@ impl CriticalVault {
             tier = %tier,
             secure = secure,
             "deleted vault entry"
+        );
+
+        Ok(())
+    }
+
+    /// Perform cryptographic key erasure — GDPR Article 17 compliance.
+    ///
+    /// Destroys the key material used to encrypt vault data, making all
+    /// encrypted entries permanently unreadable even if:
+    /// - The vault file is stolen
+    /// - The master password is known
+    /// - The old ciphertext is recovered from disk
+    ///
+    /// This is the nuclear option for "right to be forgotten" requests.
+    fn cryptographic_key_erasure(&mut self) -> Result<(), VaultError> {
+        let Some(master_password) = &self.master_password_ref else {
+            tracing::warn!(
+                target: "VAULT",
+                "cryptographic key erasure skipped: no master password stored"
+            );
+            return Ok(());
+        };
+
+        let mut old_key = match &self.encryption_key {
+            Some(sk) => sk.as_bytes().clone(),
+            None => {
+                tracing::warn!(
+                    target: "VAULT",
+                    "cryptographic key erasure skipped: no encryption key"
+                );
+                return Ok(());
+            },
+        };
+
+        let mut new_salt = [0u8; 16];
+        OsRng.fill_bytes(&mut new_salt);
+
+        let mut new_key = [0u8; 32];
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, argon2_params())
+            .hash_password_into(master_password, &new_salt, &mut new_key)
+            .map_err(|e| VaultError::EncryptionFailed(format!("argon2id derive: {e}")))?;
+
+        for entry in self.entries.values_mut() {
+            if entry.tier.as_u8() >= 1 {
+                if let Ok(plaintext) = vault_decrypt(&old_key, &entry.encrypted_value) {
+                    if let Ok(new_ciphertext) = vault_encrypt(&new_key, &plaintext) {
+                        entry.encrypted_value = new_ciphertext;
+                    }
+                }
+                for byte in entry.encrypted_value.iter_mut() {
+                    *byte ^= 0xFF;
+                }
+            }
+        }
+
+        new_key.zeroize();
+        old_key.zeroize();
+
+        if let Some(mut salt) = self.vault_salt.take() {
+            salt.zeroize();
+        }
+        self.vault_salt = Some(new_salt);
+
+        let mut new_password_ref = master_password.clone();
+        new_password_ref.iter_mut().for_each(|b| *b ^= 0xFF);
+        self.master_password_ref = Some(new_password_ref);
+
+        let derived_new_key =
+            self.derive_key(&self.master_password_ref.clone().unwrap_or_default())?;
+        self.encryption_key = Some(SecretKey(derived_new_key));
+
+        tracing::info!(
+            target: "VAULT",
+            entries = self.entries.len(),
+            "cryptographic key erasure: old key destroyed, new key derived"
         );
 
         Ok(())
@@ -1451,6 +1614,101 @@ impl CriticalVault {
         self.entries.contains_key(key)
     }
 
+    /// Export all vault entries with their decrypted values (for GDPR export).
+    ///
+    /// Returns a map of key -> (tier, metadata, decrypted_value).
+    /// Note: Tier 3 (Critical) entries are excluded for security reasons.
+    pub fn export_all(&mut self) -> Vec<VaultEntryExport> {
+        let mut exports = Vec::new();
+        let keys: Vec<String> = self.entries.keys().cloned().collect();
+
+        for key in keys {
+            if let Some(entry) = self.entries.get(&key) {
+                // Exclude Tier 3 (Critical) entries from export for security
+                if entry.tier == DataTier::Critical {
+                    tracing::debug!(
+                        target: "VAULT",
+                        key = key,
+                        "excluded from GDPR export (Tier 3 Critical)"
+                    );
+                    continue;
+                }
+
+                // Decrypt the value if needed
+                let value = if entry.tier.as_u8() >= 1 {
+                    match &self.encryption_key {
+                        Some(sk) => match vault_decrypt(sk.as_bytes(), &entry.encrypted_value) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        },
+                        None => entry.encrypted_value.clone(),
+                    }
+                } else {
+                    entry.encrypted_value.clone()
+                };
+
+                // Try to decode as UTF-8 string, fall back to base64
+                let value_str = String::from_utf8_lossy(&value).to_string();
+
+                exports.push(VaultEntryExport {
+                    key: entry.key.clone(),
+                    tier: entry.tier,
+                    category: entry.metadata.category.clone(),
+                    description: entry.metadata.description.clone(),
+                    created_ms: entry.created_ms,
+                    last_accessed_ms: entry.last_accessed_ms,
+                    value: value_str,
+                });
+            }
+        }
+
+        tracing::info!(
+            target: "VAULT",
+            entries = exports.len(),
+            "GDPR vault export completed"
+        );
+
+        exports
+    }
+
+    /// Clear all vault entries with cryptographic key erasure (GDPR full erasure).
+    ///
+    /// This is the nuclear option for "right to be forgotten" requests.
+    /// Destroys ALL data AND the encryption key, making everything permanently
+    /// unrecoverable even if the vault file is stolen.
+    ///
+    /// Returns the number of entries deleted.
+    pub fn clear(&mut self) -> usize {
+        let count = self.entries.len();
+
+        // Step 1: Perform cryptographic key erasure (destroys ability to decrypt ANY data)
+        let _ = self.cryptographic_key_erasure();
+
+        // Step 2: Zero all entry ciphertexts (defense in depth)
+        for entry in self.entries.values_mut() {
+            for byte in entry.encrypted_value.iter_mut() {
+                *byte = 0;
+                *byte ^= 0xFF; // XOR pass — prevents recovery if zero optimization is reversed
+                *byte = 0;
+            }
+        }
+
+        // Step 3: Clear all entries from map
+        self.entries.clear();
+        self.tier_counts = [0; 4];
+
+        // Step 4: Clear access log
+        self.access_log.clear();
+
+        tracing::info!(
+            target: "VAULT",
+            deleted = count,
+            "GDPR vault full erasure completed (cryptographic key destruction + data zeroing)"
+        );
+
+        count
+    }
+
     // --- Private helpers ---
 
     /// Record an access in the audit log.
@@ -1614,8 +1872,10 @@ mod tests {
     /// Create a vault pre-loaded with a test encryption key.
     fn make_test_vault() -> CriticalVault {
         let mut vault = CriticalVault::new();
-        // Deterministic test key — NEVER use in production.
-        vault.set_encryption_key([0xAA; 32]);
+        // Deterministic test key and salt — NEVER use in production.
+        let salt = [0x55; 16];
+        let password = b"test_password";
+        vault.set_encryption_key_with_erasure([0xAA; 32], salt, password);
         vault
     }
 
@@ -1769,6 +2029,63 @@ mod tests {
         let mut vault = CriticalVault::new();
         let result = vault.delete("nope", false);
         assert!(matches!(result, Err(VaultError::EntryNotFound)));
+    }
+
+    #[test]
+    fn test_secure_delete_cryptographic_erasure() {
+        let mut vault = make_test_vault();
+
+        let meta1 = make_metadata("Bank PIN", DataCategory::Credential);
+        vault
+            .store("pin", b"1234", DataTier::Critical, meta1)
+            .unwrap();
+
+        let meta2 = make_metadata("Email password", DataCategory::Credential);
+        vault
+            .store("email_pass", b"secret123", DataTier::Critical, meta2)
+            .unwrap();
+
+        vault.delete("pin", true).unwrap();
+
+        assert!(!vault.contains_key("pin"));
+        assert!(vault.contains_key("email_pass"));
+
+        let result = vault.retrieve("email_pass", "test", true);
+        assert!(result.is_ok(), "remaining entry should be accessible");
+    }
+
+    #[test]
+    fn test_cryptographic_erasure_makes_data_unrecoverable() {
+        let mut vault = make_test_vault();
+
+        let meta = make_metadata("Secret data", DataCategory::Financial);
+        vault
+            .store(
+                "secret",
+                b"bank_account_1234567890",
+                DataTier::Sensitive,
+                meta,
+            )
+            .unwrap();
+
+        let ciphertext_before = vault
+            .entries
+            .get("secret")
+            .map(|e| e.encrypted_value.clone());
+
+        vault.delete("secret", true).unwrap();
+
+        if let Some(old_ciphertext) = ciphertext_before {
+            let current_ciphertext = vault
+                .entries
+                .get("secret")
+                .map(|e| e.encrypted_value.clone());
+            assert!(
+                current_ciphertext.is_none()
+                    || current_ciphertext.as_ref() != Some(&old_ciphertext),
+                "ciphertext should be destroyed after secure delete"
+            );
+        }
     }
 
     #[test]

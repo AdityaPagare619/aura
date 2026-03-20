@@ -645,6 +645,72 @@ impl AuraMemory {
             archive_count,
         })
     }
+
+    // -----------------------------------------------------------------------
+    // GDPR operations
+    // -----------------------------------------------------------------------
+
+    /// Export all working memory slots (for GDPR data portability).
+    pub fn export_working(&self) -> Vec<aura_types::memory::WorkingSlot> {
+        self.working.get_all_slots().into_iter().cloned().collect()
+    }
+
+    /// Clear all working memory (for GDPR erasure).
+    pub fn clear_working(&mut self) {
+        self.working.clear();
+        debug!("GDPR erasure: working memory cleared");
+    }
+
+    /// Export all episodic memories (for GDPR data portability).
+    pub async fn export_episodic(&self) -> Result<Vec<aura_types::memory::Episode>, MemError> {
+        self.episodic.get_all_episodes().await
+    }
+
+    /// Export all semantic memories (for GDPR data portability).
+    pub async fn export_semantic(&self) -> Result<Vec<aura_types::memory::SemanticEntry>, MemError> {
+        self.semantic.get_all_entries().await
+    }
+
+    /// Export all archive metadata (for GDPR data portability).
+    pub async fn export_archive(&self) -> Result<Vec<crate::memory::archive::ArchiveBlobExport>, MemError> {
+        self.archive.get_all_blobs().await
+    }
+
+    /// Delete all data from all memory tiers (for GDPR erasure).
+    ///
+    /// Returns a report of what was deleted.
+    pub async fn erase_all(&mut self) -> Result<GdprErasureReport, MemError> {
+        let episodic_deleted = self.episodic.delete_all().await?;
+        let semantic_deleted = self.semantic.delete_all().await?;
+        let archive_deleted = self.archive.delete_all().await?;
+        self.working.clear();
+
+        let report = GdprErasureReport {
+            working_slots_cleared: self.working.len(),
+            episodic_episodes_deleted: episodic_deleted,
+            semantic_entries_deleted: semantic_deleted,
+            archive_blobs_deleted: archive_deleted,
+        };
+
+        info!(
+            "GDPR erasure completed: {} working slots, {} episodic, {} semantic, {} archive",
+            report.working_slots_cleared,
+            report.episodic_episodes_deleted,
+            report.semantic_entries_deleted,
+            report.archive_blobs_deleted,
+        );
+
+        Ok(report)
+    }
+}
+
+/// Report of GDPR erasure operations.
+#[derive(Debug, Clone, Default)]
+pub struct GdprErasureReport {
+    pub working_slots_cleared: usize,
+    pub episodic_episodes_deleted: u64,
+    pub semantic_entries_deleted: u64,
+    pub archive_blobs_deleted: u64,
 }
 
 // ---------------------------------------------------------------------------

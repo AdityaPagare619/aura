@@ -652,6 +652,51 @@ impl EpisodicMemory {
         .await
         .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
     }
+
+    /// Get all episodes (for GDPR export).
+    pub async fn get_all_episodes(&self) -> Result<Vec<Episode>, MemError> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content, emotional_valence, importance, context_tags,
+                            timestamp_ms, access_count, last_access_ms, embedding
+                     FROM episodes ORDER BY id ASC",
+                )
+                .map_err(|e| MemError::QueryFailed(format!("get_all prepare failed: {}", e)))?;
+
+            let rows = stmt
+                .query_map([], row_to_episode)
+                .map_err(|e| MemError::QueryFailed(format!("get_all query failed: {}", e)))?;
+
+            let mut episodes = Vec::new();
+            for row in rows {
+                episodes.push(
+                    row.map_err(|e| MemError::QueryFailed(format!("row read failed: {}", e)))?,
+                );
+            }
+            Ok(episodes)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
+
+    /// Delete all episodes (for GDPR erasure).
+    pub async fn delete_all(&self) -> Result<u64, MemError> {
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let deleted = conn
+                .execute("DELETE FROM episodes", [])
+                .map_err(|e| MemError::DatabaseError(format!("delete_all failed: {}", e)))?;
+            Ok(deleted as u64)
+        })
+        .await
+        .map_err(|e| MemError::DatabaseError(format!("spawn_blocking failed: {}", e)))?
+    }
 }
 
 // ---------------------------------------------------------------------------

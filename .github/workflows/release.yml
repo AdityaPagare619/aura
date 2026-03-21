@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  NDK_VERSION: r26b
+  NDK_SHA256: ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632
+  API_LEVEL: "26"
+  TARGET: aarch64-linux-android
 
 jobs:
   release:
@@ -19,8 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          submodules: recursive
           fetch-depth: 0
-      
+
       - name: Get version
         id: version
         run: |
@@ -34,30 +39,56 @@ jobs:
             echo "MAJOR=0" >> $GITHUB_OUTPUT
             echo "IS_F001=true" >> $GITHUB_OUTPUT
           fi
-          echo "TAG_REF=$REF" >> $GITHUB_OUTPUT
-      
-      - name: Create tag if needed (for v* tags only)
-        if: steps.version.outputs.IS_F001 == 'false'
-        run: |
-          git tag v${{ steps.version.outputs.VERSION }} 2>/dev/null || true
-      
+
       - name: Set up Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
         with:
+          toolchain: stable
           targets: aarch64-linux-android
-      
+
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux-${{ env.NDK_SHA256 }}
+
+      - name: Download and verify Android NDK r26b
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          curl -fsSL "$NDK_URL" -o ndk.zip
+          ACTUAL_SHA256=$(sha256sum ndk.zip | cut -d' ' -f1)
+          if [ "$ACTUAL_SHA256" != "$NDK_SHA256" ]; then
+            echo "FATAL: NDK checksum mismatch!"
+            exit 1
+          fi
+          unzip -q ndk.zip -d $HOME
+          rm -f ndk.zip
+
+      - name: Set NDK environment
+        run: echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Configure cross-compilation env
+        run: |
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=$NDK_HOME/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
+
       - name: Build release binaries
         run: |
           cargo build --release -p aura-daemon --target aarch64-linux-android
           cargo build --release -p aura-neocortex --target aarch64-linux-android
-      
+
       - name: Generate checksums
         run: |
           sha256sum target/aarch64-linux-android/release/aura-daemon > aura-daemon.sha256
           sha256sum target/aarch64-linux-android/release/aura-neocortex > aura-neocortex.sha256
-          cat aura-daemon.sha256
-          cat aura-neocortex.sha256
-      
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -68,14 +99,15 @@ jobs:
           body: |
             ## F001 Real Device Validation Build
 
-            This release contains the F001 fix (lto="thin", panic="unwind") applied and verified.
+            Binary with F001 fix applied: `lto="thin"`, `panic="unwind"`, `_flag` compilation error resolved.
 
-            ### Binary
-            - `aura-daemon`: ARM64 Android binary (fully statically linked)
-            - Built from commit `554ef61746175556284cab2141e53cb01e5aaf8d`
+            Built from commit `554ef61746175556284cab2141e53cb01e5aaf8d` on branch `fix/f001-panic-ndk-rootfix`.
 
             ### Verification
-            SHA256 checksums are provided for binary integrity verification.
+            ```sh
+            sha256sum -c aura-daemon.sha256
+            sha256sum -c aura-neocortex.sha256
+            ```
           files: |
             target/aarch64-linux-android/release/aura-daemon
             target/aarch64-linux-android/release/aura-neocortex

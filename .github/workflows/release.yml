@@ -89,13 +89,22 @@ jobs:
           sha256sum target/aarch64-linux-android/release/aura-daemon > aura-daemon.sha256
           sha256sum target/aarch64-linux-android/release/aura-neocortex > aura-neocortex.sha256
 
+      - name: Set release name
+        id: release-name
+        run: |
+          if [[ "${{ steps.version.outputs.IS_F001 }}" == "true" ]]; then
+            echo "name=AURA F001 Validation Build" >> $GITHUB_OUTPUT
+          else
+            echo "name=AURA v${{ steps.version.outputs.VERSION }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ steps.version.outputs.IS_F001 == 'true' && 'AURA F001 Validation Build' || 'AURA v' + steps.version.outputs.VERSION }}
+          name: ${{ steps.release-name.outputs.name }}
           draft: false
-          prerelease: ${{ steps.version.outputs.IS_F001 == 'true' || steps.version.outputs.MAJOR < 4 }}
+          prerelease: true
           body: |
             ## F001 Real Device Validation Build
 

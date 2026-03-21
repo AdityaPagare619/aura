@@ -29,6 +29,7 @@ async-trait = { workspace = true }
 lz4 = { workspace = true }
 zstd = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"] }
+rustls-platform-verifier = "0.6"
 ogg = "0.9"
 audiopus = { version = "=0.3.0-rc.0", optional = true }
 aes-gcm = "0.10"

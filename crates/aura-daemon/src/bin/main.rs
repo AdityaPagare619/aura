@@ -97,6 +97,16 @@ impl Args {
 }
 
 fn main() {
+    // ── FIX-RUSTLS-001: Initialize rustls-platform-verifier on Android ──────
+    // rustls-platform-verifier 0.6+ requires explicit initialization on Android
+    // before any TLS operations. Without this, the first HTTPS request panics
+    // with: "Expect rustls-platform-verifier to be initialized"
+    // This must be called BEFORE any reqwest TLS operations.
+    #[cfg(target_os = "android")]
+    {
+        rustls_platform_verifier::android::init();
+    }
+
     // ── Step 0: Install panic hook BEFORE anything else ────────────────────
     // This ensures panic messages are logged even with panic="abort" in release.
     // MUST be first to catch any panic from any initialization code.

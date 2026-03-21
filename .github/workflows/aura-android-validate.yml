@@ -69,23 +69,23 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           filter: blob:none
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Docker Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infrastructure/.devcontainer/Dockerfile.termux-like
@@ -117,7 +117,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           filter: blob:none
@@ -132,7 +132,7 @@ jobs:
           echo "NDK: $(ls ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/ 2>/dev/null || echo 'NOT FOUND')"
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -208,7 +208,7 @@ jobs:
           echo "If build succeeded, NDK #2073 fix is confirmed."
 
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-build-artifacts-${{ github.run_number }}
           path: |
@@ -221,7 +221,7 @@ jobs:
 
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-test-results-${{ github.run_number }}
           path: |
@@ -242,7 +242,7 @@ jobs:
 
     steps:
       - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aura-build-artifacts-${{ needs.container-build-test.outputs.run_number || github.run_number }}
           path: ./artifacts
@@ -366,7 +366,7 @@ jobs:
           cat ./device-logs/DEVICE_TEST_REPORT.md
 
       - name: Upload Device Logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-device-logs-${{ github.run_number }}
           path: ./device-logs/
@@ -385,12 +385,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Download Test Results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aura-build-artifacts-${{ needs.container-build-test.outputs.run_number || github.run_number }}
           path: ./artifacts
@@ -424,7 +424,7 @@ jobs:
 
       - name: Create Taxonomy Issue
         if: env.FAILURE_CLASS != ''
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const failureClass = process.env.FAILURE_CLASS || 'Unknown';
@@ -439,7 +439,7 @@ jobs:
             });
 
       - name: Upload Taxonomy Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-taxonomy-report-${{ github.run_number }}
           path: ./artifacts/
@@ -507,20 +507,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/fix/') }}
@@ -537,7 +537,7 @@ jobs:
             /infrastructure/scripts/smoke/container_smoke.sh
 
       - name: Upload container image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-container-image
           path: /tmp/image.tar
@@ -552,10 +552,10 @@ jobs:
     needs: container-build-test
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aura-build-artifacts-${{ needs.container-build-test.outputs.run_number || github.run_number }}
           path: ./binaries
@@ -583,7 +583,7 @@ jobs:
           fi
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-sbom
           path: "*.spdx.json"
@@ -601,10 +601,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: aura-build-artifacts-${{ needs.container-build-test.outputs.run_number || github.run_number }}
           path: ./binaries
@@ -640,7 +640,7 @@ jobs:
           SLSA
 
       - name: Upload provenance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aura-provenance
           path: provenance.json
@@ -655,7 +655,7 @@ jobs:
     needs: container-build-test
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run regression tests
         run: |

@@ -27,6 +27,7 @@
 pub mod approval;
 pub mod audit;
 pub mod commands;
+pub mod curl_backend;
 pub mod dashboard;
 pub mod dialogue;
 pub mod handlers;

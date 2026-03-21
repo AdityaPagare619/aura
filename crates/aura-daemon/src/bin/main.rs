@@ -97,15 +97,17 @@ impl Args {
 }
 
 fn main() {
-    // ── FIX-RUSTLS-001: Initialize rustls-platform-verifier on Android ──────
-    // rustls-platform-verifier 0.6+ requires explicit initialization on Android
-    // before any TLS operations. Without this, the first HTTPS request panics
-    // with: "Expect rustls-platform-verifier to be initialized"
-    // This must be called BEFORE any reqwest TLS operations.
-    #[cfg(target_os = "android")]
-    {
-        rustls_platform_verifier::android::init();
-    }
+    // ── HTTP BACKEND NOTE ──────────────────────────────────────────────────────
+    // If using reqwest (default): TLS is handled by reqwest with rustls.
+    //   Works on CI/Linux but PANICS on Termux (rustls-platform-verifier issue).
+    // If using curl-backend: TLS is handled by curl subprocess.
+    //   Works on CI AND Termux. Use: cargo build --features curl-backend
+    // See ISSUE-LOG.md for full root cause analysis.
+    //
+    // WHY curl? curl on Termux uses OpenSSL (no JVM needed). reqwest uses
+    // rustls-platform-verifier which tries Android TrustManager (needs JVM).
+    // Termux reports target_os="android" but has no JVM → panic.
+    // Evidence: GitHub #219, users.rust-lang.org, Reddit r/rust
 
     // ── Step 0: Install panic hook BEFORE anything else ────────────────────
     // This ensures panic messages are logged even with panic="abort" in release.

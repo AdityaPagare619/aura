@@ -153,7 +153,12 @@ use crate::{
         ScreenCache,
     },
     telegram::{
-        queue::MessageQueue, reqwest_backend::ReqwestHttpBackend, TelegramConfig, TelegramEngine,
+        queue::MessageQueue,
+        #[cfg(feature = "curl-backend")]
+        curl_backend::CurlHttpBackend,
+        #[cfg(not(feature = "curl-backend"))]
+        reqwest_backend::ReqwestHttpBackend,
+        TelegramConfig, TelegramEngine,
     },
 };
 #[cfg(feature = "voice")]
@@ -1656,6 +1661,9 @@ pub async fn run(mut state: DaemonState) {
         if !tg_cfg.bot_token.is_empty() {
             match rusqlite::Connection::open(&queue_db_path) {
                 Ok(engine_conn) => {
+                    #[cfg(feature = "curl-backend")]
+                    let http = CurlHttpBackend::new(tg_cfg.bot_token.clone());
+                    #[cfg(not(feature = "curl-backend"))]
                     let http = ReqwestHttpBackend::new(&tg_cfg.bot_token);
                     match TelegramEngine::new(
                         telegram_config.clone(),

@@ -222,10 +222,11 @@ fn load_config(
 ///
 /// On Unix (including Termux): catches SIGTERM and SIGINT.
 /// On other platforms: catches CTRL+C only.
+#[allow(unused_variables)]
 fn setup_signal_handler(shutdown: Arc<AtomicBool>) {
     // Use a simple thread-based approach that works everywhere.
     // ctrlc/signal-hook crates would be better but we avoid extra deps.
-    let _flag = shutdown.clone();
+    let flag = shutdown.clone();
     std::thread::Builder::new()
         .name("signal-handler".into())
         .spawn(move || {

@@ -14,9 +14,8 @@ reorder_modules = true
 # ── Trailing commas ───────────────────────────────────────────────────────────
 
 # ── Braces and blocks ─────────────────────────────────────────────────────────
-brace_style = "PreferSameLine"
-control_brace_style = "AlwaysSameLine"
-empty_item_single_line = true
+# NOTE: Unstable options removed — CI uses stable Rust
+# Re-enable these when migrating to nightly
 
 # ── Match and arms ────────────────────────────────────────────────────────────
 match_arm_leading_pipes = "Never"
@@ -31,4 +30,5 @@ newline_style = "Unix"          # LF everywhere (matches .gitattributes)
 # ── Misc ──────────────────────────────────────────────────────────────────────
 use_field_init_shorthand = true
 use_try_shorthand = true
-condense_wildcard_suffixes = true
+# NOTE: Unstable options removed — CI uses stable Rust
+# condense_wildcard_suffixes = true

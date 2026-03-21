@@ -264,12 +264,13 @@ jobs:
             "https://api.browserstack.com/automate/sessions.json")
           
           echo "BrowserStack Response: $RESPONSE"
-          echo "$RESPONSE" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print('Hashed ID:', data.get('hashed_id', 'N/A'))
-print('Browser URL:', data.get('browser_url', 'N/A'))
-" || echo "Could not parse BrowserStack response"
+          # Extract hashed_id and browser_url from JSON response
+          HASHED_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('hashed_id','N/A'))")
+          BROWSER_URL=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('browser_url','N/A'))")
+          echo "Hashed ID: $HASHED_ID"
+          echo "Browser URL: $BROWSER_URL"
+          echo "BROWSER_HASHED_ID=$HASHED_ID" >> $GITHUB_ENV
+          echo "BROWSER_URL=$BROWSER_URL" >> $GITHUB_ENV
 
       - name: Run Device Smoke Tests (ADB)
         if: env.DEVICE_TESTS_STATUS == 'configured'

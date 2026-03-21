@@ -54,6 +54,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    cmake \
+    ninja-build \
+    make \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -123,48 +126,26 @@ RUN echo "Building AURA for Android (${CARGO_TARGET}) with NDK ${NDK_VERSION}...
         --target ${CARGO_TARGET} \
         -p aura-daemon \
         -p aura-neocortex \
+        --features "aura-llama-sys/stub,aura-daemon/voice" \
     2>&1 | tee /tmp/build.log \
     && echo "BUILD SUCCESSFUL" \
     && ls -lh target/${CARGO_TARGET}/release/aura-daemon target/${CARGO_TARGET}/release/aura-neocortex 2>/dev/null || \
     (echo "BUILD FAILED - checking errors:" && cat /tmp/build.log | tail -50 && exit 1)
 
 # ── Verify Binary ───────────────────────────────────────────
-# Quick sanity check that the binary is valid ELF
+# Quick sanity check that the binary is valid ELF for Android
 RUN echo "Verifying binary format..." \
     && file target/${CARGO_TARGET}/release/aura-daemon \
     && echo "Binary OK: $(md5sum target/${CARGO_TARGET}/release/aura-daemon)"
 
-# ── Smoke Tests ────────────────────────────────────────────
-RUN chmod +x infrastructure/scripts/smoke/container_smoke.sh \
-    && echo "Running container smoke tests..." \
-    && bash infrastructure/scripts/smoke/container_smoke.sh \
-    2>&1 | tee /tmp/smoke.log \
-    && echo "SMOKE TESTS PASSED" \
-    || (echo "SMOKE TESTS FAILED:" && cat /tmp/smoke.log && exit 1)
-
-# ── Final Stage ────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
-
-# Minimal runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    sqlite3 \
-    procps \
-    coreutils \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy binary from builder
-COPY --from=builder /workspace/aura/target/aarch64-linux-android/release/aura-daemon /usr/local/bin/
-
-# Verify binary works
-RUN echo "Verifying binary in runtime..." \
-    && file /usr/local/bin/aura-daemon \
-    && /usr/local/bin/aura-daemon --version \
-    && echo "Runtime verification OK"
-
-# Expose for health checks
-EXPOSE 8080
-
-# Default: run smoke tests (can be overridden)
-CMD ["/usr/local/bin/aura-daemon", "--version"]
+# ── NOTE ──────────────────────────────────────────────────
+# Runtime smoke tests CANNOT run in this container because:
+# - aura-daemon is an ANDROID binary (aarch64 ELF)
+# - This container runs on Linux x86_64
+# - Runtime validation happens on BrowserStack (real Android devices)
+#
+# This Docker image is a COMPILATION GATE only.
+# It verifies that the code CROSS-COMPILES for Android NDK r26b.
+# Actual runtime behavior (SIGSEGV, startup, etc.) is tested on BrowserStack.
+#
+# See: aura-android-validate.yml for the full pipeline

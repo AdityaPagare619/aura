@@ -81,10 +81,24 @@ jobs:
           toolchain: stable
           targets: aarch64-linux-android
 
-      - name: Setup Android NDK
-        uses: android-ndk-org/setup-ndk@v1
-        with:
-          ndk-version: r26b
+      - name: Download Android NDK r26b
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-r26b-linux.zip"
+          echo "${NDK_SHA256}  ndk.zip" | sha256sum -c || exit 1
+          unzip -q ndk.zip -d $HOME
+          rm -f ndk.zip
+          echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+        env:
+          NDK_VERSION: r26b
+          NDK_SHA256: ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632
+
+      - name: Set NDK environment
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android34-clang" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android34-clang" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -100,25 +114,19 @@ jobs:
       # NDK: Required for ring (cryptography crate) C compilation
       # NOTE: reqwest PANICS on Termux (rustls-platform-verifier needs JVM). Use curl-backend.
       - name: Build aura-daemon (Android ARM64)
-        env:
-          CC_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
-          AR_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
         run: |
           cargo build \
             --release \
+            --bin aura-daemon \
             --features "stub,curl-backend" \
             --target aarch64-linux-android \
             --manifest-path crates/aura-daemon/Cargo.toml
 
       - name: Build aura-cli (Android ARM64)
-        env:
-          CC_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
-          AR_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
         run: |
           cargo build \
             --release \
+            --bin aura-cli \
             --target aarch64-linux-android \
             --manifest-path crates/aura-cli/Cargo.toml
 

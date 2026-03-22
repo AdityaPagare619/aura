@@ -119,8 +119,7 @@ jobs:
             --release \
             --bin aura-daemon \
             --features "stub,curl-backend" \
-            --target aarch64-linux-android \
-            --manifest-path crates/aura-daemon/Cargo.toml
+            --target aarch64-linux-android
 
       - name: Build aura-cli (Android ARM64)
         run: |

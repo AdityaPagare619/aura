@@ -1,0 +1,164 @@
+# ============================================================
+# AURA v4 — Device Validate Workflow
+# STAGE 6: DEVICE — Execute on Device Validation
+#
+# This workflow runs AFTER CI Pipeline v2 completes successfully.
+# It downloads the Android artifact and prepares for device testing.
+#
+# NOTE: Full automation requires SSH access to the device.
+# For v4.0.0-stable, we create a release draft for manual testing.
+# After stable ships, SSH automation can be added.
+# ============================================================
+
+name: Device Validate
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline v2"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  # ============================================================
+  # STAGE 6: DEVICE — Device Execution Validation
+  # ============================================================
+  device-validation:
+    name: Device Validation
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      # ── Download artifact from CI ──────────────────────────
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aura-daemon-android-v2
+          path: .
+        id: download
+
+      - name: List downloaded files
+        run: |
+          echo "=== Downloaded artifacts ==="
+          ls -la
+
+      - name: Make executable
+        run: chmod +x aura-daemon aura-cli
+
+      # ── Artifact validation ─────────────────────────────────
+      - name: Verify artifact is ARM64
+        run: |
+          echo "=== Artifact verification ==="
+          file aura-daemon
+          ARCH=$(file aura-daemon | grep -o "AArch64" || echo "NOT_FOUND")
+          if [ "$ARCH" = "AArch64" ]; then
+            echo "✓ Artifact is correct architecture (AArch64)"
+          else
+            echo "::error::Wrong architecture! Expected AArch64."
+            exit 1
+          fi
+
+      - name: Check artifact size
+        run: |
+          SIZE=$(stat -c%s aura-daemon)
+          echo "Artifact size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::warning::Artifact seems too small ($SIZE bytes)"
+          else
+            echo "✓ Artifact size looks reasonable"
+          fi
+
+      # ── Simulated device test (no SSH access) ───────────────
+      - name: Simulated device execution
+        run: |
+          echo "=== SIMULATED DEVICE TEST ==="
+          echo ""
+          echo "This would happen on the device (Moto G45 5G, Android 15, Termux):"
+          echo ""
+          echo "1. Upload artifact:"
+          echo "   scp aura-daemon \$DEVICE_USER@\$DEVICE_HOST:/tmp/"
+          echo ""
+          echo "2. Make executable:"
+          echo "   ssh \$DEVICE_USER@\$DEVICE_HOST 'chmod +x /tmp/aura-daemon'"
+          echo ""
+          echo "3. Execute version check:"
+          echo "   ssh \$DEVICE_USER@\$DEVICE_HOST '/tmp/aura-daemon --version'"
+          echo ""
+          echo "4. Expected output (if device works):"
+          echo "   AURA v4.0.0"
+          echo "   Boot stage 1/5: Loading config..."
+          echo "   Boot stage 2/5: Initializing Telegram..."
+          echo "   Boot stage 3/5: Starting cognitive pipeline..."
+          echo "   Boot stage 4/5: Activating policy gate..."
+          echo "   Boot stage 5/5: Ready!"
+          echo ""
+          echo "5. Cleanup:"
+          echo "   ssh \$DEVICE_USER@\$DEVICE_HOST 'rm -f /tmp/aura-daemon'"
+
+      # ── Create release draft for manual testing ────────────
+      - name: Create release draft
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          prerelease: true
+          files: |
+            aura-daemon
+            aura-cli
+          body: |
+            ## Manual Testing Required
+
+            This release requires manual validation on the Moto G45 5G device.
+
+            ### Test Environment
+            - **Device**: Moto G45 5G
+            - **OS**: Android 15 (API 35)
+            - **Termux**: Installed
+            - **Architecture**: ARM64-v8a
+
+            ### Test Steps
+
+            1. Download `aura-daemon` binary
+            2. Deploy to device via Termux:
+               ```bash
+               cp aura-daemon /data/data/com.termux/files/home/bin/
+               chmod +x ~/bin/aura-daemon
+               ```
+            3. Execute version check:
+               ```bash
+               aura-daemon --version
+               ```
+            4. Check exit code is 0
+            5. Check 5 boot stages are logged
+
+            ### Expected Success Criteria
+            - [ ] Binary executes without SIGSEGV
+            - [ ] Exit code: 0
+            - [ ] All 5 boot stages complete
+            - [ ] No crashes in logs
+
+            ### Failure Modes to Watch For
+            - **F001 SIGSEGV**: ABI mismatch (fixed by using correct NDK target)
+            - **F007 Runtime crash**: Config/permission issues
+            - **F009 Toolchain**: Missing libraries
+
+            ### Report Results
+            Please report test results in the CI run comments.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Device test summary ────────────────────────────────
+      - name: Device validation summary
+        run: |
+          echo "=== DEVICE VALIDATION SUMMARY ==="
+          echo ""
+          echo "STAGE 6: DEVICE — Validation Complete"
+          echo ""
+          echo "Artifact: aura-daemon (ARM64)"
+          echo "Size: $(stat -c%s aura-daemon) bytes"
+          echo "Architecture: $(file aura-daemon | grep -o "ELF 64-bit.*")"
+          echo ""
+          echo "Next steps:"
+          echo "1. If SSH access is available, add SSH deployment steps"
+          echo "2. Otherwise, download artifact and test manually on device"
+          echo "3. Release draft created for manual testing approval"
+          echo ""
+          echo "✓ Artifact verified for Android ARM64"

@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "aura-daemon"
-version = "4.0.0-alpha.8"
+version = "4.0.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "aura-llama-sys"
-version = "4.0.0-alpha.8"
+version = "4.0.0"
 dependencies = [
  "cc",
  "libloading",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "aura-neocortex"
-version = "4.0.0-alpha.8"
+version = "4.0.0"
 dependencies = [
  "aura-llama-sys",
  "aura-types",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "aura-types"
-version = "4.0.0-alpha.8"
+version = "4.0.0"
 dependencies = [
  "async-trait",
  "bincode",

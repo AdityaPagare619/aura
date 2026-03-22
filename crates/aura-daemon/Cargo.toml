@@ -13,10 +13,11 @@ path = "src/bin/main.rs"
 [features]
 stub        = []
 voice       = ["dep:audiopus"]
-# Use curl subprocess for HTTP (Termux-compatible, no TLS library dependencies)
-curl-backend = ["dep:async-trait"]
-# Default: use reqwest for HTTP (works on CI/Linux, may panic on Termux)
-default     = ["reqwest-backend"]
+# Use curl subprocess for HTTP (Termux-compatible, no TLS library deps)
+# For CI/Linux, use --features reqwest explicitly
+curl-backend = []
+# Use reqwest for HTTP (works on CI/Linux, may panic on Termux Android)
+reqwest     = ["dep:reqwest"]
 
 [dependencies]
 aura-types   = { path = "../aura-types" }
@@ -43,7 +44,7 @@ log          = "0.4"
 # CRITICAL: rustls-tls on Termux causes rustls-platform-verifier panic.
 # For Termux native builds, use --features curl-backend instead.
 reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"], optional = true }
-async-trait = { workspace = true, optional = true }
+async-trait = { workspace = true }
 
 # curl: used when curl-backend feature IS enabled. No TLS library deps needed.
 # curl uses OpenSSL on Termux (works perfectly), no platform-verifier needed.

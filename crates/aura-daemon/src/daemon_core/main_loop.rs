@@ -152,17 +152,26 @@ use crate::{
         actions::AndroidScreenProvider, detect_app_state, extract_screen_summary, AppState,
         ScreenCache,
     },
-    telegram::{
-        queue::MessageQueue,
-        #[cfg(feature = "curl-backend")]
-        curl_backend::CurlHttpBackend,
-        #[cfg(not(feature = "curl-backend"))]
-        reqwest_backend::ReqwestHttpBackend,
-        TelegramConfig, TelegramEngine,
-    },
+    telegram::{queue::MessageQueue, TelegramConfig, TelegramEngine},
 };
 #[cfg(feature = "voice")]
 use crate::{bridge::voice_bridge::VoiceBridge, voice::VoiceEngine};
+
+#[cfg(feature = "curl-backend")]
+use crate::telegram::curl_backend::CurlHttpBackend;
+
+#[cfg(not(feature = "curl-backend"))]
+use crate::telegram::reqwest_backend::ReqwestHttpBackend;
+
+#[cfg(feature = "curl-backend")]
+fn create_telegram_http_backend(bot_token: &str) -> Box<dyn crate::telegram::polling::HttpBackend> {
+    Box::new(CurlHttpBackend::new(bot_token.to_string()))
+}
+
+#[cfg(not(feature = "curl-backend"))]
+fn create_telegram_http_backend(bot_token: &str) -> Box<dyn crate::telegram::polling::HttpBackend> {
+    Box::new(ReqwestHttpBackend::new(bot_token))
+}
 
 /// Maximum IPC payload size we'll accept for outbound writes (256 KB).
 const MAX_IPC_PAYLOAD_BYTES: usize = 256 * 1024;
@@ -1661,14 +1670,11 @@ pub async fn run(mut state: DaemonState) {
         if !tg_cfg.bot_token.is_empty() {
             match rusqlite::Connection::open(&queue_db_path) {
                 Ok(engine_conn) => {
-                    #[cfg(feature = "curl-backend")]
-                    let http = CurlHttpBackend::new(tg_cfg.bot_token.clone());
-                    #[cfg(not(feature = "curl-backend"))]
-                    let http = ReqwestHttpBackend::new(&tg_cfg.bot_token);
+                    let http = create_telegram_http_backend(&tg_cfg.bot_token);
                     match TelegramEngine::new(
                         telegram_config.clone(),
                         engine_conn,
-                        Box::new(http),
+                        http,
                         now_ms(),
                         state.cancel_flag.clone(),
                     ) {

@@ -27,12 +27,14 @@
 pub mod approval;
 pub mod audit;
 pub mod commands;
+#[cfg(feature = "curl-backend")]
 pub mod curl_backend;
 pub mod dashboard;
 pub mod dialogue;
 pub mod handlers;
 pub mod polling;
 pub mod queue;
+#[cfg(feature = "reqwest")]
 pub mod reqwest_backend;
 pub mod security;
 pub mod voice_handler;

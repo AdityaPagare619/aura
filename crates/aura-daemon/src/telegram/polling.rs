@@ -104,18 +104,24 @@ pub struct SentMessage {
 
 /// Abstraction over the HTTP client for testability.
 ///
-/// In production, this is implemented with `reqwest`. In tests, we use
-/// a mock that returns canned responses.
-#[async_trait::async_trait]
+/// In production, this is implemented with `reqwest` (via spawn_blocking) or
+/// `curl` subprocess. In tests, we use a mock that returns canned responses.
+///
+/// The trait is synchronous — backends handle async internally:
+/// - `ReqwestBackend` wraps reqwest's async HTTP calls in `spawn_blocking`
+/// - `CurlBackend` uses `tokio::process::Command` (already async) exposed
+///   through a sync interface
+///
+/// This avoids `#[async_trait]` complexity and F006 feature-gate conflicts.
 pub trait HttpBackend: Send + Sync {
     /// GET request returning the response body as bytes.
-    async fn get(&self, url: &str) -> Result<Vec<u8>, AuraError>;
+    fn get(&self, url: &str) -> Result<Vec<u8>, AuraError>;
 
     /// POST request with JSON body, returning response body as bytes.
-    async fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError>;
+    fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError>;
 
     /// POST multipart (for photo upload).
-    async fn post_multipart(
+    fn post_multipart(
         &self,
         url: &str,
         fields: Vec<(&str, String)>,
@@ -129,21 +135,20 @@ pub trait HttpBackend: Send + Sync {
 /// Replace with `reqwest`-based implementation in production.
 pub struct StubHttpBackend;
 
-#[async_trait::async_trait]
 impl HttpBackend for StubHttpBackend {
-    async fn get(&self, _url: &str) -> Result<Vec<u8>, AuraError> {
+    fn get(&self, _url: &str) -> Result<Vec<u8>, AuraError> {
         Err(AuraError::Ipc(
             aura_types::errors::IpcError::ConnectionFailed,
         ))
     }
 
-    async fn post_json(&self, _url: &str, _body: &[u8]) -> Result<Vec<u8>, AuraError> {
+    fn post_json(&self, _url: &str, _body: &[u8]) -> Result<Vec<u8>, AuraError> {
         Err(AuraError::Ipc(
             aura_types::errors::IpcError::ConnectionFailed,
         ))
     }
 
-    async fn post_multipart(
+    fn post_multipart(
         &self,
         _url: &str,
         _fields: Vec<(&str, String)>,
@@ -278,7 +283,8 @@ impl TelegramPoller {
             self.base_url, self.offset, self.poll_timeout
         );
 
-        let body = self.http.get(&url).await?;
+        let body = self.http.get(&url)?;
+
         let resp: TelegramApiResponse<Vec<serde_json::Value>> = serde_json::from_slice(&body)
             .map_err(|_e| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
@@ -322,7 +328,7 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         let url = format!("{}/sendMessage", self.base_url);
-        let resp_bytes = self.http.post_json(&url, &body_bytes).await?;
+        let resp_bytes = self.http.post_json(&url, &body_bytes)?;
 
         let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
@@ -355,7 +361,7 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         let url = format!("{}/editMessageText", self.base_url);
-        let _ = self.http.post_json(&url, &body_bytes).await?;
+        let _ = self.http.post_json(&url, &body_bytes)?;
         Ok(())
     }
 
@@ -373,7 +379,7 @@ impl TelegramPoller {
         ];
         let file = Some(("photo", photo_data.to_vec(), "screenshot.png"));
 
-        let resp_bytes = self.http.post_multipart(&url, fields, file).await?;
+        let resp_bytes = self.http.post_multipart(&url, fields, file)?;
 
         let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
@@ -401,7 +407,7 @@ impl TelegramPoller {
         }
         let file = Some(("voice", voice_data.to_vec(), "voice.ogg"));
 
-        let resp_bytes = self.http.post_multipart(&url, fields, file).await?;
+        let resp_bytes = self.http.post_multipart(&url, fields, file)?;
 
         let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
@@ -420,7 +426,7 @@ impl TelegramPoller {
         let payload = serde_json::json!({ "file_id": file_id });
         let body_bytes = serde_json::to_vec(&payload)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
-        let resp_bytes = self.http.post_json(&url, &body_bytes).await?;
+        let resp_bytes = self.http.post_json(&url, &body_bytes)?;
 
         // Parse the file path from the response.
         let resp: serde_json::Value = serde_json::from_slice(&resp_bytes)
@@ -434,7 +440,7 @@ impl TelegramPoller {
         // file download is https://api.telegram.org/file/bot<TOKEN>/<file_path>
         let download_url = self.base_url.replace("/bot", "/file/bot");
         let download_url = format!("{}/{}", download_url, file_path);
-        let file_bytes = self.http.get(&download_url).await?;
+        let file_bytes = self.http.get(&download_url)?;
 
         Ok(file_bytes)
     }

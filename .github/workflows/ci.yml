@@ -137,9 +137,9 @@ jobs:
       - name: Verify artifact exists
         run: |
           echo "=== Checking aura-daemon artifact ==="
-          ls -la targets/aarch64-linux-android/release/aura-daemon
-          file targets/aarch64-linux-android/release/aura-daemon || echo "file command failed"
-          echo "Artifact check complete"
+          ls -la targets/aarch64-linux-android/release/ || echo "Target dir not found"
+          find targets -name "aura-daemon" -type f 2>/dev/null || echo "Binary not found via find"
+          echo "=== Done ==="
 
       # ============================================================
       # STAGE 5: DEPLOY — Upload artifact

@@ -90,17 +90,41 @@
 
 **Purpose**: Cross-compile AURA for Android ARM64.
 
+**Prerequisites**:
+1. Rust toolchain with `aarch64-linux-android` target installed
+2. Android NDK r26b with clang for cross-compilation
+3. CC/AR environment variables set for the target
+
 **Actions**:
 ```yaml
+- name: Setup Rust
+  uses: dtolnay/rust-toolchain@master
+  with:
+    toolchain: stable
+    targets: aarch64-linux-android
+
+- name: Setup Android NDK
+  uses: android-ndk-org/setup-ndk@v1
+  with:
+    ndk-version: r26b
+
 - name: Build aura-daemon
+  env:
+    CC_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
+    AR_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
   run: |
     cargo build \
       --release \
-      --features "aura-llama-sys/stub,aura-daemon/reqwest" \
+      --features "stub,reqwest" \
       --target aarch64-linux-android \
       --manifest-path crates/aura-daemon/Cargo.toml
       
 - name: Build aura-cli
+  env:
+    CC_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
+    AR_aarch64_linux_android: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
   run: |
     cargo build \
       --release \
@@ -110,13 +134,21 @@
 
 **Target Triple**: `aarch64-unknown-linux-android` (API 21+, Android 5.0+)
 
-**NDK Requirement**: Use `aarch64-linux-android` from Android NDK. NOT `aarch64-unknown-linux-gnu`.
+**NDK Requirement**: 
+- Use `aarch64-linux-android` from Android NDK r26b. NOT `aarch64-unknown-linux-gnu`.
+- NDK is REQUIRED for C compilation of dependencies like `ring` (cryptography)
+- WITHOUT NDK: Build fails with "failed to find tool aarch64-linux-android-clang"
+
+**Feature Syntax**:
+- When using `--manifest-path crates/aura-daemon/Cargo.toml`, use crate-level features: `stub,reqwest`
+- When using `--workspace`, use workspace features: `aura-llama-sys/stub,aura-daemon/reqwest`
 
 **Failure Modes**:
 - F001 (SIGSEGV): May not be caught here — build succeeds even if runtime will fail
 - F003 (Dependency mismatch): cargo resolver fails
 - F005 (Linker error): Wrong target or missing NDK
 - F006 (Feature gate conflict): `#[cfg]` issues in code
+- **NEW**: NDK not installed → "failed to find tool aarch64-linux-android-clang"
 
 **Gate**: `cargo build` must exit code 0. Artifact must be produced.
 

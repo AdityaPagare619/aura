@@ -51,7 +51,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@V2
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -82,7 +82,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@V2
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -167,7 +167,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@V2
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -190,7 +190,7 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@V2
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
@@ -216,7 +216,7 @@ jobs:
           components: clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@V2
+        uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 

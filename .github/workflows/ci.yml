@@ -92,11 +92,13 @@ jobs:
       # STAGE 2: BUILD — Cross-compile aura-daemon for Android ARM64
       # reqwest feature: use reqwest HTTP backend (CI/Linux compatible)
       # stub feature: skip llama.cpp FFI (no NDK for llama.cpp)
+      # FIX: Remove --manifest-path to use workspace-level build
+      # FIX: Use crate-level features (stub,reqwest) instead of workspace syntax
       - name: Build aura-daemon (Android ARM64)
         run: |
           cargo build \
             --release \
-            --features "aura-llama-sys/stub,aura-daemon/reqwest" \
+            --features "stub,reqwest" \
             --target aarch64-linux-android \
             --manifest-path crates/aura-daemon/Cargo.toml
 

@@ -29,9 +29,9 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait after sending SIGTERM before escalating to SIGKILL.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// On Android APK mode, the neocortex binary is packaged as a shared library.
+/// On Android, the neocortex binary is at /data/local/tmp/aura-neocortex.
 #[cfg(target_os = "android")]
-const ANDROID_NEOCORTEX_PATH: &str = "/data/data/dev.aura/lib/libaura_neocortex.so";
+const ANDROID_NEOCORTEX_PATH: &str = "/data/local/tmp/aura-neocortex";
 
 // ─── Path resolution ────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ const ANDROID_NEOCORTEX_PATH: &str = "/data/data/dev.aura/lib/libaura_neocortex.
 /// 1. `AURA_NEOCORTEX_BIN` environment variable (explicit override)
 /// 2. `$PREFIX/bin/aura-neocortex` (Termux convention)
 /// 3. Platform default:
-///    - Android APK: `/data/data/dev.aura/lib/libaura_neocortex.so`
+///    - Android: `/data/local/tmp/aura-neocortex`
 ///    - Host: `aura-neocortex` (relies on PATH)
 fn resolve_neocortex_path() -> PathBuf {
     // 1. Explicit env override.
@@ -526,10 +526,7 @@ mod tests {
     #[cfg(target_os = "android")]
     #[test]
     fn android_path_constant() {
-        assert_eq!(
-            ANDROID_NEOCORTEX_PATH,
-            "/data/data/dev.aura/lib/libaura_neocortex.so"
-        );
+        assert_eq!(ANDROID_NEOCORTEX_PATH, "/data/local/tmp/aura-neocortex");
     }
 
     #[test]

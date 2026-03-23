@@ -179,6 +179,13 @@ impl CurlHttpBackend {
             ));
         }
 
+        if response_body.is_empty() {
+            warn!("Telegram returned empty response body");
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
         Ok(response_body.into_bytes())
     }
 }

@@ -381,8 +381,15 @@ impl TelegramPoller {
         let url = format!("{}/sendMessage", self.base_url);
         let resp_bytes = self.http_post_json(&url, &body_bytes).await?;
 
-        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
-            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        let resp: TelegramApiResponse<SentMessage> =
+            serde_json::from_slice(&resp_bytes).map_err(|e| {
+                if resp_bytes.is_empty() {
+                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                } else {
+                    tracing::warn!(error = %e, "failed to parse Telegram response");
+                    AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+                }
+            })?;
 
         resp.result.ok_or(AuraError::Ipc(
             aura_types::errors::IpcError::ConnectionFailed,
@@ -436,8 +443,15 @@ impl TelegramPoller {
 
         let resp_bytes = self.http_post_multipart(url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
-            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        let resp: TelegramApiResponse<SentMessage> =
+            serde_json::from_slice(&resp_bytes).map_err(|e| {
+                if resp_bytes.is_empty() {
+                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                } else {
+                    tracing::warn!(error = %e, "failed to parse Telegram response");
+                    AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+                }
+            })?;
 
         resp.result.ok_or(AuraError::Ipc(
             aura_types::errors::IpcError::ConnectionFailed,
@@ -468,8 +482,15 @@ impl TelegramPoller {
 
         let resp_bytes = self.http_post_multipart(url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
-            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        let resp: TelegramApiResponse<SentMessage> =
+            serde_json::from_slice(&resp_bytes).map_err(|e| {
+                if resp_bytes.is_empty() {
+                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                } else {
+                    tracing::warn!(error = %e, "failed to parse Telegram response");
+                    AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+                }
+            })?;
 
         resp.result.ok_or(AuraError::Ipc(
             aura_types::errors::IpcError::ConnectionFailed,

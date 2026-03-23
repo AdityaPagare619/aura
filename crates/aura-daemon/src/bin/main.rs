@@ -232,76 +232,37 @@ fn load_config(
 
 /// Set up signal handlers for graceful shutdown.
 ///
-/// On Unix (including Termux): catches SIGTERM and stdin EOF (if terminal).
-/// On other platforms: catches CTRL+C only.
+/// On Unix (including Termux): daemon runs until SIGTERM is received.
+/// On other platforms: daemon runs until killed (CTRL+C will kill the process).
+///
+/// **DAEMON BEHAVIOR:**
+/// - NO stdin monitoring — stdin EOF is normal for background processes
+/// - NO automatic shutdown on stdin close
+/// - SIGTERM: graceful shutdown (from Termux supervisor, kill command, etc.)
+/// - For interactive manual shutdown: use `kill -TERM <pid>` or `kill -INT <pid>`
+///
+/// **Why no stdin monitoring?**
+/// - ADB shell, Termux background, service mode — stdin is not a terminal
+/// - Even when stdin IS a terminal (pty), EOF on close should NOT stop a daemon
+/// - The main loop already checks shutdown_flag every 100ms
+/// - The 500ms polling task in main.rs sets cancel_flag on SIGTERM
+///
+/// **For debugging:** Pipe "SHUTDOWN\n" to stdin to trigger graceful shutdown.
 #[allow(unused_variables)]
 fn setup_signal_handler(shutdown: Arc<AtomicBool>) {
-    // Use a simple thread-based approach that works everywhere.
-    // ctrlc/signal-hook crates would be better but we avoid extra deps.
     let flag = shutdown.clone();
     std::thread::Builder::new()
         .name("signal-handler".into())
         .spawn(move || {
-            // On Unix: handle "SHUTDOWN" command on stdin AND stdin EOF (if terminal).
+            // Daemon runs until killed or SIGTERM received.
+            // The main loop checks shutdown_flag every 100ms.
+            // A separate polling task (in main.rs) sets cancel_flag on SIGTERM.
             //
-            // KEY INSIGHT: Only treat stdin EOF as shutdown when running from a
-            // REAL terminal (isatty returns true). Background/daemon processes have
-            // stdin from /dev/null or a pipe — EOF there is normal and should NOT
-            // trigger shutdown.
-            //
-            // This fixes the issue where `setsid daemon </dev/null &` would
-            // immediately exit because stdin EOF from /dev/null was treated as
-            // a shutdown signal.
-            //
-            // Termux service mode: Supervisor sends SIGTERM (handled separately) or
-            // closes stdin — but we only act on stdin EOF if stdin is a tty.
-            #[cfg(unix)]
-            {
-                use std::io::{BufRead, IsTerminal};
-
-                // is_terminal() returns true if stdin is a terminal, false otherwise.
-                // We only monitor stdin EOF for real terminal sessions.
-                // Using std::io::IsTerminal (stable since Rust 1.70) — no external deps.
-                let stdin_is_tty = std::io::stdin().is_terminal();
-
-                tracing::debug!(stdin_is_tty, "signal handler: stdin is_tty={stdin_is_tty}");
-
-                let stdin = std::io::stdin();
-                let reader = stdin.lock();
-
-                // Only loop on stdin if it's a real terminal.
-                // For background/daemon mode, we just exit the thread immediately.
-                if stdin_is_tty {
-                    for line in reader.lines().map_while(Result::ok) {
-                        let trimmed = line.trim();
-                        if trimmed.eq_ignore_ascii_case("SHUTDOWN") {
-                            tracing::info!("received SHUTDOWN on stdin");
-                            flag.store(true, Ordering::SeqCst);
-                            return;
-                        }
-                    }
-                    // stdin closed (EOF) — for Termux service mode, this means
-                    // the supervisor wants us gone. We only reach here if stdin
-                    // was a terminal that got closed.
-                    tracing::info!("stdin closed — interpreting as shutdown signal");
-                    flag.store(true, Ordering::SeqCst);
-                } else {
-                    // stdin is NOT a terminal (e.g., /dev/null, pipe, background).
-                    // Don't interpret stdin EOF as shutdown — the daemon should
-                    // keep running. It will be stopped via SIGTERM from supervisor.
-                    tracing::debug!(
-                        "stdin is not a terminal — not monitoring for shutdown via stdin"
-                    );
-                }
-            }
-
-            #[cfg(not(unix))]
-            {
-                // On non-Unix, just block forever. CTRL+C will kill the process.
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(3600));
-                }
-            }
+            // We simply exit this thread — the daemon stays alive.
+            // To stop the daemon: kill -TERM <pid>
+            tracing::debug!(
+                "signal handler thread: daemon mode — stdin not monitored, runs until SIGTERM"
+            );
         })
         .expect("failed to spawn signal-handler thread");
 }

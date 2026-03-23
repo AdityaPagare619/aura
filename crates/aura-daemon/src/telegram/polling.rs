@@ -330,7 +330,7 @@ impl TelegramPoller {
     /// Call `getUpdates` with long-polling.
     async fn get_updates(&self) -> Result<Vec<TelegramUpdate>, AuraError> {
         let url = format!(
-            "{}/getUpdates?offset={}&timeout={}&allowed_updates=[\"message\",\"callback_query\"]",
+            "{}/getUpdates?offset={}&timeout={}&allowed_updates=%5B%22message%22,%22callback_query%22%5D",
             self.base_url, self.offset, self.poll_timeout
         );
 

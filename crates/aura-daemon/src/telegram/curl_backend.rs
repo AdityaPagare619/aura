@@ -14,6 +14,11 @@
 //! The `HttpBackend` trait is synchronous. This implementation uses
 //! `std::process::Command` for fully synchronous curl calls.
 //! No tokio runtime access needed — safe to call from spawn_blocking.
+//!
+//! IMPORTANT: TelegramPoller passes FULL URLs (https://api.telegram.org/botTOKEN/endpoint).
+//! This backend handles both:
+//!   - Full URLs (already include base + token): use as-is
+//!   - Relative endpoints (getUpdates, sendMessage): prepend base + token
 
 use std::process::Command;
 
@@ -52,9 +57,13 @@ impl CurlHttpBackend {
     /// directly, with NO tokio runtime access. This is safe to call from
     /// any context including `spawn_blocking` closures.
     ///
+    /// Handles both full URLs (from TelegramPoller which already includes
+    /// base + token) and relative endpoints (for direct API calls).
+    ///
     /// # Arguments
     /// * `method` - HTTP method (GET, POST)
-    /// * `endpoint` - Telegram API endpoint (e.g., "getUpdates")
+    /// * `endpoint` - Either a full URL or a relative endpoint path.
+    ///   TelegramPoller always passes full URLs with base + token already.
     /// * `body` - Optional JSON body for POST requests
     /// * `content_type` - Content-Type header value
     fn curl_request_sync(
@@ -64,7 +73,15 @@ impl CurlHttpBackend {
         body: Option<&[u8]>,
         content_type: Option<&str>,
     ) -> Result<Vec<u8>, AuraError> {
-        let url = format!("{}/bot{}/{}", TELEGRAM_API_BASE, self.bot_token, endpoint);
+        // If endpoint is already a full URL, use it as-is.
+        // TelegramPoller::get_updates passes full URLs like:
+        //   https://api.telegram.org/botTOKEN/getUpdates?offset=0&timeout=30...
+        // In that case, self.bot_token is NOT prepended again.
+        let url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            endpoint.to_string()
+        } else {
+            format!("{}/bot{}/{}", TELEGRAM_API_BASE, self.bot_token, endpoint)
+        };
 
         debug!(url = %url, method = %method, "curl HTTP request");
 

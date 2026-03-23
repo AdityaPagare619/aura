@@ -257,11 +257,12 @@ fn setup_signal_handler(shutdown: Arc<AtomicBool>) {
             // closes stdin — but we only act on stdin EOF if stdin is a tty.
             #[cfg(unix)]
             {
-                use std::io::BufRead;
+                use std::io::{BufRead, IsTerminal};
 
-                // isatty(STDIN_FILENO) returns 1 if stdin is a terminal, 0 otherwise.
+                // is_terminal() returns true if stdin is a terminal, false otherwise.
                 // We only monitor stdin EOF for real terminal sessions.
-                let stdin_is_tty = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
+                // Using std::io::IsTerminal (stable since Rust 1.70) — no external deps.
+                let stdin_is_tty = std::io::stdin().is_terminal();
 
                 tracing::debug!(stdin_is_tty, "signal handler: stdin is_tty={stdin_is_tty}");
 

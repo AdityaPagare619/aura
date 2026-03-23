@@ -5,11 +5,15 @@
 //! The `HttpBackend` trait is synchronous. This implementation wraps reqwest's
 //! async HTTP calls in `tokio::task::spawn_blocking` at the call sites
 //! in `polling.rs`. Here we implement the sync trait directly.
+//!
+//! The reqwest client is async-native, so we spawn a dedicated tokio runtime
+//! per request. This is correct and safe to call from spawn_blocking.
 
 use std::time::Duration;
 
 use aura_types::errors::AuraError;
 use reqwest::multipart;
+use tokio::runtime::Runtime;
 use tracing::{debug, warn};
 
 use super::polling::HttpBackend;
@@ -43,130 +47,137 @@ impl ReqwestHttpBackend {
 
 impl HttpBackend for ReqwestHttpBackend {
     fn get(&self, url: &str) -> Result<Vec<u8>, AuraError> {
-        let rt = tokio::runtime::Handle::current();
         let full_url = self.build_url(url);
+        let client = self.client.clone();
 
         debug!(url = %full_url, "GET request");
 
-        rt.block_on(async {
-            let response = self.client.get(&full_url).send().await.map_err(|e| {
-                warn!(error = %e, url = %full_url, "HTTP GET failed");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                warn!(status = %status, body = %body, "HTTP GET returned error");
-                return Err(AuraError::Ipc(
-                    aura_types::errors::IpcError::ConnectionFailed,
-                ));
-            }
-
-            let bytes = response.bytes().await.map_err(|e| {
-                warn!(error = %e, "failed to read response body");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-
-            debug!(bytes = bytes.len(), "GET request successful");
-            Ok(bytes.to_vec())
-        })
-    }
-
-    fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError> {
-        let rt = tokio::runtime::Handle::current();
-        let full_url = self.build_url(url);
-
-        debug!(url = %full_url, bytes = body.len(), "POST JSON request");
-
-        rt.block_on(async {
-            let response = self
-                .client
-                .post(&full_url)
-                .header("Content-Type", "application/json")
-                .body(body.to_vec())
-                .send()
-                .await
-                .map_err(|e| {
-                    warn!(error = %e, url = %full_url, "HTTP POST failed");
+        // Spawn a dedicated runtime per request. Safe to call from spawn_blocking.
+        Runtime::new()
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?
+            .block_on(async {
+                let response = client.get(&full_url).send().await.map_err(|e| {
+                    warn!(error = %e, url = %full_url, "HTTP GET failed");
                     AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
                 })?;
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                warn!(status = %status, body = %body, "HTTP POST returned error");
-                return Err(AuraError::Ipc(
-                    aura_types::errors::IpcError::ConnectionFailed,
-                ));
-            }
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    warn!(status = %status, body = %body, "HTTP GET returned error");
+                    return Err(AuraError::Ipc(
+                        aura_types::errors::IpcError::ConnectionFailed,
+                    ));
+                }
 
-            let bytes = response.bytes().await.map_err(|e| {
-                warn!(error = %e, "failed to read response body");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
+                let bytes = response.bytes().await.map_err(|e| {
+                    warn!(error = %e, "failed to read response body");
+                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                })?;
 
-            debug!(bytes = bytes.len(), "POST JSON request successful");
-            Ok(bytes.to_vec())
-        })
+                debug!(bytes = bytes.len(), "GET request successful");
+                Ok(bytes.to_vec())
+            })
+    }
+
+    fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError> {
+        let full_url = self.build_url(url);
+        let client = self.client.clone();
+
+        debug!(url = %full_url, bytes = body.len(), "POST JSON request");
+
+        // Spawn a dedicated runtime per request. Safe to call from spawn_blocking.
+        Runtime::new()
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?
+            .block_on(async {
+                let response = client
+                    .post(&full_url)
+                    .header("Content-Type", "application/json")
+                    .body(body.to_vec())
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        warn!(error = %e, url = %full_url, "HTTP POST failed");
+                        AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                    })?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    warn!(status = %status, body = %body, "HTTP POST returned error");
+                    return Err(AuraError::Ipc(
+                        aura_types::errors::IpcError::ConnectionFailed,
+                    ));
+                }
+
+                let bytes = response.bytes().await.map_err(|e| {
+                    warn!(error = %e, "failed to read response body");
+                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                })?;
+
+                debug!(bytes = bytes.len(), "POST JSON request successful");
+                Ok(bytes.to_vec())
+            })
     }
 
     fn post_multipart(
         &self,
         url: &str,
-        fields: Vec<(&str, String)>,
-        file_field: Option<(&str, Vec<u8>, &str)>,
+        fields: Vec<(String, String)>,
+        file_field: Option<(String, Vec<u8>, String)>,
     ) -> Result<Vec<u8>, AuraError> {
-        let rt = tokio::runtime::Handle::current();
         let full_url = self.build_url(url);
+        let client = self.client.clone();
 
         debug!(url = %full_url, fields = fields.len(), has_file = file_field.is_some(), "POST multipart request");
 
-        rt.block_on(async {
-            let mut form = multipart::Form::new();
+        // Spawn a dedicated runtime per request. Safe to call from spawn_blocking.
+        Runtime::new()
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?
+            .block_on(async {
+                let mut form = multipart::Form::new();
 
-            for (key, value) in fields {
-                form = form.text(key.to_string(), value);
-            }
+                for (key, value) in fields {
+                    form = form.text(key, value);
+                }
 
-            if let Some((field_name, file_data, mime_type)) = file_field {
-                let part = multipart::Part::bytes(file_data)
-                    .mime_str(mime_type)
+                if let Some((field_name, file_data, mime_type)) = file_field {
+                    let part = multipart::Part::bytes(file_data)
+                        .mime_str(&mime_type)
+                        .map_err(|e| {
+                            warn!(error = %e, "failed to create multipart part");
+                            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+                        })?;
+                    form = form.part(field_name, part);
+                }
+
+                let response = client
+                    .post(&full_url)
+                    .multipart(form)
+                    .send()
+                    .await
                     .map_err(|e| {
-                        warn!(error = %e, "failed to create multipart part");
+                        warn!(error = %e, url = %full_url, "HTTP multipart POST failed");
                         AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
                     })?;
-                form = form.part(field_name.to_string(), part);
-            }
 
-            let response = self
-                .client
-                .post(&full_url)
-                .multipart(form)
-                .send()
-                .await
-                .map_err(|e| {
-                    warn!(error = %e, url = %full_url, "HTTP multipart POST failed");
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    warn!(status = %status, body = %body, "HTTP multipart POST returned error");
+                    return Err(AuraError::Ipc(
+                        aura_types::errors::IpcError::ConnectionFailed,
+                    ));
+                }
+
+                let bytes = response.bytes().await.map_err(|e| {
+                    warn!(error = %e, "failed to read multipart response body");
                     AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
                 })?;
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                warn!(status = %status, body = %body, "HTTP multipart POST returned error");
-                return Err(AuraError::Ipc(
-                    aura_types::errors::IpcError::ConnectionFailed,
-                ));
-            }
-
-            let bytes = response.bytes().await.map_err(|e| {
-                warn!(error = %e, "failed to read multipart response body");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
-
-            debug!(bytes = bytes.len(), "POST multipart request successful");
-            Ok(bytes.to_vec())
-        })
+                debug!(bytes = bytes.len(), "POST multipart request successful");
+                Ok(bytes.to_vec())
+            })
     }
 }
 

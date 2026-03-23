@@ -12,11 +12,12 @@
 //! - Simpler dependency tree (no rustls, no webpki, no platform verifier)
 //!
 //! The `HttpBackend` trait is synchronous. This implementation uses
-//! `tokio::process::Command` which is async-native, but we expose it
-//! through a sync interface. Callers wrap these in `spawn_blocking`.
+//! `std::process::Command` for fully synchronous curl calls.
+//! No tokio runtime access needed — safe to call from spawn_blocking.
+
+use std::process::Command;
 
 use aura_types::errors::AuraError;
-use tokio::process::Command;
 use tracing::{debug, warn};
 
 use super::polling::HttpBackend;
@@ -47,27 +48,16 @@ impl CurlHttpBackend {
 
     /// Execute a curl request and return the response body as bytes.
     ///
+    /// This is a SYNCHRONOUS function. It uses `std::process::Command`
+    /// directly, with NO tokio runtime access. This is safe to call from
+    /// any context including `spawn_blocking` closures.
+    ///
     /// # Arguments
     /// * `method` - HTTP method (GET, POST)
     /// * `endpoint` - Telegram API endpoint (e.g., "getUpdates")
     /// * `body` - Optional JSON body for POST requests
     /// * `content_type` - Content-Type header value
     fn curl_request_sync(
-        &self,
-        method: &str,
-        endpoint: &str,
-        body: Option<&[u8]>,
-        content_type: Option<&str>,
-    ) -> Result<Vec<u8>, AuraError> {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            self.curl_request_impl(method, endpoint, body, content_type)
-                .await
-        })
-    }
-
-    /// Internal async implementation (called from sync wrapper).
-    async fn curl_request_impl(
         &self,
         method: &str,
         endpoint: &str,
@@ -87,7 +77,7 @@ impl CurlHttpBackend {
             CURL_TIMEOUT_SECS.to_string(),
             "-X".to_string(),
             method.to_string(),
-            url.clone(),
+            url,
         ];
 
         if let Some(ct) = content_type {
@@ -101,14 +91,12 @@ impl CurlHttpBackend {
             args.push(body_str.to_string());
         }
 
-        let output = Command::new("curl")
-            .args(&args)
-            .output()
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "failed to spawn curl");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
+        // Use std::process::Command — fully synchronous, no tokio runtime needed.
+        // This is safe to call from spawn_blocking or any thread context.
+        let output = Command::new("curl").args(&args).output().map_err(|e| {
+            warn!(error = %e, "failed to spawn curl");
+            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+        })?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -173,8 +161,8 @@ impl HttpBackend for CurlHttpBackend {
     fn post_multipart(
         &self,
         endpoint: &str,
-        fields: Vec<(&str, String)>,
-        file_field: Option<(&str, Vec<u8>, &str)>,
+        fields: Vec<(String, String)>,
+        file_field: Option<(String, Vec<u8>, String)>,
     ) -> Result<Vec<u8>, AuraError> {
         let boundary = "AURA_BOUNDARY_123456789";
 
@@ -225,7 +213,8 @@ mod tests {
     async fn test_curl_get_request() {
         // This test requires curl to be available
         // Skip if curl is not in PATH
-        let result = Command::new("curl").args(&["--version"]).output().await;
+        use std::process::Command as StdCommand;
+        let result = StdCommand::new("curl").args(&["--version"]).output();
 
         if result.is_err() {
             return; // Skip if curl not available

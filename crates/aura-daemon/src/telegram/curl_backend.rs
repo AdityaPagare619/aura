@@ -30,12 +30,16 @@ use super::polling::HttpBackend;
 /// Maximum time for a curl request to complete.
 /// Maximum time for a curl request to complete.
 ///
-/// Must be GREATER than Telegram's long-poll timeout (30s) to allow
-/// the full response to be received before curl times out.
-/// If curl times out at exactly the same moment Telegram responds,
-/// curl exits before reading the response body → "0 bytes received".
-/// 35s gives Telegram's 30s long-poll time to deliver the response.
-const CURL_TIMEOUT_SECS: u64 = 35;
+/// We intentionally do NOT set --max-time because Telegram already enforces
+/// its own long-poll timeout (30s). When Telegram sends a response (either
+/// an update or an empty result array), curl will immediately receive it
+/// and exit. The only case where --max-time would help is if the network
+/// hangs indefinitely, but Termux's network stack handles this.
+///
+/// Note: Telegram's getUpdates long-poll timeout is 30s. After 30s of
+/// no updates, Telegram responds with {"ok": true, "result": []}. curl
+/// receives this immediately and exits. No explicit timeout needed.
+const CURL_TIMEOUT_SECS: u64 = 0; // 0 = no timeout, Telegram controls it
 
 /// Telegram API base URL.
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
@@ -97,12 +101,18 @@ impl CurlHttpBackend {
             "-S".to_string(),
             "-w".to_string(),
             "\\n%{http_code}".to_string(),
-            "--max-time".to_string(),
-            CURL_TIMEOUT_SECS.to_string(),
-            "-X".to_string(),
-            method.to_string(),
-            url,
         ];
+
+        // Only add --max-time if a timeout is configured.
+        // When 0, we rely on Telegram's built-in long-poll timeout (30s).
+        if CURL_TIMEOUT_SECS > 0 {
+            args.push("--max-time".to_string());
+            args.push(CURL_TIMEOUT_SECS.to_string());
+        }
+
+        args.push("-X".to_string());
+        args.push(method.to_string());
+        args.push(url);
 
         if let Some(ct) = content_type {
             args.push("-H".to_string());

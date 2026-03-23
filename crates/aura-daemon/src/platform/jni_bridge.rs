@@ -204,7 +204,8 @@ mod inner {
         };
 
         rt.block_on(async {
-            crate::daemon_core::main_loop::run(state).await;
+            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            crate::daemon_core::main_loop::run(state, shutdown_flag).await;
         });
 
         info!("nativeRun: main loop exited");

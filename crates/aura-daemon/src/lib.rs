@@ -96,11 +96,12 @@ pub fn init_for_testing(
         let (state, _report) = startup(config)?;
 
         let cancel = state.cancel_flag.clone();
+        let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // In test mode, immediately cancel to skip the main loop.
         cancel.store(true, std::sync::atomic::Ordering::Release);
 
-        crate::daemon_core::main_loop::run(state).await;
+        crate::daemon_core::main_loop::run(state, shutdown_flag).await;
 
         // We can't easily recover the DaemonState after `run` consumes it,
         // so for testing we just return a synthetic shutdown report.
@@ -190,7 +191,8 @@ mod jni_bridge {
         };
 
         rt.block_on(async {
-            crate::daemon_core::main_loop::run(state).await;
+            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            crate::daemon_core::main_loop::run(state, shutdown_flag).await;
         });
     }
 

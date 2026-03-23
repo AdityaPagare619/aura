@@ -1490,7 +1490,13 @@ fn spawn_cron_scheduler(
 ///
 /// All subsystem wiring flows through [`LoopSubsystems`] which is constructed
 /// once at the start and passed by `&mut` to every handler.
-pub async fn run(mut state: DaemonState) {
+///
+/// `shutdown_flag` is checked directly (not via the polling task) to ensure
+/// the daemon exits immediately when stdin closes, without waiting 500ms.
+pub async fn run(
+    mut state: DaemonState,
+    shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     let checkpoint_interval = Duration::from_secs(state.config.daemon.checkpoint_interval_s as u64);
     let mut checkpoint_timer = interval(checkpoint_interval);
     // Consume the first (immediate) tick.
@@ -2100,9 +2106,16 @@ pub async fn run(mut state: DaemonState) {
     );
 
     loop {
-        // Check cancellation flag (non-blocking).
+        // Check cancellation flag OR shutdown flag (non-blocking).
+        // shutdown_flag is set by the signal handler when stdin closes.
+        // We check it directly here (not via the 500ms polling task) so the
+        // daemon exits immediately on stdin EOF rather than waiting 500ms.
         if state.cancel_flag.load(Ordering::Acquire) {
             tracing::info!(select_count, "cancellation flag set — exiting main loop");
+            break;
+        }
+        if shutdown_flag.load(Ordering::Acquire) {
+            tracing::info!(select_count, "shutdown signal received — exiting main loop");
             break;
         }
 
@@ -8216,7 +8229,8 @@ mod tests {
         cancel.store(true, Ordering::Release);
 
         let start = Instant::now();
-        run(state).await;
+        let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        run(state, shutdown_flag).await;
         assert!(start.elapsed().as_millis() < 500, "should exit quickly");
     }
 
@@ -8236,7 +8250,8 @@ mod tests {
 
         let local = tokio::task::LocalSet::new();
         let handle = local.spawn_local(async move {
-            run(state).await;
+            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            run(state, shutdown_flag).await;
         });
 
         local
@@ -8267,7 +8282,8 @@ mod tests {
 
         let local = tokio::task::LocalSet::new();
         let handle = local.spawn_local(async move {
-            run(state).await;
+            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            run(state, shutdown_flag).await;
         });
 
         local

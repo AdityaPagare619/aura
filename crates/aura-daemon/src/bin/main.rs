@@ -204,8 +204,8 @@ fn main() {
             }
         });
 
-        // Enter main event loop (runs until cancel_flag is set).
-        aura_daemon::daemon_core::main_loop::run(state).await;
+        // Enter main event loop (runs until cancel_flag or shutdown_flag is set).
+        aura_daemon::daemon_core::main_loop::run(state, shutdown_flag.clone()).await;
 
         tracing::info!("aura-daemon shut down cleanly");
     });

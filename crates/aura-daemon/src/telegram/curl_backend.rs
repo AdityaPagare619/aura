@@ -28,7 +28,14 @@ use tracing::{debug, warn};
 use super::polling::HttpBackend;
 
 /// Maximum time for a curl request to complete.
-const CURL_TIMEOUT_SECS: u64 = 30;
+/// Maximum time for a curl request to complete.
+///
+/// Must be GREATER than Telegram's long-poll timeout (30s) to allow
+/// the full response to be received before curl times out.
+/// If curl times out at exactly the same moment Telegram responds,
+/// curl exits before reading the response body → "0 bytes received".
+/// 35s gives Telegram's 30s long-poll time to deliver the response.
+const CURL_TIMEOUT_SECS: u64 = 35;
 
 /// Telegram API base URL.
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";

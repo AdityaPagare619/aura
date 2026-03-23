@@ -53,7 +53,7 @@ audiopus = { version = "=0.3.0-rc.0", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"
-jni  = "0.21"
+jni  = "0.22"
 
 [dev-dependencies]
 tokio    = { version = "1", features = ["rt", "macros", "sync", "time", "net", "test-util"] }

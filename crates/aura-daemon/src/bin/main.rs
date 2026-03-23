@@ -232,7 +232,7 @@ fn load_config(
 
 /// Set up signal handlers for graceful shutdown.
 ///
-/// On Unix (including Termux): catches SIGTERM and SIGINT.
+/// On Unix (including Termux): catches SIGTERM and stdin EOF (if terminal).
 /// On other platforms: catches CTRL+C only.
 #[allow(unused_variables)]
 fn setup_signal_handler(shutdown: Arc<AtomicBool>) {
@@ -242,29 +242,56 @@ fn setup_signal_handler(shutdown: Arc<AtomicBool>) {
     std::thread::Builder::new()
         .name("signal-handler".into())
         .spawn(move || {
-            // On Unix, we can catch SIGTERM via a self-pipe trick.
-            // For simplicity, we just handle stdin EOF as a shutdown signal
-            // (the termux-services supervisor sends SIGTERM which closes stdin).
+            // On Unix: handle "SHUTDOWN" command on stdin AND stdin EOF (if terminal).
             //
-            // The tokio spawn above polls shutdown_flag every 500ms, so worst-case
-            // latency to shutdown is 500ms.
+            // KEY INSIGHT: Only treat stdin EOF as shutdown when running from a
+            // REAL terminal (isatty returns true). Background/daemon processes have
+            // stdin from /dev/null or a pipe — EOF there is normal and should NOT
+            // trigger shutdown.
+            //
+            // This fixes the issue where `setsid daemon </dev/null &` would
+            // immediately exit because stdin EOF from /dev/null was treated as
+            // a shutdown signal.
+            //
+            // Termux service mode: Supervisor sends SIGTERM (handled separately) or
+            // closes stdin — but we only act on stdin EOF if stdin is a tty.
             #[cfg(unix)]
             {
                 use std::io::BufRead;
+
+                // isatty(STDIN_FILENO) returns 1 if stdin is a terminal, 0 otherwise.
+                // We only monitor stdin EOF for real terminal sessions.
+                let stdin_is_tty = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
+
+                tracing::debug!(stdin_is_tty, "signal handler: stdin is_tty={stdin_is_tty}");
+
                 let stdin = std::io::stdin();
                 let reader = stdin.lock();
-                for line in reader.lines().map_while(Result::ok) {
-                    let trimmed = line.trim();
-                    if trimmed.eq_ignore_ascii_case("SHUTDOWN") {
-                        tracing::info!("received SHUTDOWN on stdin");
-                        flag.store(true, Ordering::SeqCst);
-                        return;
+
+                // Only loop on stdin if it's a real terminal.
+                // For background/daemon mode, we just exit the thread immediately.
+                if stdin_is_tty {
+                    for line in reader.lines().map_while(Result::ok) {
+                        let trimmed = line.trim();
+                        if trimmed.eq_ignore_ascii_case("SHUTDOWN") {
+                            tracing::info!("received SHUTDOWN on stdin");
+                            flag.store(true, Ordering::SeqCst);
+                            return;
+                        }
                     }
+                    // stdin closed (EOF) — for Termux service mode, this means
+                    // the supervisor wants us gone. We only reach here if stdin
+                    // was a terminal that got closed.
+                    tracing::info!("stdin closed — interpreting as shutdown signal");
+                    flag.store(true, Ordering::SeqCst);
+                } else {
+                    // stdin is NOT a terminal (e.g., /dev/null, pipe, background).
+                    // Don't interpret stdin EOF as shutdown — the daemon should
+                    // keep running. It will be stopped via SIGTERM from supervisor.
+                    tracing::debug!(
+                        "stdin is not a terminal — not monitoring for shutdown via stdin"
+                    );
                 }
-                // stdin closed (EOF) — for Termux service mode, this means
-                // the supervisor wants us gone.
-                tracing::info!("stdin closed — interpreting as shutdown signal");
-                flag.store(true, Ordering::SeqCst);
             }
 
             #[cfg(not(unix))]

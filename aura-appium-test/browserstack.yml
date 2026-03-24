@@ -1,0 +1,18 @@
+userName: adityapagare_Bx7ZPV
+accessKey: JfzmcXY52g83yUpsS95D
+
+app: bs://da238b12e7756cbe140170866fd118ea22b7cb63
+
+platforms:
+  - platformName: android
+    deviceName: Samsung Galaxy S24
+    platformVersion: "14.0"
+    browserName: android
+
+parallelsPerPlatform: 1
+browserstackLocal: false
+networkLogs: true
+debug: true
+
+projectName: AURA-v4
+buildName: AURA-v4-F001-Device-Test

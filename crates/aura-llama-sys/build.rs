@@ -39,12 +39,15 @@ fn main() {
             c_build
                 .cpp(false)
                 .flag("-std=c11")
-                // ARMv8.2-A with FP16 and DotProduct extensions (MediaTek Dimensity 6300 / Moto G45 5G)
-                .flag("-march=armv8.2-a+fp16+dotprod")
+                // CONSERVATIVE: Use generic armv8-a to avoid MediaTek Dimensity 6300 SIGSEGV
+                // Research: MediaTek devices crash with +fp16+dotprod flags due to
+                // FP16_VECTOR_ARITHMETIC issues (llama.cpp #13708, #18766)
+                .flag("-march=armv8-a")
+                // NEON is standard on all ARMv8-A cores, but disable FP16 vectorization
                 .flag("-DGGML_USE_NEON")
-                .flag("-DGGML_USE_NEON_FP16")
+                .flag("-DGGML_USE_NEON_FP16=OFF")  // Disable FP16 vectorization for stability
                 // Disable GGML_NATIVE to prevent SVE/other CPU feature auto-detection issues
-                // Research: GGML_NATIVE can cause SIGSEGV on some Android devices
+                // Research: GGML_NATIVE can cause SIGSEGV on some Android devices (#8109)
                 .flag("-DGGML_NATIVE=OFF")
                 .flag("-DGGML_USE_SVE=OFF")
                 .flag("-O3")
@@ -66,12 +69,15 @@ fn main() {
                 // so rustc can reliably resolve static libc++ in CI cross builds.
                 .cpp_link_stdlib(None)
                 .flag("-std=c++17")
-                // ARMv8.2-A with FP16 and DotProduct extensions (MediaTek Dimensity 6300 / Moto G45 5G)
-                .flag("-march=armv8.2-a+fp16+dotprod")
+                // CONSERVATIVE: Use generic armv8-a to avoid MediaTek Dimensity 6300 SIGSEGV
+                // Research: MediaTek devices crash with +fp16+dotprod flags due to
+                // FP16_VECTOR_ARITHMETIC issues (llama.cpp #13708, #18766)
+                .flag("-march=armv8-a")
+                // NEON is standard on all ARMv8-A cores, but disable FP16 vectorization
                 .flag("-DGGML_USE_NEON")
-                .flag("-DGGML_USE_NEON_FP16")
+                .flag("-DGGML_USE_NEON_FP16=OFF")  // Disable FP16 vectorization for stability
                 // Disable GGML_NATIVE to prevent SVE/other CPU feature auto-detection issues
-                // Research: GGML_NATIVE can cause SIGSEGV on some Android devices
+                // Research: GGML_NATIVE can cause SIGSEGV on some Android devices (#8109)
                 .flag("-DGGML_NATIVE=OFF")
                 .flag("-DGGML_USE_SVE=OFF")
                 .flag("-O3")

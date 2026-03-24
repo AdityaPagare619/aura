@@ -1,0 +1,4 @@
+=== CONFIG CHECK ===
+cat: /data/data/com.termux/files/home/.config/aura/config.toml: No such file or directory
+===
+aura-daemon 4.0.0-alpha.8

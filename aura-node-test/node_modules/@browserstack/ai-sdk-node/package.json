@@ -1,0 +1,1 @@
+{"name":"@browserstack/ai-sdk-node","version":"1.5.17","description":"Browserstack integrations","main":"index.js","types":"types","scripts":{},"author":"","license":"SEE LICENSE IN LICENSE.md","dependencies":{"axios":"^1.7.4","uuid":"9.0.1"},"devDependencies":{},"exports":{".":{"require":"./index.js","import":"./index.js","types":"./types/index.d.ts"}}}

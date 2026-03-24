@@ -1,0 +1,85 @@
+{
+  "name": "geckodriver",
+  "version": "6.1.0",
+  "description": "Mozilla's Geckodriver for Node.js",
+  "homepage": "https://github.com/webdriverio-community/node-geckodriver#readme",
+  "license": "MIT",
+  "author": {
+    "name": "vladikoff",
+    "email": "vlad.filippov@gmail.com",
+    "url": "http://vf.io"
+  },
+  "contributors": [
+    {
+      "name": "Christian Bromann",
+      "url": "https://bromann.dev",
+      "email": "mail@bromann.dev"
+    }
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "geckodriver",
+    "webdriver"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/webdriverio-community/node-geckodriver.git"
+  },
+  "scripts": {
+    "build": "tsc -b .",
+    "clean": "rimraf ./node_modules package-lock.yaml ./dist",
+    "prepare": "husky",
+    "postinstall": "test -f ./dist/install.js && node ./dist/install.js || echo \"Skipping install, project not built!\"",
+    "test": "run-s build test:*",
+    "test:lint": "eslint",
+    "test:unit": "vitest --run",
+    "test:e2e": "tsx ./tests/test.e2e.ts",
+    "watch": "npm run build -- --watch"
+  },
+  "bin": {
+    "geckodriver": "./bin/geckodriver.js"
+  },
+  "bugs": {
+    "url": "https://github.com/webdriverio-community/node-geckodriver/issues"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "exports": {
+    ".": [
+      {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "require": "./dist/cjs/index.js"
+      },
+      "./dist/cjs/index.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.0.12",
+    "@wdio/eslint": "^0.1.2",
+    "eslint": "^9.39.1",
+    "geckodriver": ".",
+    "husky": "^9.1.7",
+    "npm-run-all2": "^8.0.4",
+    "octokit": "^5.0.5",
+    "release-it": "^19.0.6",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.12",
+    "wait-port": "^1.1.0",
+    "webdriverio": "^9.20.1"
+  },
+  "dependencies": {
+    "@wdio/logger": "^9.18.0",
+    "@zip.js/zip.js": "^2.8.11",
+    "decamelize": "^6.0.1",
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "modern-tar": "^0.7.2"
+  }
+}

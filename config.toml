@@ -1,0 +1,78 @@
+[daemon]
+checkpoint_interval_s = 300
+rss_warning_mb = 28
+rss_ceiling_mb = 30
+version = "4.0.0"
+log_level = "info"
+data_dir = "/data/local/tmp/aura"
+
+[amygdala]
+instant_threshold = 0.65
+weight_lex = 0.40
+weight_src = 0.25
+weight_time = 0.20
+weight_anom = 0.15
+storm_dedup_size = 50
+storm_rate_limit_ms = 30000
+cold_start_events = 200
+cold_start_hours = 72
+
+[neocortex]
+default_n_ctx = 4096
+n_threads = 4
+max_memory_mb = 2048
+inference_timeout_ms = 60000
+model_dir = "/data/local/tmp/aura/models"
+default_model_name = "Qwen3-8B-Q4_K_M"
+default_model_path = "/data/local/tmp/aura/models/test.gguf"
+default_model_context_size = 32768
+
+[execution]
+max_steps_normal = 200
+max_steps_safety = 50
+max_steps_power = 500
+rate_limit_actions_per_min = 60
+delay_min_ms = 150
+delay_max_ms = 500
+
+[power]
+daily_token_budget = 50000
+conservative_threshold = 50
+low_power_threshold = 30
+critical_threshold = 15
+emergency_threshold = 5
+
+[identity]
+mood_cooldown_ms = 60000
+max_mood_delta = 0.2
+trust_hysteresis = 0.05
+
+[identity.ocean]
+openness = 0.85
+conscientiousness = 0.75
+extraversion = 0.50
+agreeableness = 0.70
+neuroticism = 0.25
+
+[identity.mood_neutral]
+valence = 0.0
+arousal = 0.0
+dominance = 0.5
+
+[identity.relationship_thresholds]
+stranger_max = 0.15
+acquaintance_max = 0.35
+friend_max = 0.60
+close_friend_max = 0.85
+
+[sqlite]
+db_path = "/data/local/tmp/aura/db/aura.db"
+wal_size_limit = 4194304
+max_episodes = 10000
+max_semantic_entries = 5000
+
+[telegram]
+bot_token = "8764736044:AAEuSHrnfzvrEbp9txWFrgSeC6R_daT6304"
+allowed_chat_ids = [8407946567]
+trust_level = 0.5
+poll_interval_ms = 2000

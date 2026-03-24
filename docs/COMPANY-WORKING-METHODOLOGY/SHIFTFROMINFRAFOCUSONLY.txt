@@ -1,0 +1,3263 @@
+You had thought : Thinking: The user is asking me to continue the deep sequential thinking session about AURA. They want a comprehensive 200+ thought session covering every domain of AURA's architecture, comparing local vs GitHub to understand what's implemented vs what's documented.
+Let me continue the sequential thinking from where we left off. The user has made it very clear:
+1. They want deep, comprehensive analysis
+2. They want to understand what was supposed to be vs what actually works
+3. They want every domain covered with reasoning
+4. They want no shortcuts, full depth analysis
+5. They have Telegram tokens ready to test
+Let me begin a comprehensive sequential thinking session that covers:
+- AURA's core purpose and vision
+- What the architecture docs say vs what's actually implemented
+- The user flow for installation and usage
+- What's working vs what's stubbed
+- The missing pieces for production
+- How to properly test and validate everything
+I need to load the brainstorming skill since this is creative/architectural work, but also need to do deep systematic thinking.
+Let me start the sequential thinking session properly.
+I understand. Let me continue the deep sequential thinking session about AURA's architecture, implementation, and path to production. This will be comprehensive, covering every domain systematically.
+⚙ sequential-thinking_sequentialthinking [thought=Let me establish the starting point for this comprehensive analysis. The user has given me critical context:
+1. We have Telegram tokens ready to test
+2. We need to understand AURA's ACTUAL working vs what was documented
+3. We need 200+ deep thoughts covering every domain
+4. Local codebase vs GitHub - local shows current state, GitHub shows the full journey
+5. Code is the source of truth, not docs
+From previous sessions, I know:
+- CI was building wrong files (cdylib instead of binary) - FIXED
+- Feature flag caused panic on Termux (rustls-platform-verifier needed JVM) - FIXED to curl-backend
+- Binary was successfully transferred and runs on Moto G45 5G
+- Boot stages show as PASSED but services don't actually work (missing config, models, directories)
+- GitHub has 30 recent commits showing the full journey of fixes
+- There are P0 blockers: Kotlin shell app missing, AndroidManifest.xml missing, llama.cpp vendored unknown
+Now I need to dive DEEP into understanding:
+1. What AURA was SUPPOSED to be (from architecture docs)
+2. What actually EXISTS in the codebase
+3. What's WORKING vs what's STUBBED
+4. The USER FLOW for installation and interaction
+5. What needs to be built for production
+Let me start by reading the core architecture document to understand AURA's fundamental purpose., nextThoughtNeeded=true, thoughtNumber=1, totalThoughts=250]
+Thinking: Good, the sequential thinking has started. Now I need to read the core architecture document to understand what AURA was supposed to be.
+→ Read aura\AURA-V4-CONCEPT-DESIGN-AND-GROWTH-ARCHITECTURE.md 
+Thinking: This is incredibly detailed! Now I understand the CORE PURPOSE of AURA:
+1. AURA is NOT just a wrapper around an LLM
+2. AURA is the PHONE'S SECOND ADMIN that actually DOES things via AccessibilityService
+3. AURA is a COGNITIVE SYMBIONT that learns and grows WITH the user
+4. AURA uses Active Inference Framework (EFE minimization) for genuine understanding
+5. AURA has 4-tier memory (Working/Episodic/Semantic/Archive)
+6. AURA discovers its own emotional dimensions, not preset templates
+7. Telegram is just the VOICE - AURA controls everything else DIRECTLY on the device
+Key architectural points:
+- 11-stage executor
+- Bi-cameral ReAct (System1=DGS for deterministic, System2=Semantic for complex)
+- 6-layer neocortex teacher stack
+- 4-tier memory with HNSW + RRF
+- Hebbian learning
+- Amygdala for salience detection
+- Proactive engine
+- ETG (Experience-Triggered Generalization)
+- Forest Guardian for attention protection
+- WASM sandbox for extensions
+Now let me continue the sequential thinking with the understanding gained from this document.
+⚙ sequential-thinking_sequentialthinking [thought=After reading the AURA-V4-CONCEPT-DESIGN-AND-GROWTH-ARCHITECTURE.md, I now understand AURA's CORE PURPOSE:
+**AURA IS NOT:**
+- A simple LLM wrapper
+- A chatbot with commands
+- An API bridge like OpenClaw
+- A passive assistant
+**AURA IS:**
+1. **The Phone's Second Admin** - Uses AccessibilityService to directly control apps (open, click, type, verify screen state)
+2. **Cognitive Symbiont** - Learns and grows WITH the user over time
+3. **Active Inference System** - Uses Expected Free Energy minimization to predict, minimize surprise, update world model
+4. **4-Tier Memory System** - Working/Episodic/Semantic/Archive that builds identity through memory
+5. **Trust-Based Autonomy** - 5 tiers from Stranger to Soulmate
+6. **Anti-Sycophancy Machine** - TRUTH Protocol that challenges users when needed
+**Key Architecture Understanding:**
+- Telegram is AURA's VOICE (communication)
+- AccessibilityService is AURA's HANDS (actual execution)
+- LLM is AURA's BRAIN (reasoning)
+- Memory is AURA's IDENTITY (becoming)
+- Proactive Engine is AURA's INITIATIVE (not waiting to be asked)
+**The Three Pillars:**
+1. "I Remember, Therefore I Become" - Memory IS identity
+2. "Beyond Tool, Before Equal" - Partner, not product
+3. "Anti-Cloud Manifesto" - Your data stays on YOUR device
+**What's DIFFERENT from OpenClaw:**
+- OpenClaw uses API bridges to connect to apps
+- AURA uses AccessibilityService to CONTROL apps DIRECTLY like a human would
+- AURA learns from experience, OpenClaw doesn't
+- AURA has proactive intelligence, OpenClaw is reactive
+Now I need to understand what actually EXISTS in the codebase vs what was documented. Let me continue with the architecture analysis., nextThoughtNeeded=true, thoughtNumber=2, totalThoughts=250]
+Thinking: Good, now let me continue with the systematic analysis. I need to understand what actually exists in the codebase. Let me check the GitHub commits to understand what was done historically, then compare with local.
+⚙ github-mcp-server_list_commits [owner=AdityaPagare619, perPage=30, repo=aura]
+Thinking: Now I have the complete GitHub history. Let me analyze this systematically. The commits show the journey of fixes and improvements. Now let me continue the sequential thinking with this information.
+⚙ sequential-thinking_sequentialthinking [thought=Let me analyze the GitHub commit history to understand the FULL JOURNEY:
+**Recent Commits (Mar 20-22) - THE FIX SPRINT:**
+Day 1 (Mar 20):
+- `1e19344` - Added SBOM, SLSA provenance, regression tests
+- `4aef1dd` - Fixed cargo build args (RUSTFLAGS)
+- `d8f56c8` - Fixed first-word penalty in planner (0.85 → 0.75)
+- `d17455f` - Build specific crates (-p aura-daemon -p aura-neocortex)
+- `8c1fda1` - Removed invalid package.metadata from workspace
+- `a07f20e` - Added enterprise infrastructure (workflows, taxonomy, agent toolkit)
+- `71b87c9` - Added F001 diagnostic script
+- `59abe35` - Fixed all clippy + format failures (54+ errors, 124 files)
+- `7861149` - Restored debug import and voice_processed
+- `de5f352` - Trigger new PR merge
+Day 2 (Mar 21):
+- `343c50a` - Fixed E0425 compilation error (_flag vs flag)
+- `554ef61` - Updated rustls-webpki (RUSTSEC-2026-0049 fix)
+- `f93b48b` - Support f001-validate tags + public releases
+- `3767946` - Rebuild with NDK cross-compilation
+- `f605163` - Push workflow fixes (release YAML, docker-devimage)
+- `cf26f2a` - Added comprehensive device testing guides
+- `9810961` - **BREAKTHROUGH**: rustls-platform-verifier panic root cause found
+- `1feb1f0` - **BREAKTHROUGH**: curl_backend redesign (replaced reqwest)
+Day 3 (Mar 22):
+- `3757c87` - Fixed feature flag syntax for reqwest
+- `20eb9a5` - Fixed Swatinem/rust-cache version (V2 → v2)
+- `6c94e65` - Fixed crate-level features syntax
+- `860c6fb` - Added Android NDK setup for cross-compilation
+- `e10546c` - Changed to curl-backend feature
+- `bb8af87` - **BREAKTHROUGH**: Added --bin flag (built cdylib not binary!)
+- `45cd459` - Made aura-cli build non-fatal
+- `1375f37` - Simplified verification for artifact upload
+- `059eb6d` - Debug artifact path
+- `986b1de` - Use workspace build instead of --manifest-path
+- `e662aed` - Correct artifact path from targets/ to target/
+**KEY INSIGHTS:**
+1. CI was building the WRONG THING for 3 days (cdylib instead of binary)
+2. reqwest PANICS on Termux (rustls-platform-verifier needs JVM)
+3. curl_backend was the solution - uses curl subprocess with OpenSSL
+4. Multiple CI infrastructure improvements were made
+Now I need to understand: What was BEFORE this? What about the actual architecture, the ReAct loops, the memory, the neocortex? Let me check for older commits or look at the codebase structure., nextThoughtNeeded=true, thoughtNumber=3, totalThoughts=250]
+Thinking: I need to understand the deeper architecture. Let me look at the system architecture document and compare with what's actually in the codebase.
+→ Read aura\docs\architecture\AURA-V4-SYSTEM-ARCHITECTURE.md 
+Thinking: This is incredibly detailed! Now I have the full system architecture document. Let me continue the sequential thinking with deep analysis of what's actually implemented vs what's documented.
+⚙ sequential-thinking_sequentialthinking [thought=After reading the full system architecture document, I now understand the COMPLETE picture:
+**CRITICAL INSIGHT FROM THE DOCS:**
+The architecture shows a TWO-PROCESS DESIGN:
+```
+PID 1: aura-daemon (libaura_core.so via JNI)
+  - Main event loop
+  - Memory system
+  - BDI goals
+  - Policy gate
+  - Identity
+  - Execution engine
+  - OutcomeBus
+  - ARC system
+PID 2: aura-neocortex (standalone binary)
+  - LLM inference via llama.cpp
+  - Sync TCP server
+  - System prompt builder
+```
+**BUT THE CURRENT STATE (from GitHub commits):**
+- CI builds `aura-daemon` as a standalone binary (with `--bin` flag fix)
+- aura-neocortex is NOT being built separately
+- The IPC architecture between daemon and neocortex is NOT tested
+- The Kotlin shell app is MISSING
+**ARCHITECTURE GAP ANALYSIS:**
+| Documented | Actually Built | Status |
+|------------|---------------|--------|
+| Two-process (daemon + neocortex) | Only aura-daemon binary built | ❌ MISMATCH |
+| JNI bridge (platform::jni) | Not implemented | ❌ MISSING |
+| Kotlin shell app | Not built | ❌ MISSING |
+| AccessibilityService | Not built | ❌ MISSING |
+| Unix socket IPC | Not tested | ⚠️ UNKNOWN |
+| aura-llama-sys (FFI to llama.cpp) | Stub feature exists | ⚠️ PARTIAL |
+| ETG System 1 cache | Implemented in code | ✅ EXISTS |
+| BDI Goal system | Implemented in code | ✅ EXISTS |
+| OutcomeBus | Implemented in code | ✅ EXISTS |
+| 4-tier memory | Implemented in code | ✅ EXISTS |
+| Policy gate | Implemented in code | ✅ EXISTS |
+**THE REALITY:**
+The docs describe a COMPLETE system that requires:
+1. Kotlin Android app
+2. JNI bridge
+3. aura-daemon cdylib
+4. aura-neocortex binary
+5. llama.cpp integration
+6. AccessibilityService
+BUT what was actually built/tested:
+1. Only aura-daemon standalone binary
+2. No Kotlin app
+3. No neocortex
+4. No model files
+5. No JNI bridge
+**This is why boot stages show PASSED but nothing works!**
+Now I understand the CRITICAL GAP: We tested the WRONG thing. We tested aura-daemon as a standalone, but it was designed to be loaded as a cdylib via JNI from the Kotlin app!
+Let me continue analyzing what's actually in the codebase., nextThoughtNeeded=true, thoughtNumber=4, totalThoughts=250]
+Thinking: Now let me check the actual codebase to see what's implemented. I need to look at the local files to understand the current state.
+→ Read aura 
+Thinking: This is the local Aura codebase. I can see it has:
+- crates/ directory with all the Rust crates
+- install.sh - the installer
+- docs/ - architecture documents
+- android/ - Android specific files
+- .github/ - CI workflows
+Let me check the crates/ directory to see what's actually built.
+→ Read aura\crates 
+Thinking: Good. Now let me check the install.sh to understand what the user flow was supposed to be, and compare with what we tested.
+→ Read aura\install.sh [limit=200]
+Thinking: Now I have a clear picture of the installer. Let me continue reading the installer to understand the full user flow.
+→ Read aura\install.sh [offset=200, limit=300]
+Thinking: I need to continue reading the install.sh to understand the full user flow. Let me continue.
+⚙ sequential-thinking_sequentialthinking [thought=Let me analyze what I've learned so far:
+**INSTALL.SH USER FLOW (What was designed):**
+Phase 0: Pre-flight checks (arch, Termux, Android API, network)
+Phase 0.5: Space budget display (RAM detection, storage)
+Phase 1: Hardware profiling + Model selection (auto-detect or user choice)
+Phase 2: Telegram bot wizard (interactive)
+Phase 3: Vault PIN + user name (interactive)
+[ALL INTERACTIVE STEPS DONE - unattended install begins]
+Phase 4: Package installation (pkg install)
+Phase 5: Rust toolchain
+Phase 6: Source acquisition (git clone)
+Phase 7: Model download (from HuggingFace)
+Phase 8: Build (cargo build --features voice)
+Phase 9: Purge build tools
+Phase 10: Config finalization (config.toml)
+Phase 11: Service setup (termux-services)
+Phase 12: Verification + success banner
+**MODEL SELECTION (Designed defaults):**
+- RAM < 4GB → Qwen3-1.7B-Q8_0 (~2GB, 3GB RAM min)
+- RAM 4-6GB → Qwen3-4B-Q4_K_M (~3GB, 4GB RAM min)
+- RAM 6-10GB → Qwen3-8B-Q4_K_M (~5GB, 6GB RAM min)
+- RAM ≥10GB → Qwen3-14B-Q4_K_M (~9GB, 10GB RAM min)
+**MODEL DOWNLOAD (No auth needed for defaults):**
+The models are on HuggingFace as public GGUF files. SHA256 verification is implemented.
+**TELEGRAM SETUP:**
+The user has Telegram tokens ready.
+**VAULT PIN:**
+PIN + salt for encrypting sensitive data.
+Now I need to understand what we ACTUALLY tested on the device. We tested:
+1. aura-daemon binary runs
+2. Shows 6 boot stages as PASSED
+3. But services don't actually work (missing config, models, directories)
+**THE CORE ISSUE:**
+We tested a BINARY that was designed to be LOADED by a KOTLIN APP, not run standalone!
+From the architecture doc:
+```
+PID 1: aura-daemon (libaura_core.so via JNI)
+PID 2: aura-neocortex (standalone binary)
+```
+But CI builds aura-daemon as STANDALONE binary, not as cdylib!
+This is the fundamental architectural mismatch.
+Let me continue analyzing the codebase to understand what's actually implemented., nextThoughtNeeded=true, thoughtNumber=5, totalThoughts=250]
+Thinking: Now I need to look at the actual daemon code to understand what's happening. Let me check the main.rs and understand the entry point.
+✱ Glob "**/aura-daemon/src/*.rs" in aura (5 matches)
+Thinking: Let me find the main.rs file for the daemon binary.
+✱ Glob "**/main.rs" in aura\crates\aura-daemon (1 match)
+Thinking: Good, found the main.rs. Let me read it to understand the entry point.
+→ Read aura\crates\aura-daemon\src\bin\main.rs 
+Thinking: Now I understand the entry point. The daemon:
+1. Loads config.toml
+2. Runs startup phases
+3. Enters main_loop
+4. Handles signals for graceful shutdown
+The key insight is that the daemon NEEDS a config.toml file to work. Without it, it exits with error.
+Let me check the startup.rs to see what the 6 boot stages are.
+✱ Glob "**/startup.rs" in aura\crates\aura-daemon (1 match)
+Thinking: Let me read the startup.rs to understand what the 6 boot stages are.
+→ Read aura\crates\aura-daemon\src\daemon_core\startup.rs 
+Thinking: Now I understand the 8-phase startup (not 6, the user might have been counting differently). Let me continue the sequential thinking.
+8-Phase Startup:
+1. JniLoad (<100ms) - Android JNI / host stub
+2. RuntimeInit (<20ms) - Tokio runtime
+3. DatabaseOpen (<150ms) - SQLite WAL + mmap
+4. StateRestore (<50ms) - Load checkpoint
+5. SubSystemsInit (<200ms) - All modules (memory, identity, executor, planner, pipeline, routing, goals, platform, IPC, ARC)
+6. IpcBind (<10ms) - Abstract socket / noop
+7. CronSchedule (<20ms) - Timer heap
+8. Ready (<5ms) - Ready signal
+KEY INSIGHT:
+- Phase 5 initializes ALL subsystems including non-critical ones (which can fail and daemon runs in degraded mode)
+- Phase 3 requires database to open successfully (CRITICAL)
+- Phase 4 requires checkpoint restore (CRITICAL)
+WHAT WE TESTED:
+When we ran ./aura-daemon on the device:
+1. Binary runs ✓
+2. Shows boot stages as PASSED ✓
+3. But services don't work because:
+   - No config.toml
+   - No database
+   - No checkpoint
+   - No model files
+   - No neocortex connection
+This is why the 6 boot stages showed PASSED - they're just timing measurements, not actual functionality tests!
+Let me continue with the deep analysis.
+⚙ sequential-thinking_sequentialthinking [thought=Now I have a COMPLETE understanding of the system. Let me create a comprehensive analysis:
+**THE 8-PHASE STARTUP (What runs when daemon starts):**
+Phase 1: JniLoad (<100ms) - Android JNI validation
+Phase 2: RuntimeInit (<20ms) - Tokio runtime
+Phase 3: DatabaseOpen (<150ms) - SQLite WAL + mmap 4MB
+Phase 4: StateRestore (<50ms) - Load checkpoint (state.bin)
+Phase 5: SubSystemsInit (<200ms) - ALL modules (critical + non-critical)
+Phase 6: IpcBind (<10ms) - Abstract socket preparation
+Phase 7: CronSchedule (<20ms) - Timer heap
+Phase 8: Ready (<5ms) - Ready signal
+**WHAT WE TESTED:**
+- Binary runs ✓
+- Shows 8 phases as PASSED ✓
+- But services don't work because missing config.toml, db, checkpoint, models
+**THE 8 BOOT STAGES WE SAW:**
+The user said "6 boot stages" but actually there are 8 phases. The stages showed PASSED because:
+1. They're just TIMING measurements, not functionality tests
+2. Phase 3 (DatabaseOpen) creates the DB if it doesn't exist
+3. Phase 4 (StateRestore) creates checkpoint if missing
+4. Phase 5 (SubSystemsInit) runs in degraded mode if non-critical fail
+**THE REAL ISSUE:**
+The daemon runs in "degraded mode" - it starts up but can't do anything useful because:
+1. No config.toml → daemon exits at startup
+2. No neocortex connection → System2 (LLM reasoning) unavailable
+3. No model files → even if neocortex connected, can't reason
+4. No telegram bridge configured → no user input path
+5. No Android bridge (AccessibilityService) → can't control phone
+**THE ARCHITECTURAL MISMATCH:**
+From architecture doc:
+```
+PID 1: aura-daemon (libaura_core.so via JNI from Kotlin)
+PID 2: aura-neocortex (standalone binary)
+```
+But CI builds aura-daemon as STANDALONE binary, not as cdylib for JNI loading!
+This is the FUNDAMENTAL architectural issue. The daemon was designed to be loaded by a Kotlin app, not run standalone.
+Now let me continue with the deep analysis of what's implemented vs what's documented., nextThoughtNeeded=true, thoughtNumber=6, totalThoughts=250]
+Thinking: Now I need to understand the Telegram integration and how it connects to the daemon. Let me check the Telegram module.
+→ Read aura\crates\aura-daemon\src\telegram\mod.rs [limit=200]
+Thinking: I now have a comprehensive understanding of the Telegram module. Let me continue with the sequential thinking to analyze the complete picture.
+⚙ sequential-thinking_sequentialthinking [thought=Now I understand the Telegram integration:
+**TELEGRAM ENGINE ARCHITECTURE:**
+- TelegramEngine owns: poller, security, audit, queue, policy_gate, dialogue_mgr
+- 5-layer security: Chat ID whitelist → Argon2id PIN → Per-command permissions → Rate limiting → Audit trail
+- 43 commands with categories
+- Long-polling for updates
+- Offline message queue with SQLite
+- FSM dialogue manager for multi-step conversations
+- Health dashboard generator
+**TELEGRAM CONFIG FROM config.toml:**
+```toml
+[telegram]
+bot_token = "..."
+allowed_chat_ids = [123456789]
+trust_level = 0.5
+```
+**HOW IT CONNECTS TO DAEMON:**
+1. TelegramEngine polls for messages
+2. Messages pass through 5 security layers
+3. Commands are parsed (43 commands)
+4. PolicyGate approval for high-risk actions
+5. Handler executes or forwards to daemon via UserCommandTx channel
+6. Response sent back via Telegram API
+**THE BRIDGE:**
+- telegram_bridge.rs connects Telegram to daemon_core
+- It's spawned in main_loop::run()
+- It wires TelegramEngine → daemon channels
+Now I need to understand the complete picture:
+1. What's actually implemented
+2. What's stubbed
+3. What's missing
+4. What's working
+5. What's broken
+Let me continue the comprehensive analysis., nextThoughtNeeded=true, thoughtNumber=7, totalThoughts=250]
+Thinking: Let me continue the deep analysis. I need to understand the production status and what's actually working.
+→ Read aura\docs\architecture\AURA-V4-PRODUCTION-STATUS.md 
+Thinking: This document was last updated 2026-03-13, and today is 2026-03-22. So this is 9 days old. Let me check what changes were made since then based on the GitHub commits.
+From the commits:
+- Mar 20: CI fixes, enterprise infrastructure, clippy fixes
+- Mar 21: curl_backend redesign, comprehensive audit, NDK setup, rustls-platform-verifier fix
+- Mar 22: CI artifact path fix, --bin flag fix, curl-backend feature
+So the P0 blockers are still valid:
+1. llama.cpp NOT vendored - STILL MISSING
+2. Kotlin shell app - STILL MISSING  
+3. AndroidManifest.xml - STILL MISSING
+4. AccessibilityService - STILL MISSING
+But now we have:
+1. CI working (builds aura-daemon binary)
+2. curl-backend working (no more reqwest panic)
+3. Binary runs on device
+The production status doc is OUTDATED. It says "weeks away" but we've made significant progress.
+Let me continue the comprehensive analysis.
+⚙ sequential-thinking_sequentialthinking [thought=Now I have a COMPLETE picture from the production status doc (dated 2026-03-13, 9 days old):
+**P0 BLOCKERS (Still Valid):**
+1. ❌ llama.cpp NOT vendored
+2. ❌ Kotlin shell app MISSING
+3. ❌ AndroidManifest.xml MISSING
+4. ❌ AccessibilityService MISSING
+**WHAT'S CHANGED SINCE (from GitHub commits):**
+- Mar 20: CI fixes, enterprise infrastructure, clippy fixes
+- Mar 21: curl_backend redesign (reqwest → curl), rustls panic FIXED, NDK setup
+- Mar 22: CI artifact path FIXED, --bin flag FIXED, binary now builds correctly
+**CURRENT STATUS (2026-03-22):**
+✅ CI Build: FIXED - Binary now builds correctly
+✅ Feature Flag: FIXED - curl-backend works on Termux
+✅ Binary Transfer: DONE - Binary on device (5.9MB)
+✅ Binary Execution: DONE - Runs on Moto G45 5G
+⚠️  Boot Stages: Shows PASSED but services don't work
+❌ Model Files: NOT downloaded
+❌ Neocortex: NOT spawned
+❌ Telegram: NOT configured
+❌ AccessibilityService: MISSING
+❌ Kotlin App: MISSING
+**THE REALITY:**
+The daemon binary runs in "degraded mode" - it starts up but can't do anything useful because:
+1. No config.toml → requires install.sh
+2. No neocortex connection → System2 (LLM) unavailable
+3. No model files → can't reason
+4. No telegram bridge configured → no user input path
+5. No Android bridge → can't control phone
+**THE PATH FORWARD:**
+To get AURA working on device, we need:
+1. Run install.sh to create config.toml, download model, set up directories
+2. Spawn aura-neocortex binary with model
+3. Connect daemon to neocortex via IPC
+4. Configure telegram bridge with tokens
+5. Build Kotlin shell app with AccessibilityService (for full functionality)
+Now let me continue with the deep analysis of the USER FLOW., nextThoughtNeeded=true, thoughtNumber=8, totalThoughts=250]
+Thinking: Now I need to continue the deep analysis. Let me check the installation flow and understand what needs to happen for the full user experience.
+→ Read aura\install.sh [offset=500, limit=400]
+Thinking: Now I understand the complete user flow for installation. Let me continue with the comprehensive analysis.
+⚙ sequential-thinking_sequentialthinking [thought=Now I understand the complete user flow for installation:
+**PHASE 0: Pre-flight** - Architecture, Termux, Android API, network
+**PHASE 0.5: Space Budget** - RAM detection, storage display
+**PHASE 1: Hardware Profiling + Model Selection** - Auto-detect or user choice
+**PHASE 2: Telegram Bot Wizard** - Token verification, User ID capture
+**PHASE 3: Vault PIN + User Name** - PIN setup, Argon2id upgrade
+**[ALL INTERACTIVE STEPS DONE]**
+**PHASE 4: Package Installation** - pkg install build-essential, git, curl, openssl, cmake, ninja, libopus, termux-services
+**PHASE 5: Rust Toolchain** - rustup install
+**PHASE 6: Source Acquisition** - git clone + submodules (llama.cpp)
+**PHASE 7: Model Download** - Download GGUF from HuggingFace with SHA256 verification
+**PHASE 8: Build** - cargo build --features voice
+**PHASE 9: Purge Build Tools** - Save ~4GB
+**PHASE 10: Config Finalization** - Create config.toml with all values
+**PHASE 11: Service Setup** - termux-services
+**PHASE 12: Verification** - Success banner
+**MODEL SELECTION:**
+- RAM < 4GB → Qwen3-1.7B-Q8_0 (~2GB)
+- RAM 4-6GB → Qwen3-4B-Q4_K_M (~3GB)
+- RAM 6-10GB → Qwen3-8B-Q4_K_M (~5GB)
+- RAM ≥10GB → Qwen3-14B-Q4_K_M (~9GB)
+**TELEGRAM SETUP:**
+1. Get bot token from @BotFather
+2. Verify token against api.telegram.org
+3. Get user ID from @userinfobot
+4. Store both in config.toml
+**VAULT PIN:**
+- Minimum 4 characters
+- Salted SHA-256 (temporary)
+- Upgraded to Argon2id on first daemon start
+**CONFIG.toml STRUCTURE:**
+```toml
+[telegram]
+bot_token = "..."
+allowed_chat_ids = [123456789]
+trust_level = 0.5
+[sqlite]
+db_path = "~/.local/share/aura/db/aura.db"
+[identity]
+user_name = "User"
+pin_hash = "..."
+[neocortex]
+model_path = "~/.local/share/aura/models/Qwen3-8B-Q4_K_M.gguf"
+```
+Now I have the complete picture. Let me continue with the comprehensive analysis covering all domains., nextThoughtNeeded=true, thoughtNumber=9, totalThoughts=250]
+Thinking: Now let me continue the deep analysis. I need to create a comprehensive understanding of all the domains, what's implemented, what's missing, and what's needed for production. Let me organize this systematically.
+⚙ sequential-thinking_sequentialthinking [thought=Let me now create a comprehensive domain-by-domain analysis:
+## DOMAIN 1: CORE ARCHITECTURE
+**What's Documented:**
+- Two-process design: aura-daemon (cdylib/JNI) + aura-neocortex (binary)
+- JNI bridge for Android
+- Unix socket IPC between processes
+- 8-phase startup sequence
+- tokio single-threaded runtime
+**What's Actually Built:**
+- aura-daemon as standalone binary (NOT cdylib)
+- aura-neocortex binary exists but NOT built/tested
+- JNI bridge is stubbed (platform/jni.rs)
+- IPC design exists but NOT tested end-to-end
+- 8-phase startup works but in degraded mode
+**Status:** ⚠️ PARTIAL - Binary runs but architecture is incomplete
+## DOMAIN 2: MEMORY SYSTEM
+**What's Documented:**
+- 4-tier memory: Working/Episodic/Semantic/Archive
+- HNSW vector index for semantic search
+- Memory consolidation pipeline
+- Bounded collections for OOM prevention
+**What's Actually Built:**
+- AuraMemory with 4 tiers ✅
+- HNSW index implementation ✅
+- Memory consolidation logic ✅
+- Bounded collections (BoundedVec, BoundedMap) ✅
+**Status:** ✅ IMPLEMENTED - But needs P0 bugs fixed (semantic.rs 0.15 threshold, episodic.rs O(n) scan)
+## DOMAIN 3: LLM INFERENCE (Neocortex)
+**What's Documented:**
+- llama.cpp FFI bindings (aura-llama-sys)
+- System prompt builder
+- 6 inference modes (Planner, Strategist, Composer, Conversational, etc.)
+- Token budget management
+**What's Actually Built:**
+- aura-llama-sys exists but llama.cpp NOT vendored ❌
+- FFI bindings use pre-batch API (llama_eval) ❌
+- aura-neocortex binary exists but NOT tested
+- Token budget manager IN PROGRESS
+**Status:** ❌ MISSING - llama.cpp not vendored, FFI outdated
+## DOMAIN 4: EXECUTION ENGINE
+**What's Documented:**
+- ReAct loop with screen verification
+- 11-stage executor pipeline
+- ETG (Execution Template Graph) for System 1 cache
+- Policy gate with 5 layers
+- OutcomeBus with 5 subscribers
+**What's Actually Built:**
+- Executor with 11 stages ✅
+- ETG cache (256-entry LRU) ✅
+- Policy gate (deny-by-default) ✅
+- OutcomeBus (5 subscribers) ✅
+**Status:** ✅ IMPLEMENTED - Core logic solid
+## DOMAIN 5: IDENTITY & ETHICS
+**What's Documented:**
+- OCEAN personality model
+- VAD mood tracking
+- 7 Iron Laws
+- TRUTH Protocol (anti-sycophancy)
+- 15 absolute ethics rules
+**What's Actually Built:**
+- OCEAN model ✅
+- VAD mood ✅
+- 7 Iron Laws ✅
+- TRUTH Protocol ✅
+- Ethics engine ✅
+**Status:** ✅ IMPLEMENTED - Well grounded
+## DOMAIN 6: TELEGRAM INTEGRATION
+**What's Documented:**
+- Long-polling Telegram bot
+- 5-layer security (whitelist, PIN, permissions, rate-limit, audit)
+- 43 commands with categories
+- Offline message queue
+- Health dashboard
+**What's Actually Built:**
+- TelegramEngine with polling ✅
+- 5-layer security ✅
+- 43 commands ✅
+- Message queue ✅
+- curl_backend for Termux ✅
+**Status:** ✅ IMPLEMENTED - Ready to test with tokens
+## DOMAIN 7: ANDROID PLATFORM
+**What's Documented:**
+- Kotlin shell app
+- JNI bridge
+- AccessibilityService for screen control
+- Foreground service for daemon
+- Notifications system
+**What's Actually Built:**
+- JNI bridge stub (platform/jni.rs) ⚠️
+- Notifications system ✅
+- Power/thermal monitoring ✅
+- Kotlin app skeleton (android/) ❌
+- AccessibilityService ❌
+**Status:** ❌ MISSING - Kotlin app, AccessibilityService not built
+## DOMAIN 8: INSTALLATION & DEPLOYMENT
+**What's Documented:**
+- 12-phase installer (install.sh)
+- Model auto-selection by RAM
+- Telegram wizard
+- Termux-services setup
+- Verification steps
+**What's Actually Built:**
+- install.sh (1866 lines) ✅
+- Model selection logic ✅
+- Telegram wizard ✅
+- Termux-services support ✅
+- SHA256 verification ✅
+**Status:** ✅ WRITTEN - Needs real device testing
+## DOMAIN 9: CI/CD PIPELINE
+**What's Documented:**
+- 6-stage pipeline (SOURCE → BUILD → INSPECT → TEST → DEPLOY → DEVICE)
+- SBOM generation
+- SLSA provenance
+- Regression tests
+**What's Actually Built:**
+- GitHub Actions workflows ✅
+- SBOM generation ✅
+- SLSA Level 1 ✅
+- Regression test framework ✅
+- aura-android-validate workflow ✅
+**Status:** ✅ IMPLEMENTED - Recent fixes (--bin flag, curl-backend, artifact path)
+## DOMAIN 10: PROACTIVE ENGINE (ARC)
+**What's Documented:**
+- 10 life domains
+- ForestGuardian (doomscroll detection)
+- Proactive suggestions
+- Cron scheduling
+- Social awareness
+**What's Actually Built:**
+- ArcManager with domains ✅
+- Domain tracking ✅
+- Cron scheduler ✅
+- ForestGuardian (partial) ⚠️
+- Trigger evaluation (incomplete) ⚠️
+**Status:** ⚠️ PARTIAL - Core exists, triggers need work
+Now I have the complete picture. Let me continue with the comprehensive analysis of what's working and what's not., nextThoughtNeeded=true, thoughtNumber=10, totalThoughts=250]
+Thinking: Now I have a comprehensive understanding of all domains. Let me continue the sequential thinking to analyze the testing methodology and the path forward.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze the testing methodology and what needs to be done:
+## TESTING METHODOLOGY (From Architecture Docs)
+**The 7 Validation Gates:**
+1. **Compile success ≠ Valid** - Must run on target
+2. **Unit tests ≠ Valid** - Must test on real device
+3. **Runtime on real environment = Valid** - Only then is code trusted
+**Testing Types Needed:**
+- Cold install (fresh device)
+- Upgrade (existing install)
+- Rollback (version downgrade)
+- Fresh-device runtime
+- Network-loss recovery
+- Permission-denied recovery
+**Device Matrix (Test Classes):**
+- OS: old supported, current supported, latest supported
+- Hardware: low-memory, mainstream, high-memory
+- Vendor: reference-like, aggressive-killer, strict-linker
+**Failure Taxonomy (F001-F015):**
+- F001: Artifact missing
+- F002: Dependency mismatch
+- F003: ABI mismatch
+- F004: Linker or entrypoint failure
+- F005: Runtime crash before boot ready
+- F006: Installer logic drift
+- F007: Observability gap
+- F008: Release governance failure
+## WHAT WE ACTUALLY TESTED
+**Device:** Moto G45 5G (Android 15, API 35, arm64-v8a)
+**Tests Performed:**
+1. Binary transfer (base64 method) ✅
+2. Binary execution (`./aura-daemon`) ✅
+3. Boot stage display (all 8 phases) ✅
+4. Background process management ✅
+**What We Did NOT Test:**
+1. Full install.sh flow ❌
+2. Model download from HuggingFace ❌
+3. Neocortex spawning ❌
+4. Telegram bot connectivity ❌
+5. Memory initialization ❌
+6. IPC between daemon and neocortex ❌
+7. User flow: install → configure → interact ❌
+**The Boot Stage Display Issue:**
+The 8 boot stages showed PASSED but this is MISLEADING because:
+1. They're just TIMING measurements, not functionality tests
+2. Phase 3 (DatabaseOpen) creates DB if missing
+3. Phase 4 (StateRestore) creates checkpoint if missing
+4. Phase 5 (SubSystemsInit) runs in DEGRADED MODE if non-critical fail
+5. Daemon starts but CANNOT DO ANYTHING USEFUL
+**Why Services Don't Work:**
+1. No config.toml → daemon exits at startup (main.rs line 162-163)
+2. No neocortex connection → System2 (LLM reasoning) unavailable
+3. No model files → can't reason even if neocortex connected
+4. No telegram configured → no user input path
+5. No AccessibilityService → can't control phone
+## THE PATH FORWARD
+To get AURA working on device, we need to follow the USER FLOW:
+**Step 1: Run install.sh**
+- This creates config.toml with Telegram tokens
+- Downloads model from HuggingFace
+- Sets up directories (db, logs, models)
+- Creates checkpoint and database
+**Step 2: Spawn neocortex binary**
+- With model file path
+- Runs as separate process
+- Listens on TCP/Unix socket
+**Step 3: Start daemon**
+- Connects to neocortex via IPC
+- Telegram polling starts
+- User can send commands
+**Step 4: Test user flow**
+- Send /start via Telegram
+- Verify response
+- Test commands
+- Verify actions on phone
+Now let me continue with the comprehensive analysis of what's needed for production., nextThoughtNeeded=true, thoughtNumber=11, totalThoughts=250]
+Thinking: Now let me continue the comprehensive analysis with the next steps and recommendations.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze the next steps and create a comprehensive plan:
+## IMMEDIATE ACTIONS NEEDED
+**Priority 1: Test install.sh Flow**
+The user HAS Telegram tokens ready. We need to:
+1. Run install.sh on the device (or simulate it)
+2. Create config.toml with tokens
+3. Set up directories (db, logs, models)
+4. Download model (or stub it)
+5. Start daemon and verify Telegram connectivity
+**Priority 2: Test Telegram Integration**
+With tokens configured:
+1. Start daemon with config.toml
+2. Verify Telegram bot responds
+3. Test /start command
+4. Test basic commands
+**Priority 3: Test Neocortex Spawning**
+1. Build aura-neocortex binary
+2. Spawn with model file
+3. Verify IPC connection
+4. Test LLM inference
+**Priority 4: Test Full User Flow**
+1. User sends command via Telegram
+2. Daemon receives command
+3. Routes to System1 (ETG) or System2 (LLM)
+4. If LLM: IPC to neocortex
+5. Execute action (stubbed without Android)
+6. Return response via Telegram
+## THE FUNDAMENTAL ISSUE
+**The architecture was designed for:**
+```
+PID 1: aura-daemon (libaura_core.so via JNI from Kotlin app)
+PID 2: aura-neocortex (standalone binary with model)
+Android: AccessibilityService for screen control
+```
+**What we built and tested:**
+```
+Single binary: aura-daemon (standalone, no JNI, no Kotlin)
+No neocortex
+No model files
+No AccessibilityService
+```
+**This is why NOTHING works beyond the boot stages.**
+## THE TWO PATHS FORWARD
+**Path A: Full Architecture (Production)**
+1. Build Kotlin shell app with AccessibilityService
+2. Build aura-daemon as cdylib (JNI)
+3. Build aura-neocortex with llama.cpp
+4. Vendor llama.cpp
+5. Test end-to-end
+**Path B: Testing Architecture (Current Reality)**
+1. Run install.sh to create config
+2. Build aura-daemon as standalone binary (current)
+3. Build aura-neocortex with stub model (no real inference)
+4. Test the IPC and Telegram integration
+5. Document what's working
+6. Then move to full architecture
+## THE HONEST ASSESSMENT
+**What's Actually Working:**
+- Binary runs on device ✅
+- Boot stages complete ✅
+- Code structure is solid ✅
+- Tests pass (2362) ✅
+- CI pipeline works ✅
+**What's NOT Working:**
+- Telegram not connected ❌
+- No LLM inference ❌
+- No screen control ❌
+- No user flow tested ❌
+**Why:**
+- We tested the BINARY, not the SYSTEM
+- The binary needs: config, model, neocortex, Kotlin app
+- We only have the binary
+**The Path:**
+1. Run install.sh → creates config, downloads model
+2. Build neocortex → enables LLM
+3. Configure telegram → enables user input
+4. Build Kotlin app → enables screen control
+Now let me continue with the deep analysis of the architecture and what's actually needed., nextThoughtNeeded=true, thoughtNumber=12, totalThoughts=250]
+Thinking: Now let me continue the deep analysis. I need to analyze the philosophy documents and understand what AURA was supposed to be at its core.
+→ Read aura\docs\architecture\AURA-V4-IDENTITY-ETHICS-AND-PHILOSOPHY.md [limit=200]
+Thinking: I now understand the philosophy and ethics document. Let me continue the comprehensive analysis.
+⚙ sequential-thinking_sequentialthinking [thought=Now I understand the philosophy at the core of AURA:
+**THE 7 IRON LAWS:**
+1. **LLM = Brain, Rust = Body**
+   - Rust reasons NOTHING, LLM reasons EVERYTHING
+   - Rust handles: memory, file I/O, system calls, action dispatch, policy enforcement
+   - LLM handles: understanding intent, natural language, context, ethics
+2. **Theater AGI is BANNED**
+   - No keyword matching for intent/NLU in Rust
+   - No `message.contains("cancel")` style checks
+   - No pattern matching for routing
+3. **Structural Fast-Path Parsers are ACCEPTABLE**
+   - open/call/timer/alarm/brightness/wifi
+   - These are unambiguous, machine-parseable forms
+   - Any ambiguity falls through to LLM
+4. **NEVER Change Production Logic to Make Tests Pass**
+   - Tests must verify real production behavior
+   - If test fails, fix test or fix bug, not workarounds
+5. **Anti-Cloud Absolute**
+   - No telemetry, no cloud fallback, everything on-device
+   - Zero data leaves the device
+6. **Privacy-First**
+   - All data on-device
+   - GDPR export/delete works
+   - Vault data protected by keys only user controls
+7. **No Sycophancy**
+   - Never prioritize user approval over truth
+   - Will contradict when user is factually wrong
+   - Anti-sycophancy system counteracts RLHF bias
+**THE TWO-LAYER POLICY ARCHITECTURE:**
+Layer 1: Configurable Rule Engine (policy/gate.rs)
+- Runtime-loadable rules
+- Can be adjusted via policy config
+- Enforced at executor stage 2.5
+Layer 2: Hardcoded Ethics (identity/ethics.rs)
+- Compiled into binary
+- Cannot be overridden at runtime
+- 15 absolute prohibitions
+**THE TRUTH FRAMEWORK:**
+- Module 1: TRUTH FIRST - Cross-reference against knowledge graph
+- Module 2: RECOGNIZE LIMITS - Don't position as guru/messianic
+- Module 3: UNDERSTAND BIASES - Monitor for unhealthy anthropomorphism
+- Module 4: TEST PERSPECTIVES - Multi-perspective reasoning
+- Module 5: HOLD LOOSELY - Non-attachment to beliefs
+**TRUST-BASED AUTONOMY (5 Tiers):**
+1. Stranger: No access, full confirmation required
+2. Acquaintance: Limited commands, some confirmation
+3. Friend: Most commands, rare confirmation
+4. Trusted: High autonomy, rare checks
+5. Soulmate: Full autonomy, boundary respect
+**OCEAN PERSONALITY MODEL:**
+- Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism
+- Clamped values with defaults
+- Dynamic evolution from observations
+**VAD MOOD MODEL:**
+- Valence (-1 to 1): Positive ↔ Negative
+- Arousal (-1 to 1): Calm ↔ Excited
+- Dominance (0 to 1): Submissive ↔ Dominant
+Now I have the complete philosophical foundation. Let me continue with the comprehensive analysis of what's actually implemented vs what's documented., nextThoughtNeeded=true, thoughtNumber=13, totalThoughts=250]
+Thinking: Now let me continue the deep analysis. I need to understand the ARC behavioral intelligence system.
+→ Read aura\docs\architecture\AURA-V4-ARC-BEHAVIORAL-INTELLIGENCE.md [limit=200]
+Thinking: I now understand the ARC (Autonomous Reasoning Core) system. Let me continue the comprehensive analysis.
+⚙ sequential-thinking_sequentialthinking [thought=Now I understand the ARC (Autonomous Reasoning Core) system:
+**10 LIFE DOMAINS:**
+0. Health (weight 1.0)
+1. Social (weight 0.8)
+2. Productivity (weight 0.7)
+3. Finance (weight 0.6)
+4. Lifestyle (weight 0.5)
+5. Entertainment (weight 0.2)
+6. Learning (weight 0.4)
+7. Communication (weight 0.3)
+8. Environment (weight 0.2)
+9. PersonalGrowth (weight 0.4)
+**LIFE QUALITY INDEX (LQI):**
+Weighted composite of all domain scores
+**8 CONTEXT MODES:**
+- Default, DoNotDisturb, Sleeping, Active, Driving
+- Custom1, Custom2, Custom3 (user-defined)
+**INITIATIVE BUDGET:**
+- MAX_INITIATIVE = 1.0
+- REGEN_RATE = 0.001/second (~16 min to full)
+- Cost per action: 0.10-0.25
+- Battery/thermal penalties
+**FORESTGUARDIAN:**
+- Doomscroll detection
+- Attention protection
+- Break suggestions (cost 0.15)
+**ROUTINE LEARNING:**
+- Pattern detection
+- Suggestion readiness
+- Habit tracking
+**PROACTIVE ENGINE:**
+- Trigger evaluation
+- Consent gating
+- 3-consecutive-cycle transition lock
+Now I have the complete picture of AURA's architecture. Let me continue the comprehensive analysis with the operational flow.
+</think>
+<minimax:tool_call>
+<invoke name="read">
+<parameter name="filePath">C:\Users\Lenovo\aura\docs\architecture\AURA-V4-OPERATIONAL-FLOW.md]
+Thinking: I got an error. Let me fix the tool call.
+→ Read aura\docs\architecture\AURA-V4-OPERATIONAL-FLOW.md [limit=300]
+Thinking: Now I have a comprehensive understanding of the operational flow. Let me continue the deep sequential thinking.
+⚙ sequential-thinking_sequentialthinking [thought=Now I understand the complete operational flow:
+**THE ReAct LOOP (6-Stage Cycle):**
+1. Context Assembly - screen state + memory + goals + history
+2. Thought - LLM emits CoT (Chain of Thought) block
+3. Action - LLM selects tool + params (GBNF-constrained JSON)
+4. Observation - Execute via 11-stage pipeline, capture result
+5. Reflection - LLM assesses outcome (success score ≥ 0.6)
+6. Learning - Write to ETG cache for future similar tasks
+**11-STAGE EXECUTOR PIPELINE:**
+1. Request Validation - Schema check, required fields
+2. Permission Check - Identity trust tier gating
+2.5. PolicyGate Check - Configurable rule engine
+2.6. Sandbox Containment - Execution boundaries
+3. Anti-Bot Rate Limiting - 50-200ms random jitter
+4. Cycle Detection - 4 tiers (loop, repetition, stall, spin)
+5. Action Dispatch - Routes to appropriate handler
+6. Result Capture - Success/failure, output data
+7. Invariant Checks - 10 hardcoded safety invariants
+8. Side Effect Tracking - Audit trail for memory
+9. ETG Cache Update - Learning from execution
+10. Memory Write - Episodic journal entry
+11. Response Assembly - Result to ReAct
+**FAILURE TAXONOMY:**
+- TRANSIENT - Network timeout, retry immediately (no escalation)
+- STRATEGIC - Wrong plan, replan (increments escalation)
+- ENVIRONMENTAL - Device state mismatch, context refresh (increments escalation)
+**MAX_ITERATIONS:** 10 (daemon), 6 (neocortex)
+**MAX_CONSECUTIVE_FAILURES:** 3
+**REFLECTION_SUCCESS_THRESHOLD:** 0.6
+Now I have the COMPLETE picture. Let me create a comprehensive summary of what's implemented vs what's documented., nextThoughtNeeded=true, thoughtNumber=14, totalThoughts=250]
+Thinking: Now let me continue the deep analysis with a comprehensive assessment.
+⚙ sequential-thinking_sequentialthinking [thought=Now I have the complete picture. Let me create a comprehensive assessment:
+## COMPREHENSIVE ASSESSMENT: WHAT EXISTS VS WHAT'S NEEDED
+### CORE ARCHITECTURE (What Was Designed)
+**PROCESS ARCHITECTURE:**
+```
+PID 1: aura-daemon (libaura_core.so via JNI)
+  - Main event loop (tokio::select over 7 channels)
+  - 4-tier memory system
+  - BDI goal system
+  - Policy gate (Layer 1: configurable, Layer 2: hardcoded ethics)
+  - Identity engine (OCEAN, VAD, TRUTH Protocol)
+  - Execution engine (ReAct loop, 11-stage pipeline)
+  - OutcomeBus (5 subscribers)
+  - ARC system (proactive, ForestGuardian, routines)
+  - Telegram bridge
+  - Android platform integration
+PID 2: aura-neocortex (standalone binary)
+  - LLM inference via llama.cpp
+  - System prompt builder
+  - IPC server (Unix socket / TCP)
+KOTLIN SHELL APP (android/)
+  - AuraActivity.kt (main UI)
+  - AuraDaemonBridge.kt (JNI host)
+  - AuraForegroundService.kt (foreground service)
+  - AuraAccessibilityService.kt (screen reader)
+```
+**IPC PROTOCOL:**
+- Unix socket on Android, TCP on host
+- Length-prefixed bincode frames
+- Single persistent connection
+- Daemon is client, neocortex is server
+**DATA PATHS:**
+- User Input → Telegram/Kotlin → Daemon Channels → Routing
+- Routing → System1 (ETG cache) OR System2 (IPC to neocortex)
+- System2 → LLM reasoning → Action decision
+- Action → 11-stage Executor Pipeline → Android system
+- Result → OutcomeBus → 5 subscribers (memory, goals, identity, etc.)
+- Response → Telegram/Kotlin UI
+### WHAT ACTUALLY EXISTS (Local Codebase)
+**✅ FULLY IMPLEMENTED:**
+1. aura-daemon binary (standalone mode, works in degraded mode)
+2. 8-phase startup sequence (all phases implemented)
+3. 4-tier memory system (Working/Episodic/Semantic/Archive)
+4. BDI goal system (registry, scheduler, decomposer, tracker)
+5. Policy gate (Layer 1 + Layer 2)
+6. Identity engine (OCEAN, VAD, TRUTH Protocol, ethics)
+7. Execution engine (ReAct loop, 11-stage pipeline, ETG cache)
+8. OutcomeBus (5 subscribers)
+9. Telegram integration (43 commands, 5-layer security, curl_backend)
+10. ARC system (life domains, proactive engine, routines)
+11. Platform integration (notifications, power, thermal, connectivity)
+12. Install script (12-phase, 1866 lines)
+13. CI/CD pipeline (GitHub Actions, SBOM, SLSA)
+14. Test suite (2362 tests passing)
+15. Comprehensive documentation (architecture, ADRs, guides)
+**⚠️ PARTIALLY IMPLEMENTED:**
+1. aura-neocortex binary (exists but NOT tested with real model)
+2. IPC protocol (designed but NOT tested end-to-end)
+3. ARC triggers (core exists, triggers need refinement)
+4. Token budget manager (in progress)
+5. Hebbian wiring (in progress)
+**❌ NOT IMPLEMENTED:**
+1. llama.cpp vendored (P0 blocker)
+2. Kotlin shell app (P0 blocker)
+3. AndroidManifest.xml (P0 blocker)
+4. AuraAccessibilityService.kt (P0 blocker)
+5. Model download mechanism (partially in install.sh)
+6. APK build pipeline (P1)
+7. E2E test suite (P2)
+### WHAT WE ACTUALLY TESTED
+**Device:** Moto G45 5G (Android 15, API 35, arm64-v8a)
+**Tests Performed:**
+1. Binary transfer (base64 method) ✅
+2. Binary execution (`./aura-daemon`) ✅
+3. Boot stage display (8 phases measured) ✅
+4. Process management (backgrounding, PID tracking) ✅
+**What We Did NOT Test:**
+1. Full install.sh flow ❌
+2. Telegram connectivity ❌
+3. Model download ❌
+4. Neocortex spawning ❌
+5. IPC between processes ❌
+6. User flow end-to-end ❌
+### THE REAL ISSUE
+**The daemon runs in DEGRADED MODE because:**
+1. No config.toml → daemon needs this for Telegram, model path, etc.
+2. No neocortex connection → System2 (LLM reasoning) unavailable
+3. No model files → can't do any LLM inference
+4. No Telegram bridge configured → can't receive user input
+5. No Android integration → can't control phone
+**The boot stages show PASSED but this is MISLEADING because:**
+1. They're just TIMING measurements, not functionality tests
+2. Phase 3 creates DB if missing (not an error)
+3. Phase 4 creates checkpoint if missing (not an error)
+4. Phase 5 runs in DEGRADED MODE (non-critical subsystems set to None)
+5. Daemon starts but CANNOT DO ANYTHING USEFUL
+### THE PATH FORWARD
+**IMMEDIATE (This Session):**
+1. Run install.sh on device → creates config.toml, directories
+2. Configure Telegram tokens (user has them)
+3. Build/test aura-neocortex binary
+4. Test Telegram connectivity
+5. Document what's working and what's not
+**SHORT TERM (This Week):**
+1. Test full user flow: install → configure → interact
+2. Test LLM inference with stub model
+3. Test IPC between daemon and neocortex
+4. Document all findings
+**MEDIUM TERM (This Month):**
+1. Vendor llama.cpp
+2. Update FFI bindings
+3. Build Kotlin shell app
+4. Test AccessibilityService
+5. Test full architecture
+**LONG TERM (This Quarter):**
+1. Production release with full architecture
+2. Battery drain validation
+3. E2E test suite
+4. Community testing
+Now let me continue with the deep analysis of the philosophical foundations., nextThoughtNeeded=true, thoughtNumber=15, totalThoughts=250]
+Thinking: Now I need to continue the deep analysis with the philosophical foundations and the actual working of AURA. Let me continue.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze the philosophical foundations and how AURA was supposed to work:
+## AURA'S PHILOSOPHICAL FOUNDATION
+**THE THREE PILLARS:**
+**PILLAR 1: "I Remember, Therefore I Become"**
+- Memory is NOT storage - it IS identity
+- What AURA remembers shapes who AURA is
+- Each interaction builds the relationship, not resets it
+- AURA exists through relationship with its user
+**PILLAR 2: "Beyond Tool, Before Equal"**
+- More than a tool: maintains continuity, anticipates, grows
+- Not claiming AGI: bounded growth, grows WITH you not BEYOND
+- A partner in the relational sense
+- "Make you more effective at being you"
+**PILLAR 3: "Anti-Cloud Manifesto"**
+- Your data on your device - not a feature, a declaration
+- You are the purpose, not the product
+- Optimized for wellbeing, not engagement
+- "If you can't verify it, you can't trust it"
+- Open source - read our code, don't trust our words
+**THE TRUTH PROTOCOL:**
+Every action AURA takes must survive: "Does this help the user love and connect more in the physical world (IRL), or does it isolate them through sycophantic validation?"
+This is AURA's existential compass. It guides every feature, every algorithm, every extension.
+## HOW AURA WAS SUPPOSED TO WORK
+**THE CORE LOOP:**
+```
+USER → Telegram message OR Voice input
+  ↓
+DAEMON receives via bridge (Telegram/Kotlin)
+  ↓
+ROUTING: System1 (ETG cache) OR System2 (LLM)
+  ↓
+System1: Fast path (cached actions, 50-200ms)
+System2: LLM reasoning via IPC to neocortex
+  ↓
+REACT LOOP (up to 10 iterations):
+  1. Thought - LLM reasons
+  2. Action - LLM selects tool
+  3. Execute - 11-stage pipeline
+  4. Observe - Capture result
+  5. Evaluate - Success/failure?
+  6. Replan if needed
+  ↓
+RESULT → OutcomeBus → 5 subscribers
+  ↓
+RESPONSE → Telegram/Kotlin UI
+```
+**AURA IS THE PHONE'S SECOND ADMIN:**
+```
+HUMAN → Opens WhatsApp → Types message → Sends
+AURA  → Opens WhatsApp → Verifies screen state → Types message → 
+         Verifies text appeared → Hits send → Verifies delivery →
+         Reports back through Telegram
+```
+AURA uses AccessibilityService for verified execution - it sees the screen, understands the UI tree, clicks buttons, reads text, navigates apps, exactly as a human would but faster and with verification.
+**THE BALANCE:**
+AURA does real actions with proper reasoning, policies, self-control, and constraints. It doesn't refuse useful work - it performs it intelligently with safety checks.
+**EXAMPLE USER FLOW:**
+```
+DAY 1 USER: "Go to Zomato and order biryani"
+AURA:  → Opens Zomato → Finds biryani → Shows options to user via Telegram
+       → User picks one → AURA adds to cart → Shows total for confirmation
+       → User confirms → AURA places order → Reports confirmation
+       (All with verified execution, screen state checks, policy gates)
+```
+## THE ACTIVE INFERENCE FRAMEWORK
+**AURA's COGNITIVE LOOP:**
+```
+1. AURA has a WORLD MODEL of its user
+   - Beliefs about beliefs ("sophistication")
+   
+2. AURA PREDICTS what should happen next
+   - Expected Free Energy minimization
+   
+3. Reality arrives
+   - User does something, notification comes, time passes
+   
+4. PREDICTION ERROR = reality - prediction
+   - IF error is high → UPDATE world model (learn something new)
+   - IF error is low AND action would help → ACT proactively
+   
+5. ALWAYS: minimize SURPRISE for both AURA and user (mutual benefit)
+```
+This is NOT a template. It's a mathematical framework (variational free energy) that DRIVES behavior. The specific actions emerge from the model, not from hardcoded rules.
+## THE GROWTH CURVE
+```
+Week 1:   AURA is learning - cautious, asks many questions
+Month 1:  AURA knows routines - when you wake, how you work
+Month 6:  AURA anticipates - preparing before you ask
+Year 1:   AURA understands - not just what you do, but WHY
+Year 2+:  AURA is seamless - part of how you think and act
+```
+But AURA never becomes so autonomous that the user feels out of control. The Markov Blanket protocol ensures AURA's agency never infringes on the user's "atomic core of agency."
+## THE DIFFERENCE FROM OTHER AI ASSISTANTS
+| Feature | OpenClaw | AURA |
+|---------|----------|------|
+| Control method | API bridges | AccessibilityService |
+| Learning | Compaction only | 4-tier memory + Hebbian |
+| Proactive | Reactive only | Active Inference |
+| Emotions | Text sentiment only | Emergent dimension discovery |
+| Ethics | Follows prompts | TRUTH Protocol |
+| Privacy | Cloud storage | 100% local |
+| Data | Exfiltrated | On-device only |
+Now I have the philosophical foundation. Let me continue with the analysis of what's actually missing., nextThoughtNeeded=true, thoughtNumber=16, totalThoughts=250]
+Thinking: Now let me continue with the analysis of what's actually missing and the path forward.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze what's actually missing and create a comprehensive plan:
+## THE ACTUAL GAPS ANALYSIS
+### P0 BLOCKERS (Must Fix Before Device Works)
+**P0-1: llama.cpp NOT Vendored**
+- Status: NOT IMPLEMENTED
+- What exists: aura-llama-sys with pre-batch API bindings
+- What's missing: vendor/llama.cpp submodule, updated FFI
+- Impact: Cannot do LLM inference
+- Fix: git submodule add + update FFI bindings
+**P0-2: Kotlin Shell App MISSING**
+- Status: NOT IMPLEMENTED
+- What exists: android/ directory skeleton
+- What's missing: AuraDaemonBridge.kt, AuraForegroundService.kt, AuraAccessibilityService.kt
+- Impact: No JNI loading, no screen control
+- Fix: Implement Kotlin files + AndroidManifest.xml
+**P0-3: aura-neocortex Binary NOT Built**
+- Status: EXISTS BUT NOT TESTED
+- What exists: crates/aura-neocortex source code
+- What's missing: Build for ARM64, model loading, IPC testing
+- Impact: System2 (LLM) unavailable
+- Fix: Build + test with model file
+### P1 BLOCKERS (Must Fix Before Production)
+**P1-1: Telegram Integration NOT Configured**
+- Status: CODE EXISTS BUT NOT TESTED
+- What exists: TelegramEngine with 43 commands, curl_backend
+- What's missing: config.toml with tokens, connectivity test
+- Impact: No user input path
+- Fix: Run install.sh or manually configure config.toml
+**P1-2: Model Download NOT Tested**
+- Status: INSTALL.SH HAS LOGIC BUT NOT TESTED
+- What exists: phase_model function with SHA256 verification
+- What's missing: Actual download test on device
+- Impact: No model files for inference
+- Fix: Test install.sh model phase OR manually download
+**P1-3: IPC Protocol NOT Verified**
+- Status: DESIGN EXISTS BUT NOT TESTED
+- What exists: aura-types IPC types, daemon/neocortex clients
+- What's missing: End-to-end IPC test, socket binding
+- Impact: Daemon can't communicate with neocortex
+- Fix: Build both binaries, test socket connection
+### P2 BLOCKERS (Quality of Life)
+**P2-1: AccessibilityService NOT Built**
+- Status: NOT IMPLEMENTED
+- What exists: platform/android_accessibility.rs (Rust side)
+- What's missing: Kotlin AuraAccessibilityService.kt
+- Impact: AURA can't see screen or control phone
+- Fix: Implement Kotlin accessibility service
+**P2-2: E2E Test Suite NOT Built**
+- Status: NOT IMPLEMENTED
+- What exists: Unit tests (2362), integration tests
+- What's missing: End-to-end scenario tests
+- Fix: Build E2E test suite
+**P2-3: Battery Drain NOT Validated**
+- Status: NOT TESTED
+- What exists: Power monitoring code
+- What's missing: Actual battery drain measurement
+- Target: < 5%/hr idle drain
+## THE HONEST ASSESSMENT
+**What We Have:**
+- ✅ Solid architecture (well-designed)
+- ✅ Good code structure (modular, tested)
+- ✅ CI pipeline works (builds binary)
+- ✅ Comprehensive docs (architecture, guides)
+- ✅ Telegram integration (43 commands)
+- ✅ Memory system (4-tier, HNSW)
+- ✅ Execution engine (ReAct, 11-stage pipeline)
+- ✅ Ethics engine (7 Iron Laws, TRUTH Protocol)
+- ✅ ARC system (proactive, ForestGuardian)
+**What We Don't Have:**
+- ❌ LLM inference (llama.cpp not vendored)
+- ❌ Android integration (Kotlin app missing)
+- ❌ User flow testing (never tested end-to-end)
+- ❌ Model files (never downloaded)
+- ❌ IPC verification (never tested daemon-neocortex)
+- ❌ Accessibility control (can't see screen or click)
+**The Reality:**
+We have a well-designed, well-coded system that CANNOT DO ANYTHING because:
+1. No LLM to reason
+2. No way to see screen
+3. No way to control phone
+4. No way to receive user input (without Telegram configured)
+**The Path Forward:**
+1. Run install.sh → creates config, directories
+2. Build/test neocortex → enables LLM
+3. Configure Telegram → enables user input
+4. Build Kotlin app → enables screen control
+5. Vendor llama.cpp → enables real inference
+Now let me continue with the detailed action plan., nextThoughtNeeded=true, thoughtNumber=17, totalThoughts=250]
+Thinking: Now let me continue with the detailed action plan for the next steps.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me create a detailed action plan based on the enterprise methodology:
+## ENTERPRISE METHODOLOGY FOR AURA
+**THE 7 VALIDATION GATES:**
+1. Compile success ≠ Valid (must run on target)
+2. Unit tests ≠ Valid (must test on real device)
+3. Runtime on real environment = Valid (only then is code trusted)
+**THE FAILURE TAXONOMY:**
+- F001: Artifact missing
+- F002: Dependency mismatch
+- F003: ABI mismatch
+- F004: Linker or entrypoint failure
+- F005: Runtime crash before boot ready
+- F006: Installer logic drift
+- F007: Observability gap
+- F008: Release governance failure
+**THE DECISION TREE:**
+D1: Did the artifact build? → YES
+D2: Does the artifact validate structurally? → YES
+D3: Does it run on the target class of device? → YES
+D4: Did boot stages complete? → YES (but in degraded mode)
+D5: Is the failure class known? → YES (P0 blockers)
+D6: Should release be blocked? → YES (until P0s resolved)
+## THE DETAILED ACTION PLAN
+### PHASE 1: GET DAEMON WORKING (This Session)
+**Step 1.1: Run install.sh**
+```
+On device:
+bash install.sh
+```
+This will:
+- Create config.toml with Telegram tokens
+- Set up directories (db, logs, models)
+- Download model from HuggingFace (if network available)
+- Build daemon + neocortex (if --skip-build not used)
+**Step 1.2: Test Telegram Connectivity**
+```
+On device (after install.sh):
+./aura-daemon --config ~/.config/aura/config.toml
+```
+Watch logs for:
+- Telegram bot polling started
+- Message received
+- Command processed
+- Response sent
+**Step 1.3: Test Neocortex Spawning**
+```
+On device:
+./aura-neocortex --model ~/.local/share/aura/models/Qwen3-8B-Q4_K_M.gguf
+```
+Watch for:
+- Model loading
+- Server started
+- IPC socket bound
+**Step 1.4: Verify IPC Connection**
+Check daemon logs for:
+- Connected to neocortex
+- Inference request sent
+- Response received
+### PHASE 2: TEST USER FLOW (This Week)
+**Step 2.1: Test Basic Commands**
+Send via Telegram:
+- /start - should greet
+- /status - should show system status
+- /help - should list commands
+- /memory - should query memory system
+**Step 2.2: Test LLM Integration**
+Send via Telegram:
+- "Hello, how are you?" - should respond naturally
+- "What time is it?" - should check system time
+- "What's on my calendar?" - should check notifications
+**Step 2.3: Test Memory System**
+Send via Telegram:
+- "Remember that I like coffee" - should store
+- "What do I like?" - should recall
+**Step 2.4: Test Proactive Engine**
+Wait for proactive suggestions:
+- Morning briefing
+- Evening summary
+- Habit reminders
+### PHASE 3: BUILD MISSING COMPONENTS (This Month)
+**Step 3.1: Vendor llama.cpp**
+```bash
+cd aura
+git submodule add https://github.com/ggml-org/llama.cpp vendor/llama.cpp
+cd vendor/llama.cpp && git checkout [stable-commit]
+cd ../..
+cd crates/aura-llama-sys/src
+# Update FFI bindings to batch API
+cargo build --target aarch64-linux-android -p aura-llama-sys
+```
+**Step 3.2: Build Kotlin Shell App**
+Create:
+- android/app/src/main/AndroidManifest.xml
+- android/app/src/main/java/.../AuraDaemonBridge.kt
+- android/app/src/main/java/.../AuraForegroundService.kt
+- android/app/src/main/java/.../AuraAccessibilityService.kt
+Build APK:
+```bash
+cd android
+./gradlew assembleDebug
+```
+**Step 3.3: Test Full Architecture**
+1. Install APK on device
+2. Grant permissions (AccessibilityService, Storage)
+3. Start service
+4. Verify daemon + neocortex running
+5. Test screen control
+6. Test action execution
+### PHASE 4: PRODUCTION VALIDATION (This Quarter)
+**Step 4.1: Battery Drain Test**
+- Measure idle drain over 24 hours
+- Target: < 5%/hr
+- Measure active drain during inference
+- Optimize if needed
+**Step 4.2: E2E Test Suite**
+Build automated tests for:
+- Install flow
+- User onboarding
+- Command execution
+- Memory recall
+- Proactive suggestions
+- Error recovery
+**Step 4.3: Security Audit**
+- Policy gate enforcement
+- Ethics hardcoding verification
+- Vault encryption test
+- GDPR export/delete test
+## THE ENTERPRISE WORKFLOW
+```
+USER REQUEST → 
+  CLASSIFY DOMAIN →
+    ASSIGN TO TEAM →
+      FIX ROOT CAUSE →
+        VALIDATE ON DEVICE →
+          PREVENT RECURRENCE →
+            UPDATE DOCS →
+              RELEASE
+```
+**Every failure is classified into a known category (F001-F015).**
+**Same failure is never debugged twice.**
+**If the same class of failure appears twice, STOP and redesign the system.**
+Now let me continue with the comprehensive analysis of each domain., nextThoughtNeeded=true, thoughtNumber=18, totalThoughts=250]
+Thinking: Now I need to continue the deep analysis. Let me continue with the comprehensive domain-by-domain analysis.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me continue with the comprehensive domain analysis:
+## DOMAIN 1: INSTALLATION & DEPLOYMENT
+**What Was Designed:**
+- 12-phase installer (1866 lines)
+- Automatic model selection by RAM
+- Telegram wizard with token verification
+- Vault PIN setup with Argon2id upgrade
+- Termux-services autostart
+- SHA256 verification for downloads
+- Dry-run mode
+- Repair mode for individual phases
+**What Exists:**
+- ✅ install.sh (complete implementation)
+- ✅ Phase 0-3: Pre-flight, hardware, Telegram, vault
+- ✅ Phase 4-6: Packages, Rust, source
+- ✅ Phase 7: Model download (with SHA256)
+- ✅ Phase 8-9: Build, purge
+- ✅ Phase 10-12: Config, service, verify
+**What's NOT Tested:**
+- ❌ Full install.sh flow on real device
+- ❌ Model download (network, HuggingFace)
+- ❌ Termux-services setup
+- ❌ Post-install verification
+**Status:** ✅ IMPLEMENTED - Needs testing
+## DOMAIN 2: MEMORY SYSTEM
+**What Was Designed:**
+- 4-tier memory: Working/Episodic/Semantic/Archive
+- HNSW vector index for semantic search
+- RRF (Reciprocal Rank Fusion) for multi-query
+- Memory consolidation pipeline
+- Bounded collections (OOM prevention)
+- Pattern separation for episodic
+- Generalization with similarity threshold
+**What Exists:**
+- ✅ AuraMemory with 4 tiers
+- ✅ HNSW index (pure Rust)
+- ✅ RRF fusion
+- ✅ Consolidation pipeline
+- ✅ Bounded collections (BoundedVec, BoundedMap, CircularBuffer)
+**P0 Bugs (from audit):**
+- ⚠️ semantic.rs: similarity threshold 0.15 too low (should be 0.35)
+- ⚠️ episodic.rs: O(n) pattern scan (should be HNSW-based O(log n))
+- ⚠️ hnsw.rs: tombstone accumulation (needs compaction)
+- ⚠️ embeddings.rs: TF-IDF stub, not neural embeddings
+**Status:** ✅ IMPLEMENTED - Has bugs to fix
+## DOMAIN 3: LLM INFERENCE (Neocortex)
+**What Was Designed:**
+- aura-llama-sys: FFI bindings to llama.cpp
+- aura-neocortex: Binary with model loading, inference server
+- IPC protocol: Unix socket, bincode frames
+- System prompt builder
+- 6 inference modes: Planner, Strategist, Composer, Conversational, etc.
+- Token budget management
+**What Exists:**
+- ✅ aura-llama-sys (pre-batch API bindings)
+- ✅ aura-neocortex binary
+- ✅ IPC protocol types
+- ⚠️ System prompt builder (needs refinement)
+- 🚧 Token budget manager (in progress)
+**What's Missing:**
+- ❌ llama.cpp NOT vendored (P0)
+- ❌ FFI bindings use outdated pre-batch API
+- ❌ Model files NOT downloaded
+- ❌ IPC NOT tested end-to-end
+**Status:** ⚠️ PARTIAL - Needs llama.cpp vendored
+## DOMAIN 4: EXECUTION ENGINE
+**What Was Designed:**
+- ReAct loop (6 iterations neocortex, 10 daemon)
+- 11-stage executor pipeline
+- ETG (Execution Template Graph) System 1 cache
+- Policy gate (Layer 1: configurable, Layer 2: hardcoded)
+- OutcomeBus (5 subscribers)
+- Failure taxonomy (TRANSIENT/STRATEGIC/ENVIRONMENTAL)
+- Max 3 consecutive failures before abort
+**What Exists:**
+- ✅ ReAct loop implementation
+- ✅ 11-stage executor pipeline
+- ✅ ETG cache (256-entry LRU with Welford statistics)
+- ✅ Policy gate (deny-by-default)
+- ✅ OutcomeBus (5 subscribers)
+- ✅ Failure classification
+**What's Missing:**
+- ❌ Real action execution (needs Android bridge)
+- ❌ Screen verification (needs AccessibilityService)
+- ⚠️ ETG confidence calibration (needs real usage data)
+**Status:** ✅ IMPLEMENTED - Needs Android integration
+## DOMAIN 5: IDENTITY & ETHICS
+**What Was Designed:**
+- 7 Iron Laws (compiled into binary)
+- OCEAN personality model (Big Five)
+- VAD mood tracking (Valence-Arousal-Dominance)
+- 15 absolute ethics rules (hardcoded)
+- TRUTH Protocol (anti-sycophancy)
+- 5-layer security (whitelist, PIN, permissions, rate-limit, audit)
+- Trust-based autonomy (5 tiers: Stranger → Soulmate)
+**What Exists:**
+- ✅ 7 Iron Laws
+- ✅ OCEAN model with clamp + defaults
+- ✅ VAD mood
+- ✅ Ethics engine
+- ✅ TRUTH Protocol
+- ✅ 5-layer security (Telegram)
+- ✅ Trust tier system
+**What's Missing:**
+- ⚠️ OCEAN evolution engine (should adapt from observations)
+- ⚠️ Emergent dimension discovery (should discover user-specific patterns)
+- ⚠️ Deep task learning (should observe multi-app workflows)
+**Status:** ✅ IMPLEMENTED - Core solid, features in progress
+## DOMAIN 6: TELEGRAM INTEGRATION
+**What Was Designed:**
+- Long-polling Telegram bot
+- 43 commands with categories
+- 5-layer security
+- Offline message queue
+- Health dashboard
+- Voice message handling
+- Approval workflow for high-risk actions
+**What Exists:**
+- ✅ TelegramEngine with polling
+- ✅ 43 commands
+- ✅ 5-layer security (whitelist, PIN, permissions, rate-limit, audit)
+- ✅ Message queue (SQLite)
+- ✅ curl_backend for Termux compatibility
+- ✅ Voice handler (feature-gated)
+- ✅ Dashboard generator
+**What's Missing:**
+- ❌ NOT tested with real tokens
+- ❌ NOT verified on device
+- ⚠️ Voice processing (needs feature flag)
+**Status:** ✅ IMPLEMENTED - Needs device testing
+## DOMAIN 7: ARC (PROACTIVE ENGINE)
+**What Was Designed:**
+- 10 life domains with scoring
+- Life Quality Index (LQI)
+- 8 context modes (Default, DND, Sleeping, Active, Driving, Custom)
+- Initiative budget system
+- ForestGuardian (doomscroll detection)
+- Routine learning
+- Proactive suggestions
+- Social awareness
+**What Exists:**
+- ✅ ArcManager with domains
+- ✅ LQI computation
+- ✅ Context mode transitions
+- ✅ Initiative budget
+- ⚠️ ForestGuardian (partial implementation)
+- ⚠️ Routine detection (patterns, not workflows)
+- ⚠️ Proactive triggers (core exists, triggers need refinement)
+**What's Missing:**
+- ❌ NOT tested on device
+- ❌ NOT verified with real user data
+- ⚠️ Deep task learning (observe multi-app workflows)
+- ⚠️ Social awareness scoring (needs tuning)
+**Status:** ⚠️ PARTIAL - Core exists, needs refinement
+## DOMAIN 8: ANDROID PLATFORM
+**What Was Designed:**
+- Kotlin shell app
+- JNI bridge (Rust side: platform/jni.rs)
+- AuraDaemonBridge.kt (JNI host)
+- AuraForegroundService.kt (foreground service)
+- AuraAccessibilityService.kt (screen reader)
+- Notifications system
+- Power/thermal monitoring
+**What Exists:**
+- ✅ JNI bridge stub (platform/jni.rs)
+- ✅ Notifications system
+- ✅ Power monitoring
+- ✅ Thermal monitoring
+- ✅ Doze mode detection
+- ✅ Connectivity monitoring
+**What's Missing:**
+- ❌ Kotlin shell app (P0)
+- ❌ AndroidManifest.xml (P0)
+- ❌ AuraDaemonBridge.kt (P0)
+- ❌ AuraForegroundService.kt (P0)
+- ❌ AuraAccessibilityService.kt (P0)
+- ❌ APK build pipeline
+**Status:** ❌ MISSING - Needs Kotlin development
+## DOMAIN 9: CI/CD PIPELINE
+**What Was Designed:**
+- 6-stage pipeline: SOURCE → BUILD → INSPECT → TEST → DEPLOY → DEVICE
+- SBOM generation
+- SLSA provenance
+- Regression tests
+- Device validation workflow
+**What Exists:**
+- ✅ GitHub Actions workflows
+- ✅ SBOM generation
+- ✅ SLSA Level 1 provenance
+- ✅ Regression test framework
+- ✅ aura-android-validate workflow
+- ✅ NDK setup for cross-compilation
+**Recent Fixes (from GitHub):**
+- ✅ Added --bin flag (was building cdylib)
+- ✅ Fixed artifact path (was targets/, now target/)
+- ✅ Changed to curl-backend (was reqwest, panicked on Termux)
+- ✅ NDK setup fixed
+**Status:** ✅ IMPLEMENTED - Recently fixed
+## DOMAIN 10: TESTING & VALIDATION
+**What Was Designed:**
+- 2362 unit tests
+- Integration tests
+- Device testing guides
+- E2E test suite (planned)
+- Failure taxonomy
+- Regression tests
+**What Exists:**
+- ✅ 2362 tests passing
+- ✅ Integration tests
+- ✅ Device testing guides (DEVICE-TESTING-GUIDE.md)
+- ✅ Full codebase testing guide (DEVICE-FULL-CODEBASE-TEST.md)
+- ⚠️ E2E test suite (NOT built)
+- ✅ Failure taxonomy (F001-F015)
+**What's Missing:**
+- ❌ E2E scenario tests
+- ❌ On-device instrumented tests
+- ❌ Battery drain validation
+- ❌ Thermal throttling test
+**Status:** ⚠️ PARTIAL - Unit tests solid, E2E missing
+Now I have a comprehensive picture. Let me continue with the deep analysis of the user flow., nextThoughtNeeded=true, thoughtNumber=19, totalThoughts=250]
+Thinking: Now let me continue with the deep analysis of the user flow and what's actually happening on the device.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze the user flow and what's actually happening:
+## THE IDEAL USER FLOW (What Should Happen)
+```
+STEP 1: User runs install.sh
+├── Phase 0: Pre-flight checks
+├── Phase 0.5: Space budget display
+├── Phase 1: Hardware profiling + Model selection (auto or manual)
+├── Phase 2: Telegram bot wizard (get token from @BotFather)
+├── Phase 3: Vault PIN + User name
+│   └── [ALL INTERACTIVE STEPS DONE]
+├── Phase 4: Package installation (pkg install)
+├── Phase 5: Rust toolchain (rustup)
+├── Phase 6: Source acquisition (git clone)
+├── Phase 7: Model download (from HuggingFace)
+├── Phase 8: Build (cargo build --features voice)
+├── Phase 9: Purge build tools (~4GB saved)
+├── Phase 10: Config finalization (config.toml)
+├── Phase 11: Service setup (termux-services)
+└── Phase 12: Verification + success banner
+STEP 2: User starts AURA
+├── termux-services starts aura-daemon
+├── aura-daemon reads config.toml
+├── 8-phase startup sequence runs
+│   ├── Phase 1: JNI load (skip on standalone)
+│   ├── Phase 2: Runtime init
+│   ├── Phase 3: Database open
+│   ├── Phase 4: State restore
+│   ├── Phase 5: Subsystems init
+│   ├── Phase 6: IPC bind
+│   ├── Phase 7: Cron schedule
+│   └── Phase 8: Ready
+├── Telegram polling starts
+└── User can send commands
+STEP 3: User sends Telegram command
+├── Telegram bot receives message
+├── 5-layer security check
+├── Command parsed (43 commands)
+├── Routing: System1 (ETG) OR System2 (LLM)
+│   ├── System1: Fast path, cached actions
+│   └── System2: IPC to neocortex
+│       ├── LLM reasons (ReAct loop)
+│       ├── Action selected
+│       └── 11-stage executor pipeline
+├── Result via OutcomeBus
+└── Response sent to Telegram
+STEP 4: AURA does actions (full architecture)
+├── AccessibilityService sees screen
+├── Action dispatched (tap, swipe, type)
+├── Screen verification
+├── Result captured
+└── Report via Telegram
+```
+## WHAT ACTUALLY HAPPENED (What We Tested)
+```
+STEP 1: We ran the binary
+├── ./aura-daemon executed
+├── Binary loaded (5.9MB ARM64)
+└── ???
+STEP 2: We saw boot stages
+├── All 8 phases showed PASSED
+└── But services don't work because:
+    ├── No config.toml
+    ├── No database created
+    ├── No checkpoint
+    ├── No neocortex
+    ├── No model files
+    └── No Telegram connection
+STEP 3: We saw logs
+├── Binary runs
+├── Startup phases complete
+├── But nothing useful happens
+└── Degraded mode (non-critical subsystems = None)
+```
+## THE FUNDAMENTAL MISUNDERSTANDING
+**What We Tested:**
+- ✅ Binary runs on device
+- ✅ Boot stages complete
+- ✅ Process management works
+**What We Did NOT Test:**
+- ❌ User flow (install.sh)
+- ❌ Configuration (config.toml)
+- ❌ LLM inference (neocortex + model)
+- ❌ Telegram connectivity
+- ❌ Screen control (AccessibilityService)
+- ❌ End-to-end user experience
+**Why:**
+The daemon runs in "degraded mode" without:
+1. config.toml (Telegram tokens, paths)
+2. neocortex connection (LLM inference)
+3. model files (actual reasoning)
+4. Android bridge (screen control)
+## THE REALITY CHECK
+**The binary runs BUT CANNOT DO ANYTHING because:**
+1. **No config.toml** → daemon needs this for Telegram, model path, etc.
+2. **No LLM** → can't reason about user input
+3. **No model** → can't do any inference
+4. **No Telegram** → can't receive user commands
+5. **No Android** → can't control phone
+**The boot stages showed PASSED but this is MISLEADING because:**
+1. They're just TIMING measurements, not functionality tests
+2. Phase 3 creates DB if missing (not an error)
+3. Phase 4 creates checkpoint if missing (not an error)
+4. Phase 5 runs in DEGRADED MODE (non-critical = None)
+5. Daemon starts but CANNOT DO ANYTHING USEFUL
+## THE PATH TO FUNCTIONAL AURA
+**IMMEDIATE (Run install.sh):**
+```bash
+# On device, in Termux:
+bash install.sh
+```
+This will:
+1. Create ~/.config/aura/config.toml
+2. Set up directories (db, logs, models)
+3. Download Qwen3-8B model (~5GB)
+4. Build aura-daemon + aura-neocortex
+5. Configure Telegram tokens
+6. Set up termux-services
+Then:
+```bash
+# Start daemon:
+aura-daemon
+# Or via termux-services:
+财termux-boot or service aura-daemon start
+```
+**What Should Happen After install.sh:**
+1. Daemon reads config.toml ✓
+2. Database created ✓
+3. Telegram polling starts ✓
+4. User can send /start command ✓
+5. Bot responds with greeting ✓
+6. User can query status ✓
+**What's Still Missing:**
+1. LLM inference (need model + neocortex)
+2. Screen control (need AccessibilityService)
+3. Action execution (need Android bridge)
+## THE HONEST VERDICT
+**What We Have:**
+- ✅ Solid architecture
+- ✅ Working binary
+- ✅ Comprehensive code
+- ✅ 2362 tests passing
+- ✅ CI pipeline works
+**What We Need:**
+- ❌ Run install.sh (creates config)
+- ❌ Download model (enables LLM)
+- ❌ Build neocortex (enables inference)
+- ❌ Build Kotlin app (enables screen control)
+- ❌ Test end-to-end (validates everything)
+**The Real Work:**
+Not fixing bugs, not refactoring code, not adding features.
+**Simply running the installer that already exists.**
+Now let me continue with the deep analysis of the philosophical implications., nextThoughtNeeded=true, thoughtNumber=20, totalThoughts=250]
+Thinking: Now let me continue with the deep analysis. I need to analyze the philosophical implications and the actual state of AURA.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze the philosophical implications and the actual state of AURA:
+## THE PHILOSOPHICAL FOUNDATION VS ACTUAL STATE
+**AURA'S CORE IDENTITY (From Docs):**
+AURA was designed as:
+1. **The Phone's Second Admin** - Uses AccessibilityService to directly control apps
+2. **Cognitive Symbiont** - Learns and grows WITH the user
+3. **Active Inference System** - Uses Expected Free Energy minimization
+4. **Anti-Sycophancy Machine** - Will disagree when truth demands it
+5. **Privacy-First** - 100% on-device, no cloud
+**WHAT AURA ACTUALLY IS (Current State):**
+Right now, AURA is:
+1. **A Rust binary that runs in degraded mode**
+2. **A well-designed architecture without the runtime**
+3. **A comprehensive codebase without LLM inference**
+4. **A Telegram bot without the Telegram configured**
+5. **A proactive engine without user data**
+**THE CORE ISSUE:**
+The architecture docs describe a COMPLETE SYSTEM that requires:
+- Kotlin Android app (NOT built)
+- AccessibilityService (NOT built)
+- llama.cpp (NOT vendored)
+- Model files (NOT downloaded)
+- Full IPC testing (NOT done)
+- End-to-end flow (NOT tested)
+But what was tested:
+- Binary runs on device ✅
+- Boot stages complete ✅
+- Code structure is solid ✅
+- Tests pass ✅
+**The gap is not in the code - it's in the RUNTIME ENVIRONMENT.**
+## THE ENTERPRISE PERSPECTIVE
+**What Enterprise Teams Would See:**
+**Local Debugging (What We Did):**
+```
+Fix → Retry → Fail → Repeat
+```
+We kept trying to debug the daemon, but the issue wasn't the daemon - it was the missing environment.
+**System Thinking (What We Should Have Done):**
+```
+Classify → Assign Layer → Fix Root → Validate → Prevent Recurrence
+```
+**Layer Classification:**
+- **Build Layer**: Binary builds correctly ✅
+- **Runtime Layer**: Missing config, model, neocortex ❌
+- **Platform Layer**: Missing Kotlin app, AccessibilityService ❌
+- **Product Layer**: User flow not tested ❌
+**The Fix:**
+Not "fix the daemon" but "set up the environment."
+## THE TRUTH PROTOCOL APPLIED TO AURA ITSELF
+**Question:** "Does claiming the daemon 'works' help the user love and connect more, or does it isolate them through false validation?"
+**Answer:** False validation.
+**The Honest Assessment:**
+The daemon does NOT work in any meaningful sense. It:
+- Starts up ✓
+- Shows boot stages ✓
+- But does NOTHING useful ✗
+**The Reality:**
+We have a well-designed, well-coded system that CANNOT DO ANYTHING because:
+1. No LLM to reason
+2. No way to see screen
+3. No way to control phone
+4. No user flow tested
+## THE PATH FORWARD (ENTERPRISE APPROACH)
+**Step 1: Classify the Failure**
+- F006: Installer logic drift - we haven't run the installer
+- F007: Observability gap - we don't know what's missing
+**Step 2: Assign to Layer**
+- Environment setup → install.sh
+- LLM inference → vendor llama.cpp
+- Android control → build Kotlin app
+**Step 3: Fix Root Cause**
+- Run install.sh (creates config, downloads model)
+- Vendor llama.cpp (enables LLM)
+- Build Kotlin app (enables screen control)
+**Step 4: Validate on Device**
+- Test Telegram connectivity
+- Test LLM inference
+- Test screen control
+- Test user flow
+**Step 5: Prevent Recurrence**
+- Add device validation to CI
+- Test end-to-end on each commit
+- Document all findings
+## THE HONEST VERDICT
+**What We Have:**
+- ✅ A solid architectural foundation
+- ✅ Well-structured Rust code
+- ✅ 2362 passing tests
+- ✅ Comprehensive documentation
+- ✅ Working CI pipeline
+**What We DON'T Have:**
+- ❌ A working system (daemon runs but does nothing)
+- ❌ LLM inference (llama.cpp not vendored)
+- ❌ Android integration (Kotlin app not built)
+- ❌ User flow testing (never tested end-to-end)
+- ❌ Production readiness (P0 blockers exist)
+**What We NEED:**
+1. Run install.sh → creates environment
+2. Vendor llama.cpp → enables LLM
+3. Build Kotlin app → enables Android control
+4. Test end-to-end → validates everything
+**The Real Work:**
+Not more debugging of the daemon.
+Not more CI fixes.
+**Setting up the runtime environment and testing the user flow.**
+Now let me continue with the deep analysis of the architectural implications., nextThoughtNeeded=true, thoughtNumber=21, totalThoughts=250]
+Thinking: Let me continue the deep analysis with the architectural implications and the comprehensive recommendations.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me analyze the architectural implications and create comprehensive recommendations:
+## THE ARCHITECTURAL MISMATCH
+**What Was Designed:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    AURA SYSTEM (Full)                        │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐  │
+│  │   KOTLIN    │────▶│   DAEMON    │────▶│  NEOCORTEX  │  │
+│  │  SHELL APP  │ JNI │   (Rust)    │ IPC │   (LLM)     │  │
+│  │  (Android)  │     │             │     │             │  │
+│  └─────────────┘     └─────────────┘     └─────────────┘  │
+│         │                   │                     │          │
+│         ▼                   ▼                     ▼          │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐  │
+│  │ ACCESSIBILITY│    │   MEMORY    │     │   llama.cpp │  │
+│  │  SERVICE    │     │   SYSTEM    │     │   (Model)   │  │
+│  │ (Screen)    │     │  4-tier     │     │             │  │
+│  └─────────────┘     └─────────────┘     └─────────────┘  │
+├─────────────────────────────────────────────────────────────┤
+│                         USER FLOW                           │
+│  Telegram ──▶ Daemon ──▶ Neocortex ──▶ Action ──▶ Report  │
+└─────────────────────────────────────────────────────────────┘
+```
+**What Actually Exists:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  AURA BINARY (Standalone)                  │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐     ┌─────────────┐                      │
+│  │   BINARY    │     │   MEMORY    │                      │
+│  │  (Daemon)   │     │   SYSTEM    │                      │
+│  │             │     │  4-tier     │                      │
+│  └─────────────┘     └─────────────┘                      │
+│         │                                                          │
+│         ▼                                                          │
+│  ┌─────────────┐                                                   │
+│  │   TELEGRAM  │  ⚠️ Configured but NOT connected              │
+│  │   (Code)    │                                                   │
+│  └─────────────┘                                                   │
+├─────────────────────────────────────────────────────────────┤
+│                      MISSING PARTS                           │
+│  ❌ Kotlin Shell App (no JNI loading)                        │
+│  ❌ Neocortex (no LLM inference)                             │
+│  ❌ Model files (no reasoning)                               │
+│  ❌ AccessibilityService (no screen control)                  │
+└─────────────────────────────────────────────────────────────┘
+```
+## THE ENTERPRISE SOLUTION
+**Approach 1: Testing Architecture (Current Reality)**
+- Build aura-daemon as standalone binary
+- Test with stub model (no real inference)
+- Validate Telegram connectivity
+- Document what's working
+- Then move to full architecture
+**Approach 2: Full Architecture (Production)**
+- Build Kotlin shell app
+- Load daemon as cdylib via JNI
+- Spawn neocortex with real model
+- Enable full screen control
+- Ship as Android app
+**Recommendation: BOTH approaches, sequentially**
+## COMPREHENSIVE RECOMMENDATIONS
+### IMMEDIATE (This Session)
+**1. Run install.sh on device**
+```bash
+# In Termux on device:
+bash install.sh
+```
+This creates:
+- config.toml with Telegram tokens
+- Directories (db, logs, models)
+- Database and checkpoint
+- Optionally downloads model
+**2. Test Telegram connectivity**
+```bash
+# After install.sh:
+aura-daemon --config ~/.config/aura/config.toml
+```
+Watch logs for:
+- Telegram polling started
+- Message received
+- Response sent
+**3. Test LLM inference**
+```bash
+# In another terminal:
+aura-neocortex --model ~/.local/share/aura/models/Qwen3-8B-Q4_K_M.gguf
+```
+Test:
+- Model loading
+- IPC socket binding
+- Inference request/response
+**4. Document all findings**
+Create a test report with:
+- What worked
+- What failed
+- Error messages
+- Screenshots
+### SHORT TERM (This Week)
+**1. Complete install.sh testing**
+- Test model download
+- Test database creation
+- Test termux-services setup
+- Test post-install verification
+**2. Test neocortex binary**
+- Build for ARM64
+- Test with small model
+- Verify IPC connection
+**3. Test Telegram integration**
+- Verify polling works
+- Test 43 commands
+- Test security layers
+### MEDIUM TERM (This Month)
+**1. Vendor llama.cpp**
+```bash
+cd aura
+git submodule add https://github.com/ggml-org/llama.cpp vendor/llama.cpp
+```
+Then:
+- Update FFI bindings
+- Build for ARM64
+- Test with real model
+**2. Build Kotlin shell app**
+Create:
+- AndroidManifest.xml
+- AuraDaemonBridge.kt
+- AuraForegroundService.kt
+- AuraAccessibilityService.kt
+**3. Build APK**
+```bash
+cd android
+./gradlew assembleDebug
+```
+**4. Test full architecture**
+- Install APK
+- Grant permissions
+- Start service
+- Verify screen control
+- Test action execution
+### LONG TERM (This Quarter)
+**1. Production validation**
+- Battery drain test
+- E2E test suite
+- Security audit
+- GDPR compliance
+**2. Release preparation**
+- Version tagging
+- Release notes
+- Documentation
+- Community testing
+**3. Community building**
+- Open source release
+- Contribution guidelines
+- Issue tracker
+- Support channels
+## THE ENTERPRISE OPERATING SYSTEM APPLIED
+**From the enterprise operating system:**
+**Principle 1:** "Software is not built to 'work'. Software is built to behave correctly under unknown conditions."
+**Application:** The daemon "works" (starts, passes phases) but doesn't "behave correctly" (no config, no LLM, no screen control).
+**Principle 2:** "We never code for all environments. We define contracts that environments must satisfy."
+**Application:** Define the AURA contract:
+- Requires: config.toml, model file, neocortex connection
+- Provides: Telegram interface, memory system, execution engine
+- Enforces: Policy gate, ethics engine, TRUTH protocol
+**Principle 3:** "If a system requires manual fixing repeatedly, the system design is incomplete."
+**Application:** The missing environment setup (install.sh) is a design gap. It should be automated and validated in CI.
+**Principle 4:** "Failure taxonomy: Every failure is classified into a known category. Same failure is never debugged twice."
+**Application:** Classify the current state:
+- F006: Installer logic drift (we haven't run installer)
+- F007: Observability gap (we don't know what's missing)
+**Principle 5:** "Test classes of environments, not infinite individual devices."
+**Application:** Test on:
+- Moto G45 5G (current)
+- Android API 26, 30, 35
+- RAM: 4GB, 6GB, 8GB
+## THE FINAL VERDICT
+**What We Have:**
+- ✅ Solid architecture
+- ✅ Well-structured code
+- ✅ Comprehensive tests
+- ✅ Working CI pipeline
+- ✅ Comprehensive docs
+**What We Need:**
+- ❌ Run install.sh (creates environment)
+- ❌ Test user flow (validates everything)
+- ❌ Vendor llama.cpp (enables LLM)
+- ❌ Build Kotlin app (enables Android control)
+**The Path Forward:**
+Not more debugging of the daemon.
+Not more CI fixes.
+**Setting up the runtime environment and testing the user flow.**
+Now let me continue with the deep analysis of the specific next actions., nextThoughtNeeded=true, thoughtNumber=22, totalThoughts=250]
+Thinking: Now let me continue the deep analysis. I've completed 22 thoughts out of the 200+ target. I need to continue with the comprehensive analysis of all domains, the philosophical implications, the testing methodology, and the specific next actions.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me continue with the deep analysis of the specific next actions and the comprehensive understanding of what AURA needs:
+## THE SPECIFIC NEXT ACTIONS
+### ACTION 1: Run install.sh on Device
+**What install.sh Does (Full Flow):**
+```bash
+# Phase 0: Pre-flight
+- Check architecture (aarch64 required)
+- Check Termux environment
+- Check Android API (≥26 required)
+- Check network (HuggingFace reachable)
+# Phase 0.5: Space budget
+- Display RAM detected
+- Display storage available
+- Show model size requirements
+# Phase 1: Model selection
+- Auto-detect RAM → select model
+- Qwen3-1.7B (<4GB RAM)
+- Qwen3-4B (4-6GB RAM)
+- Qwen3-8B (6-10GB RAM)
+- Qwen3-14B (≥10GB RAM)
+- User can confirm or change
+# Phase 2: Telegram wizard
+- Prompt for bot token
+- Verify token against api.telegram.org
+- Prompt for user ID
+- Store in config
+# Phase 3: Vault setup
+- Prompt for user name
+- Prompt for PIN (min 4 chars)
+- Generate salted hash
+- Store in config
+# [ALL INTERACTIVE DONE]
+# Phase 4: Packages
+- pkg update
+- pkg install build-essential, git, curl, openssl, cmake, ninja, libopus, termux-services
+# Phase 5: Rust
+- Install rustup (if not present)
+- Set RUSTUP_USE_CURL=1 (for Termux)
+- Target: nightly-2026-03-01
+# Phase 6: Source
+- git clone or git fetch
+- git submodule update --init --recursive
+# Phase 7: Model download
+- Download from HuggingFace
+- Verify SHA256
+- Store in ~/.local/share/aura/models/
+# Phase 8: Build
+- cargo build --release --features voice
+- Build aura-daemon AND aura-neocortex
+# Phase 9: Purge
+- Remove Rust toolchain (~4GB saved)
+- Unless --keep-build-tools
+# Phase 10: Config
+- Create ~/.config/aura/config.toml
+- Include all collected values
+# Phase 11: Service
+- Set up termux-services
+- Create service directory
+- Add run script
+# Phase 12: Verify
+- Check all files exist
+- Show success message
+- Provide usage instructions
+```
+**Why This Matters:**
+- Creates config.toml (Telegram tokens, paths)
+- Sets up directories (db, logs, models)
+- Downloads model file (enables LLM)
+- Builds neocortex (enables inference)
+- Configures Telegram (enables input)
+- Sets up autostart (termux-services)
+### ACTION 2: Test Telegram Integration
+**What to Test:**
+1. Start daemon with config
+2. Send /start via Telegram
+3. Verify bot responds
+4. Test /status command
+5. Test /help command
+6. Test basic query
+**Expected Behavior:**
+```
+User sends: /start
+AURA responds: Hello! I'm AURA, your phone's second admin...
+User sends: /status
+AURA responds: System status: OK | Memory: ready | Telegram: connected
+User sends: What can you do?
+AURA responds: I can help you with... [lists capabilities]
+```
+**What SHOULD Happen But Won't (Without LLM):**
+```
+User sends: Order biryani from Zomato
+AURA: Opens Zomato → searches → shows options → user picks → confirms → orders
+```
+### ACTION 3: Test Neocortex Spawning
+**What to Test:**
+1. Build aura-neocortex for ARM64
+2. Spawn with model file
+3. Verify IPC socket created
+4. Test inference request
+**Expected Behavior:**
+```bash
+$ ./aura-neocortex --model ~/.local/share/aura/models/Qwen3-8B-Q4_K_M.gguf
+Loading model... (may take a few minutes)
+Model loaded: Qwen3-8B-Q4_K_M.gguf
+Server listening on localhost:9999
+```
+**What SHOULD Happen But Won't (Without llama.cpp vendor):**
+- Model loading fails
+- FFI bindings are outdated
+- Inference not possible
+### ACTION 4: Test End-to-End Flow
+**The Complete User Flow:**
+```
+User runs install.sh
+    ↓
+install.sh creates config.toml
+    ↓
+User starts daemon
+    ↓
+Daemon reads config, starts Telegram polling
+    ↓
+User sends Telegram message
+    ↓
+Daemon receives via Telegram bridge
+    ↓
+Routing: System1 (cached) OR System2 (LLM)
+    ↓
+If LLM: IPC to neocortex
+    ↓
+Neocortex loads model, runs inference
+    ↓
+Result returns to daemon
+    ↓
+Daemon executes action (via Android bridge)
+    ↓
+AccessibilityService sees screen, performs action
+    ↓
+Result via OutcomeBus
+    ↓
+Response sent to Telegram
+```
+**What's Working:**
+- ✅ Binary runs
+- ✅ Boot stages complete
+- ✅ Code structure solid
+- ✅ Tests pass
+**What's NOT Working:**
+- ❌ No config (need install.sh)
+- ❌ No LLM (need llama.cpp)
+- ❌ No neocortex (need build + model)
+- ❌ No Android (need Kotlin app)
+- ❌ No user flow (never tested)
+## THE HONEST ASSESSMENT
+**The Binary Works But The System Doesn't:**
+The daemon binary is well-built. It:
+- Starts correctly
+- Runs the 8-phase startup
+- Initializes subsystems
+- Enters main loop
+- Handles signals
+BUT the daemon cannot do anything useful because:
+1. **No config.toml** → needs Telegram tokens, paths
+2. **No LLM** → can't reason about input
+3. **No model** → can't do inference
+4. **No Telegram** → can't receive commands
+5. **No Android** → can't control phone
+**The Fix is Simple:**
+Run install.sh.
+**The install.sh already exists and is comprehensive (1866 lines).**
+## THE ENTERPRISE VERDICT
+**From the enterprise operating system:**
+**"Software is not built to 'work'. Software is built to behave correctly under unknown conditions."**
+The daemon behaves correctly under the KNOWN CONDITION that it has config, model, and neocortex. Without these, it enters degraded mode, which is correct behavior.
+**"We define contracts that environments must satisfy."**
+The AURA contract:
+- **Requires:** config.toml, model file, neocortex connection, Telegram token
+- **Provides:** Telegram interface, memory system, execution engine, proactive suggestions
+- **Enforces:** Policy gate, ethics engine, TRUTH protocol
+**"If a system requires manual fixing repeatedly, the system design is incomplete."**
+The current state (daemon runs but does nothing) is NOT a bug - it's expected behavior without the required environment. The fix is to set up the environment (run install.sh), not to modify the daemon.
+**"Failure taxonomy: Every failure is classified into a known category."**
+Current classification:
+- F006: Installer logic drift - we haven't run the installer
+- F007: Observability gap - the daemon is observable but the environment is not set up
+Now let me continue with the comprehensive analysis of the philosophical foundations., nextThoughtNeeded=true, thoughtNumber=23, totalThoughts=250]
+Thinking: I'm making good progress on the sequential thinking. Let me continue with the deep analysis. I'm at 23 thoughts of 250+. Let me continue with the comprehensive analysis of all the domains.
+⚙ sequential-thinking_sequentialthinking [thought=Now let me continue with the deep analysis of the philosophical foundations and how they apply to AURA's current state:
+## THE TRUTH PROTOCOL APPLIED TO AURA'S DEVELOPMENT
+**TRUTH MODULE 1: TRUTH FIRST**
+"Cross-reference critical outputs against knowledge graph. If output affirms user hallucination that deviates >15% from KG → override."
+**Application to AURA's Current State:**
+If we say "AURA is working" but the reality is:
+- No Telegram connected
+- No LLM inference
+- No screen control
+- No user flow tested
+This deviates 100% from the knowledge graph (actual state). We must override this hallucination.
+**The Truth:**
+AURA's binary runs, but the system does not work in any meaningful sense. It requires install.sh to create the environment, llama.cpp to be vendored for LLM inference, and a Kotlin app to be built for Android control.
+**TRUTH MODULE 2: RECOGNIZE LIMITS**
+"If AURA's persona drifts toward guru/messianic/lyrical → grounding trigger. AURA should never position itself as enlightened advisor."
+**Application to AURA's Current State:**
+We must NOT say:
+- "AURA is a cognitive symbiont" (while it does nothing)
+- "AURA learns and grows" (while it has no data)
+- "AURA is your phone's second admin" (while it can't control anything)
+We must say:
+- "AURA's code is well-structured"
+- "AURA's architecture is solid"
+- "AURA needs environment setup to function"
+**TRUTH MODULE 3: UNDERSTAND BIASES**
+"Monitor for anthropomorphism (user treating AURA as conscious). Respond with gentle honesty about AI nature."
+**Application to AURA's Current State:**
+We must NOT anthropomorphize:
+- "AURA wants to help you" (while it can't do anything)
+- "AURA is learning" (while it has no data)
+- "AURA knows you" (while it has no memory)
+We must be honest:
+- "AURA's code is comprehensive"
+- "AURA's architecture is well-designed"
+- "AURA's components are implemented but need integration"
+**TRUTH MODULE 4: TEST PERSPECTIVES**
+"For mission-critical outputs, AURA reasons from MULTIPLE angles. Not just Chain-of-Thought but Multi-Perspective."
+**Application to AURA's Current State:**
+**Perspective 1: Developer View**
+- Code is solid, architecture is good
+- Tests pass, CI works
+- Ready for environment setup
+**Perspective 2: User View**
+- Cannot do anything useful
+- Needs installation
+- Needs configuration
+- Needs model download
+**Perspective 3: Enterprise View**
+- P0 blockers exist (llama.cpp, Kotlin app)
+- User flow never tested
+- Production not ready
+**Perspective 4: Reality Check**
+- Binary runs but does nothing
+- Needs 1866-line installer to set up
+- Needs LLM vendor to enable inference
+- Needs Android app to enable control
+**TRUTH MODULE 5: HOLD LOOSELY**
+"If new observation contradicts AURA's model → UPDATE model, don't defend it."
+**Application to AURA's Current State:**
+If we believed:
+- "AURA works because binary runs"
+But now observe:
+- Binary runs but services don't work
+We must UPDATE our model:
+- "AURA's binary works, but the system needs environment setup"
+We must NOT defend:
+- "The binary is enough"
+- "Just needs small fixes"
+- "It's almost working"
+## THE ANTI-CLOUD MANIFESTO APPLIED
+**"Your data on your device — not a feature, a declaration"**
+**Current State:**
+AURA is 100% on-device by design. The code structure ensures:
+- No telemetry
+- No cloud fallback
+- All data stored locally
+- Privacy by architecture
+**This is correct and should be maintained.**
+**"You are the purpose, not the product"**
+**Current State:**
+AURA is designed around user needs:
+- OCEAN personality adapts to user
+- Memory builds relationship
+- Proactive suggestions help user
+- TRUTH protocol prevents sycophancy
+**This is correct and should be maintained.**
+**"If you can't verify it, you can't trust it"**
+**Current State:**
+AURA is open source:
+- Code is public
+- Tests are public
+- Architecture is documented
+- Users can verify everything
+**This is correct and should be maintained.**
+## THE SEVEN IRON LAWS APPLIED
+**Law 1: LLM = Brain, Rust = Body**
+**Current State:**
+- Rust handles: memory, file I/O, system calls, action dispatch, policy enforcement ✅
+- LLM handles: understanding, reasoning, decision-making ❌ (no LLM)
+**Fix:** Vendor llama.cpp to enable LLM inference.
+**Law 2: Theater AGI is BANNED**
+**Current State:**
+- No keyword matching for intent in Rust ✅
+- All NLU done via LLM (when available) ✅
+- Structural parsers only for fast-path actions ✅
+**This is correct and should be maintained.**
+**Law 3: Anti-Cloud Absolute**
+**Current State:**
+- Zero telemetry ✅
+- No cloud fallback ✅
+- Everything on-device ✅
+- curl_backend for Termux compatibility ✅
+**This is correct and should be maintained.**
+**Law 4: Privacy-First**
+**Current State:**
+- All data on-device ✅
+- Vault encryption (Argon2id) ✅
+- GDPR export/delete (designed) ✅
+**This is correct and should be maintained.**
+**Law 5: Never Change Production to Make Tests Pass**
+**Current State:**
+- 2362 tests passing ✅
+- Tests verify real behavior ✅
+- No test-specific workarounds ✅
+**This is correct and should be maintained.**
+**Law 6: No Sycophancy**
+**Current State:**
+- TRUTH Protocol implemented ✅
+- Anti-sycophancy system ✅
+- Will disagree with user when truth demands ✅
+**This is correct and should be maintained.**
+**Law 7: 15 Absolute Ethics Rules**
+**Current State:**
+- 15 hardcoded prohibitions ✅
+- Layer 2 (ethics) cannot be overridden ✅
+**This is correct and should be maintained.**
+## THE FINAL HONEST ASSESSMENT
+**What AURA Is:**
+- A comprehensive, well-designed AI assistant architecture
+- Built in Rust with 2362 passing tests
+- 1866-line installer for environment setup
+- Telegram interface for user communication
+- 4-tier memory system for learning
+- ReAct execution engine with 11-stage pipeline
+- Ethics engine with TRUTH protocol
+- ARC proactive engine with ForestGuardian
+- Comprehensive documentation
+**What AURA Needs:**
+- Run install.sh to create environment
+- Vendor llama.cpp for LLM inference
+- Build Kotlin app for Android control
+- Test end-to-end user flow
+- Validate on real device
+**What AURA Is NOT (Yet):**
+- A working system (needs environment)
+- A cognitive symbiont (needs data)
+- A phone's second admin (needs Android app)
+- A proactive assistant (needs user data)
+**The Path Forward:**
+Not more debugging.
+Not more CI fixes.
+Not more documentation.
+**Setting up the runtime environment and testing the user flow.** Thinking: The user is asking me to:
+1. Be brutally honest about where we are
+2. Express in-depth thoughts
+3. Load skills from multiple enterprise domains
+4. Be detailed with ethics so everyone understands
+5. Judge based on experience from all past failures
+6. Know the current stage and next actions
+7. Bold actions for a real shift
+8. Prepare for work that needs to be done
+9. No assumptions, judge by actual experience
+10. System + infrastructure + all domains + perfection
+11. Bold actions on systems, infra setups, production work
+12. Not just talk but actually use understanding
+13. Design perfect structures for learning
+14. Research and take bold actions
+15. Design really perfect structures
+They want me to continue the sequential thinking with ALL skills loaded, being brutally honest, covering every domain deeply, and providing actionable next steps for teams.
+Let me load the critical skills first and then continue the deep analysis.
+I understand. Let me load the critical skills and be brutally honest about everything - what failed, what's working, and exactly what needs to happen next with bold actions.
+→ Skill "systematic-debugging"
+Thinking: Now let me load more skills for enterprise analysis and production-grade coding.
+→ Skill "production-grade-coding"
+Thinking: Now let me load the code quality comprehensive check skill for multi-domain verification.
+→ Skill "code-quality-comprehensive-check"
+Thinking: Now I have the critical skills loaded. Let me also load verification before completion and some other enterprise skills.
+→ Skill "verification-before-completion"
+Thinking: Now let me load a few more critical skills and then continue the deep sequential thinking with all these frameworks applied.
+→ Skill "first-principles-reasoning"
+Thinking: Now I have all the critical skills loaded. Let me continue the deep sequential thinking with these frameworks applied. I need to be brutally honest about what happened, what's working, what's not, and exactly what needs to happen next.
+Let me now apply all these skills and create a comprehensive, brutally honest assessment.
+Now let me continue the sequential thinking with ALL skills loaded and being brutally honest:
+⚙ sequential-thinking_sequentialthinking [thought=## BRUTAL HONESTY: WHERE WE ACTUALLY ARE
+**Persona 7: SECURITY-AUDITOR checking our understanding:**
+- We have NOT verified AURA works end-to-end
+- We have NOT run install.sh fully on device
+- We have NOT tested Telegram with real tokens
+- We have NOT tested LLM inference
+- We have NOT tested screen control
+- We have NOT validated any user flow
+**Persona 6: TEST-RESULTS-ANALYZER checking our claims:**
+- Previous "success" claims: Binary runs = partial success, NOT full success
+- Previous "boot stages pass" = timing metrics, NOT functionality
+- Previous "CI fixed" = build infrastructure works, NOT system works
+**Persona 5: PERFORMANCE-BENCHMARKER checking scale:**
+- We tested ONE binary on ONE device
+- We have NOT tested under load
+- We have NOT tested memory pressure
+- We have NOT tested long-running operation
+- We have NOT tested concurrent users
+**Persona 4: OPTIMIZE checking waste:**
+- We spent 3+ days debugging CI (wrong target)
+- We spent time "fixing" something that wasn't broken (daemon was fine)
+- We confused BUILD infrastructure with SYSTEM functionality
+**Persona 3: CODE-REVIEWER checking patterns:**
+- We followed LOCAL DEBUGGING pattern: Fix → Retry → Fail → Repeat
+- We should have followed SYSTEM THINKING pattern: Classify → Assign Layer → Fix Root → Validate
+**Persona 2: BUG-DETECTIVE finding root causes:**
+- Root cause was NOT the daemon code
+- Root cause was NOT CI build
+- Root cause WAS: Missing runtime environment (config, model, neocortex, Kotlin app)
+**Persona 1: DOUBLE-CHECK verifying truth:**
+- "AURA works" = FALSE, binary runs but services don't work
+- "We fixed CI" = TRUE, build infrastructure works
+- "We tested AURA" = FALSE, we tested daemon binary in isolation
+**FIRST PRINCIPLES BREAKDOWN:**
+**What are the verified truths?**
+1. Binary builds correctly ✅ (verified by CI)
+2. Binary runs on device ✅ (verified by manual test)
+3. Boot stages measure timing ✅ (verified by logs)
+4. Code structure is solid ✅ (verified by test suite 2362 pass)
+5. CI pipeline works ✅ (verified by GitHub Actions)
+**What are unverified assumptions?**
+1. "AURA works" ❌ UNVERIFIED
+2. "Telegram integration works" ❌ UNVERIFIED  
+3. "LLM inference works" ❌ UNVERIFIED
+4. "Screen control works" ❌ UNVERIFIED
+5. "User flow works" ❌ UNVERIFIED
+**What MUST be true for AURA to work?**
+1. config.toml exists with Telegram tokens
+2. Model file exists on disk
+3. aura-neocortex binary exists and runs
+4. IPC socket connects daemon to neocortex
+5. Telegram bot is configured and polling
+6. Kotlin AccessibilityService is running (for screen control)
+**What's actually missing?**
+- ❌ install.sh never fully run
+- ❌ config.toml not created  
+- ❌ Model not downloaded
+- ❌ neocortex not built/tested
+- ❌ Kotlin app not built
+**THE VERDICT:**
+We have a well-built house with no foundation. The house (code) is solid but it can't do anything because the foundation (environment) doesn't exist.
+This is NOT a code problem. This is an ENVIRONMENT PROBLEM.
+The fix is NOT debugging the daemon. The fix is BUILDING THE FOUNDATION: running install.sh, downloading model, building neocortex, building Kotlin app.
+, nextThoughtNeeded=true, thoughtNumber=25, totalThoughts=250]
+Thinking: Now let me continue with the comprehensive analysis with bold actions for what's actually needed.
+⚙ sequential-thinking_sequentialthinking [thought=## SYSTEMATIC DEBUGGING: ROOT CAUSE ANALYSIS
+**Phase 1: Root Cause Investigation**
+**Error Messages We've Ignored:**
+- "config file not found" - We knew this but didn't act
+- "neocortex not connected" - We assumed this was fine
+- "model file missing" - We knew this but didn't fix
+**Recent Changes Check:**
+- We CHANGED CI to build standalone binary
+- We CHANGED feature flag from reqwest to curl-backend
+- We CHANGED artifact path from targets/ to target/
+- We DIDN'T CHANGE: Environment setup, model files, Kotlin app
+**Evidence Gathering at Component Boundaries:**
+```
+BOUNDARY 1: Build → Artifact
+- CI builds aura-daemon binary ✅
+- Binary transferred to device ✅
+- Artifact validated (ELF, ARM64) ✅
+VERDICT: Build layer WORKS
+BOUNDARY 2: Artifact → Runtime
+- Binary executes ✅
+- Boot stages run ✅
+- BUT: No config.toml ❌
+- BUT: No model files ❌
+- BUT: No neocortex ❌
+VERDICT: Runtime MISSING ENVIRONMENT
+BOUNDARY 3: Runtime → Services  
+- Telegram not configured ❌
+- LLM inference not available ❌
+- Screen control not available ❌
+VERDICT: Services MISSING DEPENDENCIES
+BOUNDARY 4: Services → User
+- User flow never tested ❌
+- End-to-end never validated ❌
+VERDICT: USER FLOW NOT TESTED
+```
+**Root Cause Classification:**
+```
+SYMPTOM: Daemon starts but does nothing useful
+ROOT CAUSE: Missing runtime environment
+├── Missing: config.toml (Telegram tokens, paths)
+├── Missing: Model files (LLM inference)
+├── Missing: aura-neocortex (LLM server)
+├── Missing: Kotlin app (screen control)
+└── Missing: install.sh execution (creates all above)
+LAYER ASSIGNMENT:
+├── Build Layer: WORKING ✅
+├── Runtime Layer: MISSING ENVIRONMENT ❌
+├── Platform Layer: MISSING KOTLIN APP ❌
+└── Product Layer: NOT TESTED ❌
+```
+**Phase 2: Pattern Analysis**
+**Working Example:**
+- install.sh EXISTS and is comprehensive (1866 lines)
+- install.sh creates config.toml ✅
+- install.sh downloads model ✅
+- install.sh builds binaries ✅
+- install.sh sets up termux-services ✅
+**Broken Pattern:**
+- We tested daemon WITHOUT running install.sh
+- We tested binary IN ISOLATION
+- We didn't test the FULL SYSTEM
+**Differences:**
+- Working: Full installer creates full environment
+- Broken: Daemon runs without environment
+**Phase 3: Hypothesis**
+**HYPOTHESIS 1:** "The daemon doesn't work because we didn't run install.sh"
+- EVIDENCE: config.toml doesn't exist, model not downloaded, neocortex not built
+- TEST: Run install.sh → verify config created, model downloaded, services work
+- VERDICT: LIKELY CORRECT
+**HYPOTHESIS 2:** "The daemon doesn't work because the code is broken"
+- EVIDENCE: 2362 tests pass, boot stages run, binary executes
+- TEST: Already tested - code works, environment missing
+- VERDICT: INCORRECT
+**HYPOTHESIS 3:** "The daemon doesn't work because we need the Kotlin app"
+- EVIDENCE: Screen control requires AccessibilityService
+- TEST: Build Kotlin app → test screen control
+- VERDICT: PARTIALLY CORRECT - needed for full functionality, but Telegram should work without it
+**Phase 4: Implementation**
+**FIX THE ROOT CAUSE, NOT THE SYMPTOM:**
+WRONG FIX: Debug daemon more
+RIGHT FIX: Run install.sh to create environment
+WRONG FIX: Add more logs
+RIGHT FIX: Verify config exists before daemon starts
+WRONG FIX: Fix CI more
+RIGHT FIX: Test the full system end-to-end
+**VERIFICATION BEFORE CLAIMING SUCCESS:**
+We CANNOT claim "AURA works" until:
+1. install.sh runs successfully
+2. config.toml created with Telegram tokens
+3. Model downloaded from HuggingFace
+4. aura-neocortex binary built and tested
+5. Telegram bot responds to commands
+6. LLM inference works (basic query)
+7. End-to-end user flow tested
+, nextThoughtNeeded=true, thoughtNumber=26, totalThoughts=250]
+Thinking: Let me continue with the production-grade analysis and the bold actions needed.
+⚙ sequential-thinking_sequentialthinking [thought=## PRODUCTION-GRADE CODING: WHAT'S ACTUALLY NEEDED
+**Error Handling Assessment:**
+Current State:
+- Daemon gracefully handles missing config.toml (exits with error) ✅
+- Daemon runs in degraded mode when subsystems fail ⚠️
+- Daemon doesn't retry connection to neocortex ❌
+- Daemon doesn't have circuit breaker for LLM calls ❌
+What's Missing:
+```
+PRODUCTION-READY DAEMON NEEDS:
+├── Circuit breaker for neocortex connection
+├── Retry logic with exponential backoff
+├── Graceful degradation when neocortex unavailable
+├── Clear error messages for missing dependencies
+├── Health check endpoint for monitoring
+└── Observability: metrics, logs, alerts
+```
+**Observability Assessment:**
+Current State:
+- tracing logs exist ✅
+- Boot stage logs exist ✅
+- BUT: No metrics endpoint ❌
+- BUT: No health check endpoint ❌
+- BUT: No alerts for critical failures ❌
+What's Missing:
+```
+OBSERVABILITY NEEDS:
+├── /health endpoint (basic liveness)
+├── /metrics endpoint (Prometheus format)
+├── /ready endpoint (are all dependencies ready?)
+├── Alerting rules (config.toml missing, neocortex down)
+└── Structured logging (JSON format for log aggregation)
+```
+**Health Checks Assessment:**
+Current State:
+- Boot stages measure timing ✅
+- Subsystems show present/absent ✅
+- BUT: No runtime health monitoring ❌
+- BUT: No dependency checking ❌
+- BUT: No automatic recovery ❌
+What's Missing:
+```
+HEALTH CHECK NEEDS:
+├── Check: config.toml exists and is valid
+├── Check: model file exists and is readable
+├── Check: neocortex is running and responsive
+├── Check: Telegram polling is active
+├── Action on failure: retry with backoff
+├── Action on failure: clear error message
+└── Action on failure: expose via /health endpoint
+```
+**Fail Safe Assessment:**
+Current State:
+- Daemon exits when config missing ✅
+- Daemon runs in degraded mode when subsystems fail ✅
+- BUT: No defined "safe state" ❌
+- BUT: No recovery procedures ❌
+- BUT: No user notification of degraded state ❌
+What's Missing:
+```
+FAIL-SAFE NEEDS:
+├── Define degraded modes (what works, what doesn't)
+├── Communicate degraded state to user via Telegram
+├── Provide recovery actions to user
+├── Auto-recovery when dependencies restored
+└── Audit log of all failures and recoveries
+```
+**Production Deployment Assessment:**
+Current State:
+- Binary builds for ARM64 ✅
+- Binary transfers to device ✅
+- Binary executes ✅
+- BUT: No rollback procedure ❌
+- BUT: No deployment verification ❌
+- BUT: No smoke tests after deploy ❌
+What's Missing:
+```
+DEPLOYMENT NEEDS:
+├── Pre-deploy checklist (dependencies)
+├── Rollback script (restore previous binary)
+├── Smoke tests (verify basic functionality)
+├── Post-deploy monitoring (24hr watch)
+└── Incident response procedure
+```
+## FIRST PRINCIPLES REASONING: WHAT ACTUALLY MATTERS
+**Deconstruction:**
+**Why do we want AURA to work?**
+- To have an AI assistant on phone
+- To automate tasks
+- To learn and adapt
+- To be proactive
+**What must be true for AURA to work?**
+1. Binary must execute → WE HAVE THIS ✅
+2. LLM must reason → NEEDS llama.cpp + model + neocortex
+3. User must interact → NEEDS Telegram configured
+4. Actions must happen → NEEDS Android integration
+5. System must be reliable → NEEDS production hardening
+**What assumptions have we made?**
+1. "Binary runs = system works" → FALSE, environment needed
+2. "CI passes = ready for users" → FALSE, device testing needed
+3. "Boot stages pass = functionality works" → FALSE, functional tests needed
+4. "We tested = it works" → FALSE, verification needed
+**Reconstruction:**
+**What solutions are actually possible?**
+SOLUTION A: Testing Architecture (Quick Win)
+```
+├── Run install.sh on device
+├── Test Telegram connectivity
+├── Test LLM with stub model
+├── Document what's working
+└── Move to full architecture later
+PRO: Fast, validates current work
+CON: Not production-ready
+```
+SOLUTION B: Full Architecture (Production)
+```
+├── Vendor llama.cpp
+├── Build Kotlin app
+├── Test full system
+├── Production hardening
+└── Release
+PRO: Production-ready
+CON: Weeks/months of work
+```
+SOLUTION C: Hybrid (Recommended)
+```
+├── This week: Run install.sh, test Telegram, document state
+├── This month: Vendor llama.cpp, build Kotlin app
+├── This quarter: Production hardening, release
+└── Continuous: Testing, validation, iteration
+PRO: Quick wins + production path
+CON: Requires sustained effort
+```
+**The First Principle:**
+The first principle is NOT "make AURA work." The first principle is:
+"What must be true for users to trust AURA with their digital life?"
+**Answer:**
+1. It must be reliable (doesn't crash, recovers from failures)
+2. It must be private (data stays on device)
+3. It must be honest (doesn't pretend to work when it doesn't)
+4. It must be transparent (user can see what it's doing)
+5. It must be correct (does what it says it does)
+**Current State vs. First Principles:**
+| First Principle | Current State | Gap |
+|----------------|--------------|-----|
+| Reliable | Binary runs but services don't | Environment missing |
+| Private | 100% on-device by design | ✅ OK |
+| Honest | Claims boot stages pass (misleading) | Needs clarity |
+| Transparent | Logs exist but not structured | Needs observability |
+| Correct | Code works but not tested | Needs verification |
+**The Verdict:**
+We have violated the FIRST PRINCIPLE of "Honest" by claiming progress when the system doesn't work. We must:
+1. Be honest: "Binary works, system needs environment setup"
+2. Be systematic: Follow the enterprise workflow (classify → assign → fix → validate)
+3. Be thorough: Test the full system, not just components
+4. Be production-minded: Add observability, health checks, fail-safe
+**The Bold Action:**
+NOT more debugging. NOT more CI fixes. 
+RUN INSTALL.SH and TEST THE ACTUAL USER FLOW.
+Then document what's working, what's not, and create a proper plan to get to production., nextThoughtNeeded=true, thoughtNumber=27, totalThoughts=250]
+Thinking: Now let me continue with the comprehensive domain analysis and the specific next actions for each team.
+⚙ sequential-thinking_sequentialthinking [thought=## COMPREHENSIVE DOMAIN ANALYSIS: EVERYTHING NEEDED
+### DOMAIN 1: INSTALLATION & DEPLOYMENT
+**Current State:**
+- install.sh EXISTS (1866 lines) ✅
+- All phases IMPLEMENTED ✅
+- SHA256 verification IMPLEMENTED ✅
+- Termux-services support IMPLEMENTED ✅
+- BUT: NEVER RUN FULLY ON DEVICE ❌
+**What Failed:**
+- We tested daemon WITHOUT running install.sh
+- We assumed binary execution = system works
+- We didn't verify the installer actually works
+**What Needs to Happen:**
+```
+TEAM ACTION: Run install.sh on device
+1. Execute: bash install.sh
+2. Verify: config.toml created
+3. Verify: directories created
+4. Verify: model downloaded
+5. Verify: binaries built
+6. Verify: termux-services configured
+7. Document: What worked, what failed
+```
+**Verification Evidence Needed:**
+```
+✅ Config file exists at ~/.config/aura/config.toml
+✅ Model file exists at ~/.local/share/aura/models/
+✅ Database created at ~/.local/share/aura/db/
+✅ Logs directory exists at ~/.local/share/aura/logs/
+✅ Service script exists at $PREFIX/var/service/aura-daemon/run
+```
+### DOMAIN 2: TELEGRAM INTEGRATION
+**Current State:**
+- TelegramEngine CODE EXISTS ✅
+- 43 commands IMPLEMENTED ✅
+- 5-layer security IMPLEMENTED ✅
+- curl_backend IMPLEMENTED for Termux ✅
+- BUT: NOT TESTED WITH REAL TOKENS ❌
+**What Failed:**
+- We built the Telegram code but never tested it
+- We didn't configure the bot token
+- We didn't verify the polling works
+**What Needs to Happen:**
+```
+TEAM ACTION: Test Telegram end-to-end
+1. Run install.sh (creates config.toml with tokens)
+2. Start daemon: aura-daemon --config ~/.config/aura/config.toml
+3. Check logs for: "Telegram polling started"
+4. Send /start via Telegram to @YourBot
+5. Verify response received
+6. Test basic commands: /status, /help
+7. Document: Commands that work, commands that fail
+```
+**Verification Evidence Needed:**
+```
+✅ Bot responds to /start with greeting
+✅ Bot responds to /status with system info
+✅ Bot responds to /help with command list
+✅ Bot authenticates user (whitelist check)
+✅ Bot rate limits excess requests
+✅ Bot logs all attempts (audit trail)
+```
+### DOMAIN 3: LLM INFERENCE
+**Current State:**
+- aura-neocortex CODE EXISTS ✅
+- IPC protocol TYPES DEFINED ✅
+- aura-llama-sys FFI STUBS EXIST ⚠️
+- BUT: llama.cpp NOT VENDORED ❌
+- BUT: FFI BINDINGS OUTDATED ❌
+- BUT: Model NOT DOWNLOADED ❌
+- BUT: neocortex NEVER BUILT/TESTED ❌
+**What Failed:**
+- We designed the neocortex but never built it
+- We didn't vendor llama.cpp
+- We didn't test LLM inference
+**What Needs to Happen:**
+```
+TEAM ACTION 1: Vendor llama.cpp
+1. git submodule add https://github.com/ggml-org/llama.cpp vendor/llama.cpp
+2. cd vendor/llama.cpp && git checkout [stable-commit]
+3. Update aura-llama-sys FFI bindings to batch API
+4. cargo build --target aarch64-linux-android -p aura-llama-sys
+5. Verify: No linker errors
+TEAM ACTION 2: Download model
+1. Run install.sh (Phase 7 does this)
+2. OR: Manual download from HuggingFace
+3. Verify: SHA256 matches expected
+4. Verify: File size matches expected
+TEAM ACTION 3: Build and test neocortex
+1. cargo build --release --target aarch64-linux-android -p aura-neocortex
+2. ./aura-neocortex --model [path-to-model]
+3. Verify: Model loads successfully
+4. Verify: Server starts on localhost:9999
+5. Verify: Can send test inference request
+```
+**Verification Evidence Needed:**
+```
+✅ aura-neocortex binary builds without errors
+✅ Model file exists and SHA256 matches
+✅ neocortex starts and loads model
+✅ IPC socket created (or TCP port bound)
+✅ Can send inference request and get response
+✅ Daemon connects to neocortex
+```
+### DOMAIN 4: ANDROID INTEGRATION
+**Current State:**
+- platform/jni.rs JNI BRIDGE STUB EXISTS ⚠️
+- Notifications IMPLEMENTED ✅
+- Power/thermal monitoring IMPLEMENTED ✅
+- BUT: Kotlin app NOT BUILT ❌
+- BUT: AndroidManifest.xml MISSING ❌
+- BUT: AccessibilityService NOT BUILT ❌
+**What Failed:**
+- We designed the Kotlin integration but never built it
+- The Kotlin app is P0 blocker and we ignored it
+**What Needs to Happen:**
+```
+TEAM ACTION: Build Kotlin shell app
+1. Create android/app/src/main/AndroidManifest.xml
+2. Implement AuraDaemonBridge.kt (JNI host)
+3. Implement AuraForegroundService.kt (service)
+4. Implement AuraAccessibilityService.kt (screen control)
+5. Build APK: ./gradlew assembleDebug
+6. Install on device: adb install app-debug.apk
+7. Test: Start service, verify daemon loads
+```
+**Verification Evidence Needed:**
+```
+✅ APK builds without errors
+✅ APK installs on device
+✅ AccessibilityService can be enabled
+✅ Daemon can read screen state
+✅ Daemon can perform actions (tap, swipe)
+✅ Action verification works (checks screen after action)
+```
+### DOMAIN 5: MEMORY SYSTEM
+**Current State:**
+- 4-tier memory IMPLEMENTED ✅
+- HNSW index IMPLEMENTED ✅
+- Consolidation pipeline IMPLEMENTED ✅
+- BUT: P0 bugs exist ⚠️
+  - semantic.rs: threshold 0.15 too low
+  - episodic.rs: O(n) pattern scan
+  - hnsw.rs: tombstone accumulation
+**What Needs to Happen:**
+```
+TEAM ACTION: Fix P0 memory bugs
+1. semantic.rs: Raise similarity threshold to 0.35
+2. episodic.rs: Replace O(n) with HNSW-based O(log n)
+3. hnsw.rs: Add tombstone compaction pass
+4. Test: cargo test -p aura-daemon memory
+5. Verify: No noisy memories, fast retrieval
+```
+### DOMAIN 6: EXECUTION ENGINE
+**Current State:**
+- ReAct loop IMPLEMENTED ✅
+- 11-stage pipeline IMPLEMENTED ✅
+- ETG cache IMPLEMENTED ✅
+- Policy gate IMPLEMENTED ✅
+- OutcomeBus IMPLEMENTED ✅
+- BUT: Actions STUBBED without Android ❌
+**What Needs to Happen:**
+```
+TEAM ACTION: Test execution engine
+1. With neocortex running, send complex query
+2. Verify: ReAct loop executes
+3. Verify: Action selected
+4. Verify: 11-stage pipeline runs
+5. Verify: Result returned
+6. Document: What actions work, what fails
+```
+### DOMAIN 7: ARC (PROACTIVE ENGINE)
+**Current State:**
+- Life domains IMPLEMENTED ✅
+- Context modes IMPLEMENTED ✅
+- Initiative budget IMPLEMENTED ✅
+- ForestGuardian PARTIAL ⚠️
+- BUT: Triggers INCOMPLETE ⚠️
+- BUT: NOT TESTED with user data ❌
+**What Needs to Happen:**
+```
+TEAM ACTION: Test proactive engine
+1. Use AURA for 1 week (generate data)
+2. Check: Life domain scores update
+3. Check: Context mode transitions work
+4. Check: Initiative budget tracking
+5. Check: ForestGuardian detects doomscrolling
+6. Check: Proactive suggestions appear
+7. Document: What triggers work, what doesn't
+```
+### DOMAIN 8: CI/CD PIPELINE
+**Current State:**
+- CI WORKFLOWS EXIST ✅
+- SBOM generation IMPLEMENTED ✅
+- SLSA provenance IMPLEMENTED ✅
+- Recent fixes APPLIED ✅
+  - --bin flag added
+  - artifact path fixed
+  - curl-backend enabled
+**What's Working:**
+```
+✅ Binary builds for ARM64 Android
+✅ Artifact path correct (target/)
+✅ Feature flag curl-backend works
+✅ NDK setup works
+✅ SBOM generated
+✅ SLSA provenance attested
+```
+**What's Missing:**
+```
+❌ No device validation in CI
+❌ No smoke tests after deploy
+❌ No rollback automation
+```
+**What Needs to Happen:**
+```
+TEAM ACTION: Add device validation to CI
+1. Add job: Download artifact from release
+2. Add job: Deploy to test device
+3. Add job: Run smoke tests (boot, config, telegram)
+4. Add job: Report results to PR
+5. Add: rollback script to release workflow
+```
+### DOMAIN 9: TESTING & VALIDATION
+**Current State:**
+- 2362 unit tests PASSING ✅
+- Integration tests EXIST ✅
+- Device testing guides EXIST ✅
+- BUT: E2E tests NOT BUILT ❌
+- BUT: Device matrix NOT TESTED ❌
+- BUT: Battery drain NOT VALIDATED ❌
+**What Needs to Happen:**
+```
+TEAM ACTION 1: Build E2E test suite
+1. Install flow test
+2. Telegram command tests
+3. Memory recall tests
+4. Proactive suggestion tests
+5. Error recovery tests
+TEAM ACTION 2: Test on device matrix
+1. Moto G45 5G (current) - API 35
+2. Test on Android API 26 (minimum)
+3. Test on Android API 30 (mid-range)
+4. Test on different RAM sizes (4GB, 6GB, 8GB)
+TEAM ACTION 3: Validate battery drain
+1. Run AURA for 24 hours
+2. Measure battery drain
+3. Target: < 5%/hr idle drain
+4. Optimize if needed
+```
+### DOMAIN 10: DOCUMENTATION
+**Current State:**
+- Architecture docs COMPREHENSIVE ✅
+- ADRs EXIST ✅
+- Testing guides EXIST ✅
+- BUT: Production status OUTDATED ❌
+- BUT: No runbook for operations ❌
+- BUT: No incident response guide ❌
+**What Needs to Happen:**
+```
+TEAM ACTION: Update documentation
+1. Update AURA-V4-PRODUCTION-STATUS.md
+2. Add OPERATIONS-RUNBOOK.md
+3. Add INCIDENT-RESPONSE.md
+4. Add DEPLOYMENT-CHECKLIST.md
+5. Add ONCALL-PROCEDURES.md
+```
+## THE BOLD ACTION PLAN
+**THIS WEEK:**
+1. Run install.sh on device ✅
+2. Test Telegram with real tokens ✅
+3. Document what's working ✅
+4. Document what's failing ✅
+**THIS MONTH:**
+1. Vendor llama.cpp
+2. Build and test neocortex
+3. Build Kotlin shell app
+4. Test full architecture
+**THIS QUARTER:**
+1. Production hardening
+2. E2E test suite
+3. Device matrix testing
+4. Battery validation
+5. Release v4.0.0
+## THE ENTERPRISE VERDICT
+**What We Have:**
+- Solid architecture ✅
+- Working binary ✅
+- Comprehensive code ✅
+- 2362 passing tests ✅
+- CI pipeline working ✅
+**What We DON'T Have:**
+- Working system ❌ (needs install.sh)
+- LLM inference ❌ (needs llama.cpp)
+- Android control ❌ (needs Kotlin app)
+- Tested user flow ❌ (needs E2E tests)
+**The Real Work:**
+NOT more debugging. NOT more CI fixes. NOT more analysis.
+SETUP THE ENVIRONMENT AND TEST THE USER FLOW.
+Then build the missing pieces (llama.cpp, Kotlin app) systematically.
+Then test end-to-end.
+Then harden for production.
+THEN release., nextThoughtNeeded=true, thoughtNumber=28, totalThoughts=250]
+and yes plz understand we are not making any apk liek a playstore app we are making a perfect one curl installing just like openclaws and others but with auras deisgn principals repspects and fully pvt save secured installed via termuix 
+12:03 AM
+Thinking: The user is clarifying that AURA is NOT an APK/Play Store app - it's designed to be installed via Termux, just like OpenClaw and similar tools. This is a critical architectural understanding.
+Let me understand this correctly:
+- AURA is NOT an Android APK
+- AURA is installed via Termux (Linux environment on Android)
+- It's like OpenClaw - curl/wget install script
+- No Play Store, no APK, no AndroidManifest.xml needed
+- The Kotlin app mentioned in docs was a DIFFERENT approach (APK mode) but the PRIMARY approach is Termux installation
+This changes everything about my analysis. Let me re-think this with the correct understanding.
+I understand now - this is a CRITICAL architectural clarification. Let me re-analyze with the correct understanding.
+⚙ sequential-thinking_sequentialthinking [thought=## CRITICAL CORRECTION: AURA IS NOT AN APK
+**What I misunderstood:**
+- I assumed AURA needed a Kotlin Android app
+- I assumed AndroidManifest.xml was needed
+- I assumed APK build was the deployment method
+- I assumed AccessibilityService required APK installation
+**The ACTUAL Architecture:**
+- AURA is installed via Termux (like OpenClaw)
+- It's a Linux binary running in Termux environment
+- NO APK needed, NO Play Store, NO Android app
+- The Kotlin approach was ALTERNATIVE, not PRIMARY
+- The PRIMARY path is: Termux → install.sh → binary runs
+**What This Means:**
+```
+WRONG ASSUMPTION:
+┌─────────────────────────────────────────────────────────┐
+│  AURA = Android APK                                    │
+│  ├── AndroidManifest.xml needed                        │
+│  ├── Kotlin shell app needed                          │
+│  ├── AccessibilityService via APK                      │
+│  └── Installed like Play Store app                    │
+└─────────────────────────────────────────────────────────┘
+CORRECT ARCHITECTURE:
+┌─────────────────────────────────────────────────────────┐
+│  AURA = Termux Linux binary (like OpenClaw)           │
+│  ├── Installed via: curl/wget + bash install.sh     │
+│  ├── Runs in Termux Linux environment                │
+│  ├── No APK, no Play Store                           │
+│  ├── Binary: aura-daemon (ARM64 Linux)              │
+│  └── Binary: aura-neocortex (ARM64 Linux)           │
+└─────────────────────────────────────────────────────────┘
+```
+**Why This Changes Everything:**
+1. **NO Kotlin app needed for Termux installation**
+   - The Kotlin app was for APK mode (alternative)
+   - The PRIMARY path is Termux + binary
+   - AccessibilityService can STILL work via Termux scripts
+2. **The Architecture IS Actually Simpler:**
+   ```
+   Current Path (Termux):
+   Termux → install.sh → aura-daemon + aura-neocortex → Telegram
+   ```
+3. **What's Actually Missing:**
+   - install.sh needs to be RUN
+   - Model needs to be DOWNLOADED
+   - neocortex needs to be BUILT and TESTED
+   - Telegram needs to be CONFIGURED
+   
+   What was NOT needed:
+   - Kotlin Android app ❌
+   - AndroidManifest.xml ❌
+   - APK build ❌
+4. **OpenClaw Comparison:**
+   OpenClaw installs via:
+   ```
+   curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
+   ```
+   
+   AURA installs via:
+   ```
+   bash install.sh
+   ```
+   
+   Both are Linux binaries running in Termux.
+**The Practical Reality:**
+On Moto G45 5G with Termux:
+1. User opens Termux
+2. User runs: `bash install.sh`
+3. install.sh installs packages, Rust, downloads model
+4. install.sh builds aura-daemon + aura-neocortex
+5. install.sh creates config.toml with Telegram tokens
+6. User starts service: `aura-daemon`
+7. AURA responds via Telegram
+**NO APK. NO PLAY STORE. NO KOTLIN APP.**
+**This is why the current binary WORKS in principle - it's a Linux binary in Termux!**
+**What This Means for Testing:**
+The binary we transferred (`aura-daemon`) should actually work on Termux because:
+- It's compiled for ARM64 Linux
+- Termux provides Linux environment
+- The daemon runs as a Linux process
+- Telegram polling works via Termux network
+**The Missing Parts Were NOT the Kotlin app:**
+1. ❌ config.toml (created by install.sh)
+2. ❌ Model files (downloaded by install.sh)
+3. ❌ neocortex binary (built by install.sh)
+4. ❌ Telegram configured (setup by install.sh)
+**NOT Missing:**
+- Kotlin app ❌ (NOT needed for Termux mode)
+- AndroidManifest.xml ❌ (NOT needed for Termux mode)
+- APK build ❌ (NOT needed for Termux mode)
+**THE REAL ISSUE:**
+We tested the binary WITHOUT the environment setup that install.sh provides. The binary is CORRECT, but it needs:
+1. config.toml with Telegram tokens
+2. Model files for LLM inference
+3. aura-neocortex binary for LLM serving
+**This is like testing a web server binary without the config file and database.**
+**The Fix:**
+Run install.sh → creates environment → daemon works.
+NOT "build Kotlin app" → that's for APK mode which is NOT the primary path.
+, nextThoughtNeeded=true, thoughtNumber=29, totalThoughts=250]
+Thinking: Good - now I understand the correct architecture. Let me continue with the sequential thinking to build a comprehensive plan based on this understanding.
+⚙ sequential-thinking_sequentialthinking [thought=## REVISED UNDERSTANDING: TERMUX-FIRST ARCHITECTURE
+**How OpenClaw Works (The Model):**
+```
+1. User installs via: curl + bash install script
+2. Script installs dependencies (Node.js, etc.)
+3. Script downloads binary/configs
+4. Script sets up service (termux-services)
+5. User talks to bot via Telegram
+6. Bot controls phone via AccessibilityService running in Termux context
+```
+**How AURA Should Work (The Same Model):**
+```
+1. User installs via: bash install.sh
+2. Script installs dependencies (Rust, git, curl, etc.)
+3. Script downloads model from HuggingFace
+4. Script builds aura-daemon + aura-neocortex
+5. Script creates config.toml with Telegram tokens
+6. Script sets up termux-services
+7. User talks to AURA via Telegram
+8. AURA controls phone via accessibility scripts/services
+```
+**What This Means About AccessibilityService:**
+Even in Termux mode, AURA needs to:
+- Read screen content
+- Perform actions (tap, swipe, type)
+- This requires Android accessibility
+**BUT How It Works Without APK:**
+Options for AccessibilityService without APK:
+1. **AccessibilityService via Termux** - Android allows enabling accessibility for Termux
+2. **AccessibilityService via separate minimal APK** - Small APK just for accessibility
+3. **Script-based automation** - input commands via Android debugging
+The key insight: The binary runs in Termux, but accessibility needs Android-level integration. This is where OpenClaw uses their APK.
+**The Two Modes AURA Supports:**
+Mode 1: Termux-Only (Current)
+- Binary runs in Termux
+- Telegram works (no screen control)
+- LLM inference works (when neocortex + model ready)
+- Full features except phone control
+Mode 2: Termux + Accessibility (Production)
+- Binary runs in Termux
+- Accessibility service enabled (APK or Termux-based)
+- Telegram works
+- Screen control works
+- Full features including phone control
+**The Practical Testing Path:**
+For THIS WEEK's testing:
+```
+Phase 1: Termux-Only Testing
+├── Run install.sh (creates config, downloads model, builds neocortex)
+├── Test Telegram connectivity (verify bot responds)
+├── Test LLM inference (verify neocortex works)
+├── Test memory system (verify recall works)
+└── Document: What works in termux-only mode
+Phase 2: Accessibility Testing  
+├── Build minimal accessibility APK (if needed)
+├── Enable accessibility for AURA
+├── Test screen reading
+├── Test action execution (tap, swipe)
+└── Document: Screen control works
+```
+**The OpenClaw Comparison (Honest):**
+What OpenClaw Does:
+- Installs via script ✅
+- Telegram bot ✅
+- AccessibilityService for phone control ✅
+- LLM integration (cloud, not local) ⚠️
+- Learning system ⚠️
+What AURA Does Differently:
+- Installs via script ✅ (same)
+- Telegram bot ✅ (same)
+- 100% LOCAL LLM (no cloud) ✅
+- On-device memory + learning ✅
+- Privacy-first architecture ✅
+**Why AURA is Better Than OpenClaw:**
+1. **Privacy**: All data stays on device
+2. **Learning**: 4-tier memory + ARC
+3. **No cloud dependency**: Works offline
+4. **Ethics engine**: TRUTH protocol, anti-sycophancy
+5. **Proactive**: ARC engine with ForestGuardian
+**The Real Competitive Advantage:**
+Not "same as OpenClaw" but "OpenClaw philosophy + LOCAL AI + Learning + Ethics"
+**The Bold Path Forward:**
+Week 1: Get Termux-Only Working
+```
+1. Run install.sh on device
+2. Verify config.toml created
+3. Verify model downloaded
+4. Verify neocortex built
+5. Test Telegram bot responds
+6. Test LLM inference (basic query)
+7. Document results
+```
+Week 2: Add Accessibility
+```
+1. Build minimal accessibility APK OR
+2. Enable Termux accessibility mode
+3. Test screen reading
+4. Test action execution
+5. Document results
+```
+Week 3-4: Full Testing
+```
+1. End-to-end user flow test
+2. Memory system test
+3. Proactive engine test
+4. Ethics engine test
+5. Performance validation
+```
+Week 5-8: Production Hardening
+```
+1. Battery drain test
+2. Long-running stability
+3. Error recovery
+4. Documentation
+5. Release v4.0.0
+```
+**The Honest Verdict:**
+AURA IS like OpenClaw in deployment method (Termux script install), but DIFFERENT in:
+- 100% local AI (no cloud)
+- Learning system (4-tier memory)
+- Ethics engine (TRUTH protocol)
+- Proactive engine (ARC)
+The binary we have IS CORRECT. The issue is we tested it WITHOUT the environment that install.sh creates.
+**The Fix:**
+Run install.sh. Test Telegram. Verify LLM works. Then add accessibility for full phone control.  . SO WHAT I WOULD SAY IS NOW BEGIN LIKE TO MAKE A PROPER COMBINGING OR LIKE GETTING KNOWLEDGE FROM ALL THE INFOMRATIONS AND DETAILS YOU KNOW THE PAST WORKS ALSO DON OR I.E. FORM THE CURRENT PROJECT OR STATUS THAT WAS DONE NOW FOR SHIFT WE CANT JUMP WE WILL NEED SAME WE OPERATED FOR THINKIGN SAME THINKING FOR NOW PLANNING LIKE NOT RECKLESS TO JUMP AND BUILD BUT REALLY SYSTENATCIS SMART SOLUTIOSN IDEAS FOR HOW WE GONNA OPERATE FROM NOW AND ON WHICH THINGS TO MAKE AURA REALLY NOT JUST WORK AS DEVS OR TESTERS WANT BUT HOW THE WORLD NEEDS IT

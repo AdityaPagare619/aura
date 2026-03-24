@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE suite SYSTEM "http://testng.org/testng-1.0.dtd">
+<suite name="AURA v4 Device Test Suite" parallel="false" verbose="1">
+    <test name="AURA F001 Smoke Test">
+        <classes>
+            <class name="com.aura.test.AuraSmokeTest"/>
+        </classes>
+    </test>
+</suite>

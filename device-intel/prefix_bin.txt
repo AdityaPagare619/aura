@@ -1,0 +1,75 @@
+-rwx------.  1 u0_a475 u0_a475  1354424 Feb 14 01:42 cargo-clippy
+-rwx------.  1 u0_a475 u0_a475  1094864 Feb 14 01:42 cargo-fmt
+lrwxrwxrwx.  1 u0_a475 u0_a475       15 Feb 27 01:00 llvm-addr2line -> llvm-symbolizer
+-rwx------.  1 u0_a475 u0_a475    71440 Dec 20 14:14 llvm-ar
+-rwx------.  1 u0_a475 u0_a475    27888 Dec 20 14:14 llvm-as
+-rwx------.  1 u0_a475 u0_a475    24192 Dec 20 14:14 llvm-bcanalyzer
+lrwxrwxrwx.  1 u0_a475 u0_a475       12 Feb 27 01:00 llvm-bitcode-strip -> llvm-objcopy
+-rwx------.  1 u0_a475 u0_a475   104816 Dec 20 14:14 llvm-c-test
+-rwx------.  1 u0_a475 u0_a475    26432 Dec 20 14:14 llvm-cat
+-rwx------.  1 u0_a475 u0_a475   105000 Dec 20 14:14 llvm-cfi-verify
+-rwx------.  1 u0_a475 u0_a475    32688 Dec 20 14:14 llvm-cgdata
+-rwx------.  1 u0_a475 u0_a475   666080 Dec 20 14:14 llvm-config
+-rwx------.  1 u0_a475 u0_a475   429736 Dec 20 14:14 llvm-cov
+-rwx------.  1 u0_a475 u0_a475    24128 Dec 20 14:14 llvm-ctxprof-util
+-rwx------.  1 u0_a475 u0_a475    25840 Dec 20 14:14 llvm-cvtres
+-rwx------.  1 u0_a475 u0_a475    55896 Dec 20 14:14 llvm-cxxdump
+-rwx------.  1 u0_a475 u0_a475    21176 Dec 20 14:14 llvm-cxxfilt
+-rwx------.  1 u0_a475 u0_a475    27600 Dec 20 14:14 llvm-cxxmap
+-rwx------.  1 u0_a475 u0_a475   183048 Dec 20 14:14 llvm-debuginfo-analyzer
+-rwx------.  1 u0_a475 u0_a475    84776 Dec 20 14:14 llvm-debuginfod
+-rwx------.  1 u0_a475 u0_a475    48856 Dec 20 14:14 llvm-debuginfod-find
+-rwx------.  1 u0_a475 u0_a475    63680 Dec 20 14:14 llvm-diff
+-rwx------.  1 u0_a475 u0_a475    40032 Dec 20 14:14 llvm-dis
+lrwxrwxrwx.  1 u0_a475 u0_a475        7 Feb 27 01:00 llvm-dlltool -> llvm-ar
+-rwx------.  1 u0_a475 u0_a475   196576 Dec 20 14:14 llvm-dwarfdump
+-rwx------.  1 u0_a475 u0_a475   285392 Dec 20 14:14 llvm-dwarfutil
+-rwx------.  1 u0_a475 u0_a475    52152 Dec 20 14:14 llvm-dwp
+-rwx------.  1 u0_a475 u0_a475 55681608 Dec 20 14:14 llvm-exegesis
+-rwx------.  1 u0_a475 u0_a475    71008 Dec 20 14:14 llvm-extract
+-rwx------.  1 u0_a475 u0_a475    70992 Dec 20 14:14 llvm-gsymutil
+-rwx------.  1 u0_a475 u0_a475    58888 Dec 20 14:14 llvm-ifs
+lrwxrwxrwx.  1 u0_a475 u0_a475       12 Feb 27 01:00 llvm-install-name-tool -> llvm-objcopy
+-rwx------.  1 u0_a475 u0_a475   332800 Dec 20 14:14 llvm-jitlink
+lrwxrwxrwx.  1 u0_a475 u0_a475        7 Feb 27 01:00 llvm-lib -> llvm-ar
+-rwx------.  1 u0_a475 u0_a475    83072 Dec 20 14:14 llvm-libtool-darwin
+-rwx------.  1 u0_a475 u0_a475    64464 Dec 20 14:14 llvm-link
+-rwx------.  1 u0_a475 u0_a475    69864 Dec 20 14:14 llvm-lipo
+-rwx------.  1 u0_a475 u0_a475   135792 Dec 20 14:14 llvm-lto
+-rwx------.  1 u0_a475 u0_a475   128256 Dec 20 14:14 llvm-lto2
+-rwx------.  1 u0_a475 u0_a475    98144 Dec 20 14:14 llvm-mc
+-rwx------.  1 u0_a475 u0_a475   255408 Dec 20 14:14 llvm-mca
+-rwx------.  1 u0_a475 u0_a475    54360 Dec 20 14:14 llvm-ml
+lrwxrwxrwx.  1 u0_a475 u0_a475        7 Feb 27 01:00 llvm-ml64 -> llvm-ml
+-rwx------.  1 u0_a475 u0_a475    23680 Dec 20 14:14 llvm-modextract
+-rwx------.  1 u0_a475 u0_a475    21928 Dec 20 14:14 llvm-mt
+-rwx------.  1 u0_a475 u0_a475   133016 Dec 20 14:14 llvm-nm
+-rwx------.  1 u0_a475 u0_a475   209368 Dec 20 14:14 llvm-objcopy
+-rwx------.  1 u0_a475 u0_a475   826816 Dec 20 14:14 llvm-objdump
+-rwx------.  1 u0_a475 u0_a475    43712 Dec 20 14:14 llvm-opt-report
+lrwxrwxrwx.  1 u0_a475 u0_a475       12 Feb 27 01:00 llvm-otool -> llvm-objdump
+-rwx------.  1 u0_a475 u0_a475   811288 Dec 20 14:14 llvm-pdbutil
+-rwx------.  1 u0_a475 u0_a475   418576 Dec 20 14:14 llvm-profdata
+-rwx------.  1 u0_a475 u0_a475   368400 Dec 20 14:14 llvm-profgen
+lrwxrwxrwx.  1 u0_a475 u0_a475        7 Feb 27 01:00 llvm-ranlib -> llvm-ar
+-rwx------.  1 u0_a475 u0_a475   192480 Dec 20 14:14 llvm-rc
+lrwxrwxrwx.  1 u0_a475 u0_a475       12 Feb 27 01:00 llvm-readelf -> llvm-readobj
+-rwx------.  1 u0_a475 u0_a475  1734360 Dec 20 14:14 llvm-readobj
+-rwx------.  1 u0_a475 u0_a475   116072 Dec 20 14:14 llvm-readtapi
+-rwx------.  1 u0_a475 u0_a475   307272 Dec 20 14:14 llvm-reduce
+-rwx------.  1 u0_a475 u0_a475   164784 Dec 20 14:14 llvm-remarkutil
+-rwx------.  1 u0_a475 u0_a475   111256 Dec 20 14:14 llvm-rtdyld
+-rwx------.  1 u0_a475 u0_a475    21928 Dec 20 14:14 llvm-sim
+-rwx------.  1 u0_a475 u0_a475    62232 Dec 20 14:14 llvm-size
+-rwx------.  1 u0_a475 u0_a475    36712 Dec 20 14:14 llvm-split
+-rwx------.  1 u0_a475 u0_a475    58920 Dec 20 14:14 llvm-stress
+-rwx------.  1 u0_a475 u0_a475    26320 Dec 20 14:14 llvm-strings
+lrwxrwxrwx.  1 u0_a475 u0_a475       12 Feb 27 01:00 llvm-strip -> llvm-objcopy
+-rwx------.  1 u0_a475 u0_a475    81328 Dec 20 14:14 llvm-symbolizer
+-rwx------.  1 u0_a475 u0_a475  3980584 Dec 20 14:14 llvm-tblgen
+-rwx------.  1 u0_a475 u0_a475    33976 Dec 20 14:14 llvm-tli-checker
+-rwx------.  1 u0_a475 u0_a475    28928 Dec 20 14:14 llvm-undname
+lrwxrwxrwx.  1 u0_a475 u0_a475        7 Feb 27 01:00 llvm-windres -> llvm-rc
+-rwx------.  1 u0_a475 u0_a475   425896 Dec 20 14:14 llvm-xray
+/data/data/com.termux/files/usr/bin/cargo-clippy
+/data/data/com.termux/files/usr/bin/cargo-fmt

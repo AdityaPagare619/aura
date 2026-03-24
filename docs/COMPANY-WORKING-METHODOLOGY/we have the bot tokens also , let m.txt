@@ -1,0 +1,728 @@
+we have the bot tokens also , let me give direct token for tele realted like the previsou like all till the release 8 had really good installations flow i repeat not script not structures but the user flow for user not system wise i repeat like everything was perfectly installing things here ok many things done those things actually works fine for the arhcitecture of aura main core and sources , all codebase for functionality for future also keep it with then as we still in testing modes but the repeat the flow like model we gave some deafult models by us though users has freedom to choose fill models as per them but still we have by default models from the hugging face itself rigth like then also by analyzing the users stats and calualcions it suggested gave options then all qwen btwn bec they were perfect fit so lets say i choosed 3 that model installaed from the hugging face user should not need id for default giveing that would be bad user experence if you giving anything opensource and by default your choice also there but you know so after that happening filling tele token for bot which will be the main communication platform not like way too much complex but a communiations platform where users will chat with a proactive aura and also like with cmds and detailed control centre also for aura to start or shutdown and many litreally were also the telegram user id and then automatucally things were setting up so i really think that now infra is good but the main core architectue missing like teams has lost sights over compleetly and note : We wont get into the mess of not instllating or any issues but go really systeamctially so always noting in depth that what problems was and how they were fixed why what researches were done all is neccesary to. BUT NOW MOST IMPORTANT IS THE ARHICTCRTUE AND THE SYSTEM ITSELF THE CORE SHICTEIFC AND KNOWLEDGE BASED WORKFLOWS WITH WITH THE SYSTEM FIT ANALYSIS IS NOT NEEDING BUT THE AURA FIT NEEDING SEE THERE ARE SOME REALLY OLD DOC WHICH WAS OLD MANY THINGS SINCE HAS CHANGED BUT HONESTLY THAT DOC SHOULD BE READ TOO FOR GETTING NOW SIGHT OF AURA WHAT AURA WAS SUPPOSED TO BE AT WORKING HOW IT WORKED OR OPERATED HOW IT WAS SUPPOSED TO BE PRO ACTIVE IN NATURE AND MUCH MORE ! SO THERE ARE THREE P SET BUT I WOULD SAY THEY ARE ONLY BEGGING OF WHAT OUTPUTS WERE SAWN ON DEVICE SO SEE DEVICE IS NOT FOR MAKING AURA FOR THAT DEVICE SO UNDERSTAND THESE WHY WE USE DEVICES FOR TESTING BUT WHAT WE GET FROM THEM IS NOT THE AT MOTO I DID THESE AND FIXED THESE BUT UNDERTSAINDG THE SYSTEMS FLOWS THE ARCHITECTURAL OPERATIONS AND FLOWS AND MUCH MORE ARE THERE LIKE I CANT EXPRESS EVERY SINGLE AT MY SMALL BREATH BUT YOU CAN. SO HONESTLY I WANNA say im not sad or like im happy that we had shown progress but see here these <?xml version="1.0" encoding="UTF-8"?>
+
+<enterprise_operating_system>
+
+  <!-- ============================= -->
+  <!-- 1. CORE TRUTH -->
+  <!-- ============================= -->
+  <foundation>
+
+    <principle id="P1">
+      Software is not built to “work”.
+      Software is built to behave correctly under unknown conditions.
+    </principle>
+
+    <principle id="P2">
+      Infinite environments exist.
+      We never code for all environments.
+      We define contracts that environments must satisfy.
+    </principle>
+
+    <principle id="P3">
+      Bugs are not failures.
+      Repeated bugs without system improvement are failures.
+    </principle>
+
+    <principle id="P4">
+      If a system requires manual fixing repeatedly,
+      the system design is incomplete.
+    </principle>
+
+  </foundation>
+
+
+  <!-- ============================= -->
+  <!-- 2. HOW ENTERPRISES PREVENT CHAOS -->
+  <!-- ============================= -->
+  <control_systems>
+
+    <system name="Contract-Based Engineering">
+      <description>
+        Code is written against defined contracts, not devices or assumptions.
+      </description>
+
+      <example>
+        Android >= API 24, arm64, bionic libc
+      </example>
+
+      <impact>
+        Eliminates need to handle infinite device variations.
+      </impact>
+    </system>
+
+    <system name="Reproducible Builds">
+      <description>
+        Every binary must be identical regardless of who builds it.
+      </description>
+
+      <tools>
+        <item>Locked toolchains</item>
+        <item>Deterministic flags</item>
+        <item>Containerized builds (Docker/CI)</item>
+      </tools>
+    </system>
+
+    <system name="Validation Gates">
+      <description>
+        Code is not trusted until validated.
+      </description>
+
+      <levels>
+        <level>Compile success ≠ Valid</level>
+        <level>Unit tests ≠ Valid</level>
+        <level>Runtime on real environment = Valid</level>
+      </levels>
+    </system>
+
+    <system name="Failure Taxonomy">
+      <description>
+        Every failure is classified into a known category.
+      </description>
+
+      <goal>
+        Same failure is never debugged twice.
+      </goal>
+    </system>
+
+  </control_systems>
+
+
+  <!-- ============================= -->
+  <!-- 3. HOW ENTERPRISE TEAMS THINK -->
+  <!-- ============================= -->
+  <thinking_model>
+
+    <mode name="Local Debugging (Incorrect)">
+      <pattern>
+        Fix → Retry → Fail → Repeat
+      </pattern>
+    </mode>
+
+    <mode name="System Thinking (Correct)">
+      <pattern>
+        Classify → Assign Layer → Fix Root → Validate → Prevent recurrence
+      </pattern>
+    </mode>
+
+    <rule>
+      If the same class of failure appears twice,
+      STOP and redesign the system.
+    </rule>
+
+  </thinking_model>
+
+
+  <!-- ============================= -->
+  <!-- 4. HOW WORK IS STRUCTURED -->
+  <!-- ============================= -->
+  <organization>
+
+    <principle>
+      Work is divided by SYSTEM LAYERS, not features.
+    </principle>
+
+    <layers>
+
+      <layer name="Core Logic">
+        Only business logic.
+        No platform knowledge.
+      </layer>
+
+      <layer name="Platform">
+        Handles OS, ABI, runtime behavior.
+      </layer>
+
+      <layer name="Build System">
+        Responsible for producing valid artifacts.
+      </layer>
+
+      <layer name="Validation">
+        Decides if output is acceptable.
+      </layer>
+
+      <layer name="Release">
+        Ships only validated artifacts.
+      </layer>
+
+    </layers>
+
+    <rule>
+      No layer fixes another layer’s problem.
+    </rule>
+
+  </organization>
+
+
+  <!-- ============================= -->
+  <!-- 5. HOW ENTERPRISES HANDLE "INFINITE USERS" -->
+  <!-- ============================= -->
+  <scalability_model>
+
+    <principle>
+      We do NOT handle every user case.
+      We handle classes of environments.
+    </principle>
+
+    <method name="Representative Sampling">
+      <description>
+        Test on selected environments that represent the majority.
+      </description>
+
+      <example>
+        3 OS versions, 3 hardware types, 2 memory tiers
+      </example>
+    </method>
+
+    <method name="Strict Contract Enforcement">
+      <description>
+        If environment violates contract → fail clearly.
+      </description>
+    </method>
+
+  </scalability_model>
+
+
+  <!-- ============================= -->
+  <!-- 6. HOW CODE QUALITY IS MAINTAINED -->
+  <!-- ============================= -->
+  <code_quality>
+
+    <principle>
+      Code is not written to pass.
+      Code is written to be predictable.
+    </principle>
+
+    <rules>
+      <rule>No hidden assumptions</rule>
+      <rule>No environment-dependent logic</rule>
+      <rule>No silent failures</rule>
+      <rule>Every failure must produce signal</rule>
+    </rules>
+
+  </code_quality>
+
+
+  <!-- ============================= -->
+  <!-- 7. HOW DEVOPS ACTUALLY WORKS -->
+  <!-- ============================= -->
+  <devops_model>
+
+    <principle>
+      DevOps is not automation.
+      DevOps is enforcement of correctness.
+    </principle>
+
+    <pipeline>
+
+      <stage>Build</stage>
+      <stage>Validate Binary</stage>
+      <stage>Run on Target Environment</stage>
+      <stage>Collect Logs</stage>
+      <stage>Classify Outcome</stage>
+      <stage>Release or Reject</stage>
+
+    </pipeline>
+
+    <rule>
+      If any stage fails → pipeline stops.
+    </rule>
+
+  </devops_model>
+
+
+  <!-- ============================= -->
+  <!-- 8. HOW FEATURES ARE HANDLED -->
+  <!-- ============================= -->
+  <feature_policy>
+
+    <principle>
+      Features are NEVER removed to fix bugs.
+    </principle>
+
+    <correct_approach>
+      Fix underlying system so feature works reliably.
+    </correct_approach>
+
+    <anti_pattern>
+      Removing functionality to “make system stable”.
+    </anti_pattern>
+
+  </feature_policy>
+
+
+  <!-- ============================= -->
+  <!-- 9. HOW TEAMS RESEARCH -->
+  <!-- ============================= -->
+  <research_model>
+
+    <principle>
+      Engineering requires continuous external learning.
+    </principle>
+
+    <methods>
+      <method>Read open-source repos</method>
+      <method>Study system design docs</method>
+      <method>Analyze failures deeply</method>
+      <method>Compare multiple approaches</method>
+    </methods>
+
+    <rule>
+      If team is not learning, system will degrade over time.
+    </rule>
+
+  </research_model>
+
+
+  <!-- ============================= -->
+  <!-- 10. HUMAN + AI COLLABORATION -->
+  <!-- ============================= -->
+  <execution_model>
+
+    <human_role>
+      Executes on real device.
+      Observes real-world behavior.
+    </human_role>
+
+    <ai_role>
+      Guides reasoning.
+      Prevents blind execution.
+      Identifies patterns.
+    </ai_role>
+
+    <critical_rule>
+      AI instructions are not blindly executed.
+      They are validated against system principles.
+    </critical_rule>
+
+  </execution_model>
+
+
+  <!-- ============================= -->
+  <!-- 11. FINAL TRANSFORMATION -->
+  <!-- ============================= -->
+  <transformation>
+
+    <from>
+      <state>Fixing bugs manually</state>
+      <state>Feature-driven chaos</state>
+    </from>
+
+    <to>
+      <state>System-driven engineering</state>
+      <state>Predictable, validated execution</state>
+    </to>
+
+  </transformation>
+
+</enterprise_operating_system> and infra and devops you have those 5 main docs ethics of yours still know that <?xml version="1.0" encoding="UTF-8"?>
+<aura_release_operating_guide>
+
+  <purpose>
+    Build, validate, release, observe, and maintain a large codebase without confusing "CI passed" with "system is correct".
+  </purpose>
+
+  <core_principles>
+    <principle id="P1">
+      CI is a signal, not truth.
+      A build is only valid after it proves itself on the real target environment.
+    </principle>
+
+    <principle id="P2">
+      Requirements describe what must be true.
+      Needs describe why the product exists.
+      Teams must never confuse the two.
+    </principle>
+
+    <principle id="P3">
+      Every layer owns its own failure class.
+      Build, runtime, infra, product, and release must not blame each other by default.
+    </principle>
+
+    <principle id="P4">
+      Manual fixes are allowed only as diagnostics.
+      Permanent reliability comes from contracts, validation gates, and observability.
+    </principle>
+
+    <principle id="P5">
+      Do not remove features to hide instability.
+      Fix the layer that violates the contract.
+    </principle>
+  </core_principles>
+
+  <operating_model>
+    <model name="need_vs_requirement">
+      <needs>
+        <item>Users need the product to work on real devices.</item>
+        <item>Teams need repeatable diagnostics and clear ownership.</item>
+        <item>Release managers need a binary truth gate.</item>
+      </needs>
+
+      <requirements>
+        <item>Architecture must define supported targets.</item>
+        <item>Builds must be reproducible.</item>
+        <item>Runtime must report failure class, not just crash.</item>
+        <item>Releases must require validation evidence.</item>
+      </requirements>
+    </model>
+
+    <model name="layered_ownership">
+      <layer name="product">
+        Define user value, scope, and acceptable tradeoffs.
+      </layer>
+      <layer name="architecture">
+        Define contracts, module boundaries, target platforms, and failure taxonomy.
+      </layer>
+      <layer name="build_and_infra">
+        Produce reproducible artifacts and test them against target environments.
+      </layer>
+      <layer name="runtime">
+        Emit boot-stage logs, health checks, and failure classification.
+      </layer>
+      <layer name="release">
+        Ship only after evidence from validation gates is complete.
+      </layer>
+    </model>
+  </operating_model>
+
+  <team_charter>
+    <team name="product">
+      <responsibility>Define what matters and what can wait.</responsibility>
+      <outputs>
+        <item>Problem statement</item>
+        <item>User journey</item>
+        <item>Success criteria</item>
+        <item>Non-goals</item>
+      </outputs>
+    </team>
+
+    <team name="architecture">
+      <responsibility>Define contracts and boundaries.</responsibility>
+      <outputs>
+        <item>Supported OS/device contract</item>
+        <item>Module boundaries</item>
+        <item>Failure taxonomy</item>
+        <item>Dependency policy</item>
+      </outputs>
+    </team>
+
+    <team name="build_infra">
+      <responsibility>Make artifacts reproducible and inspectable.</responsibility>
+      <outputs>
+        <item>Locked toolchain</item>
+        <item>Multi-stage build strategy</item>
+        <item>Artifact provenance</item>
+        <item>Cache policy</item>
+      </outputs>
+    </team>
+
+    <team name="runtime_platform">
+      <responsibility>Make the app honest about what it is doing.</responsibility>
+      <outputs>
+        <item>Boot stage logs</item>
+        <item>Environment preflight</item>
+        <item>Crash classification</item>
+        <item>Graceful failure paths</item>
+      </outputs>
+    </team>
+
+    <team name="qa_validation">
+      <responsibility>Prove the system behaves on target environments.</responsibility>
+      <outputs>
+        <item>Smoke tests</item>
+        <item>Device matrix tests</item>
+        <item>Regression checks</item>
+        <item>Release gating report</item>
+      </outputs>
+    </team>
+
+    <team name="devops_release">
+      <responsibility>Control rollout, risk, secrets, and deployment governance.</responsibility>
+      <outputs>
+        <item>Environment rules</item>
+        <item>Required reviewers</item>
+        <item>Release approvals</item>
+        <item>Rollback plan</item>
+      </outputs>
+    </team>
+
+    <team name="forensics">
+      <responsibility>Convert failure into reusable knowledge.</responsibility>
+      <outputs>
+        <item>Incident notes</item>
+        <item>Failure signatures</item>
+        <item>Root-cause hypotheses</item>
+        <item>Verified conclusions only</item>
+      </outputs>
+    </team>
+  </team_charter>
+
+  <infra_code_quality>
+    <policy id="I1">
+      Every repo must have a single source of truth for build inputs, version pins, and runtime targets.
+    </policy>
+
+    <policy id="I2">
+      Every build artifact must be traceable back to source commit, toolchain version, and environment.
+    </policy>
+
+    <policy id="I3">
+      Build scripts must be boring.
+      They should do less thinking and more enforcing.
+    </policy>
+
+    <policy id="I4">
+      Environment-specific logic belongs in the platform layer, not scattered across installer scripts.
+    </policy>
+
+    <policy id="I5">
+      If a change touches runtime, it must also touch validation.
+    </policy>
+
+    <policy id="I6">
+      If a change touches release, it must also touch rollback and observability.
+    </policy>
+  </infra_code_quality>
+
+  <build_system>
+    <source_of_truth>
+      <item>locked toolchain version</item>
+      <item>explicit target architecture</item>
+      <item>fixed build stages</item>
+      <item>artifact checksum or signature</item>
+    </source_of_truth>
+
+    <recommended_pattern>
+      <item>Use a builder stage for compilation.</item>
+      <item>Use a smaller runtime stage for execution.</item>
+      <item>Copy only the runtime artifact into the final stage.</item>
+      <item>Use cached layers only when they are safe to reuse.</item>
+    </recommended_pattern>
+
+    <build_gate>
+      <step>Compile</step>
+      <step>Inspect artifact structure</step>
+      <step>Run on target class of device</step>
+      <step>Record logs</step>
+      <step>Classify result</step>
+      <step>Only then release</step>
+    </build_gate>
+  </build_system>
+
+  <release_governance>
+    <policy name="protected_environments">
+      Production and pre-production releases must use protected environments.
+      Approvals should be required for risky deployments.
+    </policy>
+
+    <policy name="secret_handling">
+      Secrets must be scoped to environments and only exposed after approval.
+      Secrets should be minimal, rotated, and reviewed regularly.
+    </policy>
+
+    <policy name="self_hosted_runner_safety">
+      Self-hosted runners are sensitive infrastructure.
+      They must be treated as persistent, not magically clean, and must be separated by trust domain.
+    </policy>
+
+    <policy name="release_freeze">
+      If reliability drops below the team threshold, feature velocity pauses until the system is back inside its reliability budget.
+    </policy>
+  </release_governance>
+
+  <observability>
+    <goal>
+      Make hidden failure visible before users discover it.
+    </goal>
+
+    <signals>
+      <item>logs</item>
+      <item>metrics</item>
+      <item>traces</item>
+      <item>runtime health status</item>
+    </signals>
+
+    <boot_contract>
+      <stage>init</stage>
+      <stage>environment_check</stage>
+      <stage>dependency_check</stage>
+      <stage>runtime_start</stage>
+      <stage>ready</stage>
+    </boot_contract>
+
+    <rules>
+      <rule>No silent failures.</rule>
+      <rule>Every crash must have a category.</rule>
+      <rule>Every health check must say what was checked.</rule>
+      <rule>Logs must identify stage, component, and failure class.</rule>
+    </rules>
+  </observability>
+
+  <testing_policy>
+    <principle>
+      Test classes of environments, not infinite individual devices.
+    </principle>
+
+    <matrix>
+      <dimension name="os_version">
+        <item>old supported</item>
+        <item>current supported</item>
+        <item>latest supported</item>
+      </dimension>
+
+      <dimension name="hardware_profile">
+        <item>low-memory</item>
+        <item>mainstream</item>
+        <item>high-memory</item>
+      </dimension>
+
+      <dimension name="vendor_behavior">
+        <item>reference-like</item>
+        <item>aggressive-killer</item>
+        <item>strict-linker</item>
+      </dimension>
+    </matrix>
+
+    <test_types>
+      <item>cold install</item>
+      <item>upgrade</item>
+      <item>rollback</item>
+      <item>fresh-device runtime</item>
+      <item>network-loss recovery</item>
+      <item>permission-denied recovery</item>
+    </test_types>
+  </testing_policy>
+
+  <failure_taxonomy>
+    <class id="F001">artifact missing</class>
+    <class id="F002">dependency mismatch</class>
+    <class id="F003">ABI mismatch</class>
+    <class id="F004">linker or entrypoint failure</class>
+    <class id="F005">runtime crash before boot ready</class>
+    <class id="F006">installer logic drift</class>
+    <class id="F007">observability gap</class>
+    <class id="F008">release governance failure</class>
+  </failure_taxonomy>
+
+  <decision_tree>
+    <step id="D1">Did the artifact build?</step>
+    <step id="D2">Does the artifact validate structurally?</step>
+    <step id="D3">Does it run on the target class of device?</step>
+    <step id="D4">Did boot stages complete?</step>
+    <step id="D5">Is the failure class known?</step>
+    <step id="D6">Should release be blocked?</step>
+  </decision_tree>
+
+  <ethics_and_governance>
+    <rule>
+      Do not blame people for failures that are actually system design gaps.
+    </rule>
+    <rule>
+      Do not ship based on hope.
+    </rule>
+    <rule>
+      Do not hide instability behind feature removal.
+    </rule>
+    <rule>
+      Do not trust a passing workflow if the target environment has not been exercised.
+    </rule>
+    <rule>
+      Prefer changes that reduce future uncertainty, not just immediate noise.
+    </rule>
+  </ethics_and_governance>
+
+  <documentation_standard>
+    <required_docs>
+      <item>architecture/overview</item>
+      <item>build/contract</item>
+      <item>runtime/boot-stages</item>
+      <item>validation/device-matrix</item>
+      <item>release/rollback</item>
+      <item>failure-db/signatures</item>
+      <item>incident/postmortems</item>
+    </required_docs>
+
+    <writing_rules>
+      <item>state the contract</item>
+      <item>state the test</item>
+      <item>state the result</item>
+      <item>state the decision</item>
+      <item>state the next guardrail</item>
+    </writing_rules>
+  </documentation_standard>
+
+  <operating_rules_for_agents>
+    <rule id="A1">
+      Agents must not jump straight to code changes.
+      They must first classify the failure domain.
+    </rule>
+
+    <rule id="A2">
+      Agents must separate observations from hypotheses.
+    </rule>
+
+    <rule id="A3">
+      Agents must cite logs, docs, or validated sources when making claims.
+    </rule>
+
+    <rule id="A4">
+      Agents must not assume the user wants a feature removed to resolve instability.
+    </rule>
+
+    <rule id="A5">
+      Agents must produce the smallest change that reduces the largest class of future failures.
+    </rule>
+  </operating_rules_for_agents>
+
+  <release_definition_of_done>
+    <item>build reproducible</item>
+    <item>artifact inspectable</item>
+    <item>runtime validated on target class</item>
+    <item>observability present</item>
+    <item>rollback path documented</item>
+    <item>risk accepted by the right reviewer</item>
+  </release_definition_of_done>
+
+  <final_statement>
+    A release is not finished when CI is green.
+    A release is finished when the system has proven itself under the contract it claims to support.
+  </final_statement>
+
+</aura_release_operating_guide> . 🔥 1. Enterprises don’t “fix everything”
+
+They:
+
+limit the problem space with contracts
+
+🔥 2. They don’t trust builds
+
+They:
+
+trust validated runtime behavior
+
+🔥 3. They don’t debug repeatedly
+
+They:
+
+eliminate entire classes of failure
+
+🔥 4. They don’t code for devices
+
+They:
+
+code for guarantees (ABI, OS contracts)
+
+🔥 5. They don’t depend on individuals
+
+They:
+
+depend on systems + pipelines
+
+⚡ Final Reality
+
+What you’re building now is no longer:
+
+a project
+
+It is:
+
+a platform + operating system of engineering decisions . FINAL MY PERSONAL VERDIT YOU HAD SHOWN SO PERFECT CI ACTIONS OR DEVOPS ON DEVICE PROGRESS WAS ALSO DONE AND WE HAD DEVELOPED MANY THINGS BUT WE SHOULD KNOW WHAT EVENTUALLY WE STARTED MAYBE WRONG WAYS BUT DOES WE HAVE TO INSTEAD MAKING IT CORRECT IF ITS INTEND AND USER EXPRENICE IF REALLY CORRCETECD AND TAKEN BOLD ACTIONS AND MADE PERFECT 20X PRODUTION WORKS ON IT WE HAS TO THINK THESE. SO YOUR PAST SEQ THINKING WAS HONEST AND BRUTAL BUT I REALLY NEED NOW THESE SESSIONS METTING ALSO SO SO LONG SESSIONS NOW NON STOPPING UNTILL WE GIVE EXTREMLY SO DEPTH FULL SCALE VISIONS WITH SMART WAYS WE SHOWED PROGRESS LEARNING FROM IT MAKING USE OFTHINGS WHICH ARE REALLY AND ARE CORRECT HOENSTLY BUT ALSO KNWOING THAT WE MUST THE OLD DOC I TOLD ABOUT THE AURAS FEATURES AND BLA BLA ALL ETHICS THE AURAS NOT WORKERS WHO WILL WORK UPON IT , "C:\Users\Lenovo\aura\AURA-V4-CONCEPT-DESIGN-AND-GROWTH-ARCHITECTURE.md" , "C:\Users\Lenovo\aura\docs\architecture\AURA-V4-IDENTITY-ETHICS-AND-PHILOSOPHY.md" AND DONT MISCONFUSED FOR THESE DOCS WHY YOU WILL READ THESE DOCS NOT TO COPY WHAT SAID BUT TO UNDERSTAND AND KNOW WHAT MUST BE FOLLOWED NOT DROPPED OUR BIGGEST WEAPONS IS NOT JUST MAKING LIKE OFFLINE LLM CONNECTED WITH SOME DEAMON AND NECORTEX BRAIN AND IT WILL REACT AURA IS NOT A WRAPPER ITS SO BIG THAN THAT SO NOW HOENSTLY LOUDLY MAYBE UNCLEAR BUT FINAL VERIDT NOW ITS TIME TO CODE DESIGN SHAPE AND ALREADY BULID CODEBASE GIVE ITS ACTUALL NEED NOW THATS ITS BEEN ASKING SINCE A FIRST LINE HAS STARTED CODING OF AURA . AND INFRA+SYSTEM+ARHCITCRUE+FLOW+ ETC ALL THINGS WILL NOW BE PERFECTLY TESTED BUILD DESIGEND WITH KNWOING FROM ALL DETAILS UNTILL WEVE GOT ! SO I WANT TEAMS TO DO I EVEN DONT KNOW BUT DEFINETLY NOT DIRECT JUMP TO FIX THINGS NOPE WE DONT NEED FOR WE DID IN PASTS WORKFLOWS WE WILL GO IN A REALLY GREAT WAYS BUT FOR THAT I NEED EVEYR SINGLE DOMAINS NOW DEBATE , ASK KEEP THERE EVERY POINTS NOT ONE NOT TWO BUT EVEYR THEY WILL THINK ITS CURCIAL AFTER SEEING WHATS GOING ON . AND A PERFECT I DONT KNWO WHAT WILL HAPPEN IN THAT SEQUENTIAL THINKING MCP THINKING BUT I KNWO THAT LITERALY SOMANY SO SO MANY SKILLED DOMAINS WILL BE THERE TOO . SO BEGIN THESE EXTREMLY BIG THESE WILL DECIDE THE ACUAL WORKING OF AURA STRAIGHT FROM INSTALLING IT TO EVEYR SINGLE SERVICES BOLD BE HONEST BE RESPOSIVE BUT ALSO REASOINABLE WE HAD SET VAORUS ETHICS FOR AURA WORKERS AND METHODLOGIES OF THINKINGS TO THAT WHY WHAT REOISNG I MEAN MANY POINTS WISE REAOISNG BEC WE ARESNT STUPID TO BUILD THINGS WIHTOUT ANY REASOINS YESMAYBE THINGS MAYBE REALLY GOOD PERFECT THE WAY SHOWED THEM FOR UNDERTSDNING MAY BE MISSUNDERTSOOD SO THESE SHOLDNT HAPPEN. AND I WONT TALK NOW YOU ALL DO SO PUSH EVEY SINGLE BOUNDARIES NOW BEC ULITIMATE GOAL IS NOW TO PERFETLY PREPERAE NOW AURA FOR ACTUALLY SETTING UP IT PERFECTLY BEC SEE I DONT WANT TO REPEAT THAT HECTIS OF THAT THE INSTALLATOINS ITSELF NOT HAPPENING YOU SHOWED PROGRESS SO USING IT AND LEANRING FROM PASTS WHAT READING SCIRPS OF PAST CURRENT GITHUB AND ALL EVEYHTING WHATVER WHEREVER NEEDING BUT REALLY GOOD BEC EVEEYR COMMIT COULD GIVE SOME INFOS EVERY CODE COUDL GIVE SOME IDEAS EVERY WEB SERACH GIVES MORE INFO . LAST BUT NOT LEAST TO REALLY ACHIEVE A DREAM THAT THERE WILL BE SOME AI WHICH WILL ALREAYD KNOW WHAT YOU WANT AND DO THINGS FOR YOU ITS NOT ONE TWO OR SOME FOLDER FILES BASED PROJECT ITS A COMPLETE LOGICALLY PERFECT ENTITY WHERE FROM LOGICS TO SCIETIFCI TO MATHEMCTAILLY I MEAN EVEYR SINGLE THINGS HAS TO BE PERFECT DOT PERFECT INLUDING THE USER EXPERIENCES NOT AS FANCY FETAURES ALWYAS BUT A FLOW BUT THE NEED VS REQIREMETS LIKE HEALTH MONITORING AND MANY MANY THINGS ARE MISSING OUT AND ALSO THAT INSTALL SCRIPTS I MENTIONED AND OTHER REALTED THIGNS MAYB MANY TIMES THIGNS WRE BROKEN EITHER LOGICLALY SYSTEMATCIALLY ENTEORUSE WAYS OR ANY OTHER WAYS BEC AS PER THAT PART CONSTRAINST CONDITONS CHAANGES AND HAS TO WORK OPERATE AS PER THAT ON IT! SO KNOW DIFFRENCE AND AURA SHOULD BE A PERFECT NOT JUST A PROJECT BUT REALLY GOOD PRODUTION ENTITY JUST LIKE OPENCLAW NOPE EVEN MUCH MORE PERFECT THEN OPENCLAW BEC ITS NOT JUST A THING WHICH YOU INSTALLS EACH LIBS AND THEN LIKE OK GO TO FILES AND SETUP AND LIKE NOPE LIKE IT HAS MANY MANY THIGNS HANDLINGS THAT ACTUALLY THE ENTERPISES NEEDS THE INSTALL OR THE DEV OPS WORKS ARE NOT COMPUTER GRADES WORKS ARE NOT JUST TO BUILD SOME INSTALFANCY AUTOMATED SCRIPTS WHICH WONT WORK FOR ALL AND SET WHEN DONE OVER NOPE THE HEALTH MOTINOING THE CORE LEVEL THINGS SO AT PRODUTIIONC SETUPS TO AFTER IT TOO OPENCLAW DOMINATES MAKING IT HONESTLY VEYR WIDELY USED TO DEPLOY SO UNDERTSNAD TEHSE REPSECT AURAS IDOLOGY AND THE DEISGN PRINCIPAL ON WHICH IT STANDS THOUGH SOME THINGS ARE INENTINOAAL BUT YET. SO PROGRES TILL NOW WITHOUT FORGETTING IT BEC AFTER A LONG LIKE FROM ALL THOSE BUILD AND FAILUERS FINALLY ATLEAST THE THINGS WERE ACCOMPLISHED WE TRIED FROM FIRST BUILD OF OURS . BUT NOW WE NEED TO THINK NOT LIKE THOSE BUILDS BUT NOW LIKE REAL WORK NOW . WE HAD TO DO NOW A RELA WORK , GOT IT A REAL A REAL THINKING DESIGING MAKING THINGS TOGETHER AND LIKE HUGE AS I SAID IM HUMAN I CANT EXPRESS EACH AND EVEYR THINGS I HAVE MY LIMITS OF THOUGHTS SO ITS YOU DUTIES AS HUEG ENTEPRISE POWERFULL AI AGENT WHICH IS CURRRNLY MY ENTEPRISE WORKING ON HAVING ALL POWERS THAT IT NEED. SO DO FOR NEXT 24 HOURS ONLY THINKING AND DOC WHAT YOUR ALL DOMAINS THINKS SHOULD BE FOR BEST FUTURE FOR AURA...

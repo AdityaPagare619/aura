@@ -43,6 +43,10 @@ fn main() {
                 .flag("-march=armv8.2-a+fp16+dotprod")
                 .flag("-DGGML_USE_NEON")
                 .flag("-DGGML_USE_NEON_FP16")
+                // Disable GGML_NATIVE to prevent SVE/other CPU feature auto-detection issues
+                // Research: GGML_NATIVE can cause SIGSEGV on some Android devices
+                .flag("-DGGML_NATIVE=OFF")
+                .flag("-DGGML_USE_SVE=OFF")
                 .flag("-O3")
                 .flag("-DNDEBUG")
                 .flag("-Wno-error")
@@ -66,6 +70,10 @@ fn main() {
                 .flag("-march=armv8.2-a+fp16+dotprod")
                 .flag("-DGGML_USE_NEON")
                 .flag("-DGGML_USE_NEON_FP16")
+                // Disable GGML_NATIVE to prevent SVE/other CPU feature auto-detection issues
+                // Research: GGML_NATIVE can cause SIGSEGV on some Android devices
+                .flag("-DGGML_NATIVE=OFF")
+                .flag("-DGGML_USE_SVE=OFF")
                 .flag("-O3")
                 .flag("-DNDEBUG")
                 .flag("-Wno-error")

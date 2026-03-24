@@ -387,19 +387,66 @@ impl TelegramPoller {
         let url = format!("{}/sendMessage", self.base_url);
         let resp_bytes = self.http_post_json(&url, &body_bytes).await?;
 
-        let resp: TelegramApiResponse<SentMessage> =
-            serde_json::from_slice(&resp_bytes).map_err(|e| {
-                if resp_bytes.is_empty() {
-                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-                } else {
-                    tracing::warn!(error = %e, "failed to parse Telegram response");
-                    AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-                }
-            })?;
+        // DIAGNOSTIC: Log raw response for debugging Telegram send failures
+        let response_preview =
+            String::from_utf8_lossy(&resp_bytes.iter().take(500).cloned().collect::<Vec<_>>())
+                .to_string();
+        tracing::info!(
+            response_len = resp_bytes.len(),
+            response_preview = %response_preview,
+            "Telegram API raw response"
+        );
 
-        resp.result.ok_or(AuraError::Ipc(
-            aura_types::errors::IpcError::ConnectionFailed,
-        ))
+        // First, parse as generic JSON to check if the request succeeded
+        // This handles error responses like {"ok": false, "error_code": 400, "description": "..."}
+        let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                response_len = resp_bytes.len(),
+                "failed to parse Telegram response as JSON"
+            );
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
+
+        // Check if Telegram indicated success
+        let ok = resp_json
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !ok {
+            // Extract error description from Telegram response
+            let error_code = resp_json
+                .get("error_code")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let description = resp_json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown Telegram error");
+            tracing::warn!(
+                error_code = error_code,
+                description = description,
+                "Telegram API returned error"
+            );
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
+        // Now parse the successful result as SentMessage
+        let result = resp_json.get("result").ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::DeserializeFailed,
+        ))?;
+
+        let sent_message: SentMessage = serde_json::from_value(result.clone()).map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                "failed to parse Telegram SentMessage result"
+            );
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
+
+        Ok(sent_message)
     }
 
     /// Edit an existing message.
@@ -449,19 +496,35 @@ impl TelegramPoller {
 
         let resp_bytes = self.http_post_multipart(url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> =
-            serde_json::from_slice(&resp_bytes).map_err(|e| {
-                if resp_bytes.is_empty() {
-                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-                } else {
-                    tracing::warn!(error = %e, "failed to parse Telegram response");
-                    AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-                }
-            })?;
+        // Parse response and check for Telegram errors first
+        let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse Telegram photo response");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
 
-        resp.result.ok_or(AuraError::Ipc(
-            aura_types::errors::IpcError::ConnectionFailed,
-        ))
+        let ok = resp_json
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !ok {
+            let description = resp_json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            tracing::warn!(description = description, "Telegram photo API error");
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
+        let result = resp_json.get("result").ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::DeserializeFailed,
+        ))?;
+
+        serde_json::from_value(result.clone()).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse SentMessage");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })
     }
 
     /// Send an OGG/Opus voice message.
@@ -488,19 +551,35 @@ impl TelegramPoller {
 
         let resp_bytes = self.http_post_multipart(url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> =
-            serde_json::from_slice(&resp_bytes).map_err(|e| {
-                if resp_bytes.is_empty() {
-                    AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-                } else {
-                    tracing::warn!(error = %e, "failed to parse Telegram response");
-                    AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
-                }
-            })?;
+        // Parse response and check for Telegram errors first
+        let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse Telegram voice response");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
 
-        resp.result.ok_or(AuraError::Ipc(
-            aura_types::errors::IpcError::ConnectionFailed,
-        ))
+        let ok = resp_json
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !ok {
+            let description = resp_json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            tracing::warn!(description = description, "Telegram voice API error");
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
+        let result = resp_json.get("result").ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::DeserializeFailed,
+        ))?;
+
+        serde_json::from_value(result.clone()).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse SentMessage");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })
     }
 
     /// Download a file from Telegram by file_id.

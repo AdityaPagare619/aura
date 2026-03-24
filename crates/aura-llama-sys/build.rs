@@ -39,8 +39,10 @@ fn main() {
             c_build
                 .cpp(false)
                 .flag("-std=c11")
-                .flag("-march=armv8-a+fp+simd")
+                // ARMv8.2-A with FP16 and DotProduct extensions (MediaTek Dimensity 6300 / Moto G45 5G)
+                .flag("-march=armv8.2-a+fp16+dotprod")
                 .flag("-DGGML_USE_NEON")
+                .flag("-DGGML_USE_NEON_FP16")
                 .flag("-O3")
                 .flag("-DNDEBUG")
                 .flag("-Wno-error")
@@ -60,8 +62,10 @@ fn main() {
                 // so rustc can reliably resolve static libc++ in CI cross builds.
                 .cpp_link_stdlib(None)
                 .flag("-std=c++17")
-                .flag("-march=armv8-a+fp+simd")
+                // ARMv8.2-A with FP16 and DotProduct extensions (MediaTek Dimensity 6300 / Moto G45 5G)
+                .flag("-march=armv8.2-a+fp16+dotprod")
                 .flag("-DGGML_USE_NEON")
+                .flag("-DGGML_USE_NEON_FP16")
                 .flag("-O3")
                 .flag("-DNDEBUG")
                 .flag("-Wno-error")

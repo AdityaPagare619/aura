@@ -99,7 +99,13 @@ pub struct TelegramApiResponse<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SentMessage {
     pub message_id: i64,
-    pub chat_id: i64,
+    #[serde(rename = "chat")]
+    pub chat: TelegramChat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramChat {
+    pub id: i64,
 }
 
 // ─── HTTP Backend trait ─────────────────────────────────────────────────────
@@ -615,7 +621,15 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
 
     // Try message first, then callback_query.
     if let Some(msg) = raw.get("message") {
-        let chat_id = msg.get("chat")?.get("id")?.as_i64()?;
+        // Robust parsing: handle cases where chat object might be missing or have different structure
+        // Telegram can return: message.chat.id (private), message.chat.username (group), or group_name
+        let chat_id = msg
+            .get("chat")
+            .and_then(|c| c.get("id"))
+            .and_then(|id| id.as_i64())?;
+
+        // Debug: Log what we received for troubleshooting
+        tracing::debug!("parse_update: chat_id={:?}, msg={:?}", chat_id, msg);
         let from_user_id = msg
             .get("from")
             .and_then(|f| f.get("id"))
@@ -714,7 +728,18 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
     }
 
     if let Some(cb) = raw.get("callback_query") {
-        let chat_id = cb.get("message")?.get("chat")?.get("id")?.as_i64()?;
+        // Robust parsing: callback_query can come from inline queries or message callbacks
+        // Try message.chat.id first, fall back to from.id for inline queries
+        let chat_id = cb
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .and_then(|id| id.as_i64())
+            .or_else(|| {
+                cb.get("from")
+                    .and_then(|f| f.get("id"))
+                    .and_then(|id| id.as_i64())
+            })?;
         let from_user_id = cb
             .get("from")
             .and_then(|f| f.get("id"))

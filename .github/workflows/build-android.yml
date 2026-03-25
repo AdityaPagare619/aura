@@ -154,8 +154,8 @@ jobs:
       - name: Build aura-daemon cdylib (libaura_daemon.so)
         run: cargo build --release --lib -p aura-daemon --target aarch64-linux-android --package aura-daemon --features reqwest
 
-      - name: Build aura-neocortex binary
-        run: cargo build --release -p aura-neocortex --target aarch64-linux-android
+      - name: Build aura-neocortex binary (STUB for testing)
+        run: cargo build --release -p aura-neocortex --features stub --target aarch64-linux-android
 
       # ----------------------------------------------------------
       # 9. Strip binaries (reduces size significantly for on-device use)

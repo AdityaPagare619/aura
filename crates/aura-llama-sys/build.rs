@@ -50,8 +50,11 @@ fn main() {
                 // Research: GGML_NATIVE can cause SIGSEGV on some Android devices (#8109)
                 .flag("-DGGML_NATIVE=OFF")
                 .flag("-DGGML_USE_SVE=OFF")
-                .flag("-O3")
+                // Try disabling NEON entirely - might be causing issues on MediaTek
+                .flag("-DGGML_USE_NEON=OFF")
+                .flag("-O1")  // Less aggressive optimization
                 .flag("-DNDEBUG")
+                .flag("-fno-exceptions")  // Disable C++ exceptions
                 .flag("-Wno-error")
                 .file("llama.cpp/ggml.c")
                 .file("llama.cpp/ggml-alloc.c")
@@ -80,8 +83,11 @@ fn main() {
                 // Research: GGML_NATIVE can cause SIGSEGV on some Android devices (#8109)
                 .flag("-DGGML_NATIVE=OFF")
                 .flag("-DGGML_USE_SVE=OFF")
-                .flag("-O3")
+                // Try disabling NEON entirely - might be causing issues on MediaTek
+                .flag("-DGGML_USE_NEON=OFF")
+                .flag("-O1")  // Less aggressive optimization
                 .flag("-DNDEBUG")
+                .flag("-fno-exceptions")  // Disable C++ exceptions
                 .flag("-Wno-error")
                 .file("llama.cpp/llama.cpp")
                 .include("llama.cpp");

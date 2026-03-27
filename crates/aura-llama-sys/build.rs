@@ -20,16 +20,15 @@ fn main() {
 
     // Only compile llama.cpp when targeting Android ARM64
     if target_os == "android" && target_arch == "aarch64" {
-        // ENTERPRISE HARD-SKIP POLICY:
-        // In server mode, aura-neocortex delegates inference via HTTP and must NOT
-        // compile/link llama.cpp native C/C++ path. We force stub mode whenever
-        // server OR stub feature is active on Android.
-        if stub_enabled || server_enabled {
-            println!("cargo:rustc-cfg=llama_stub");
-            println!("cargo:stub=true");
-            println!("cargo:warning=aura-llama-sys build.rs: HARD-SKIP native llama.cpp on android (server/stub mode active)");
-            return;
-        }
+        // ENTERPRISE SAFETY OVERRIDE (2026-03-27):
+        // Startup SIGSEGV occurs before Rust main on Android when native llama.cpp objects
+        // are linked into aura-neocortex server mode. Feature propagation proved inconsistent
+        // in CI (server/stub env flags observed false), so we enforce a target-based guard:
+        // for Android ARM64 builds, always expose stub cfg and skip native C/C++ compilation.
+        println!("cargo:rustc-cfg=llama_stub");
+        println!("cargo:stub=true");
+        println!("cargo:warning=aura-llama-sys build.rs: ANDROID HARD OVERRIDE active; skipping llama.cpp native compilation");
+        return;
 
         // Ensure Rust linker can resolve Android libc++ static archive.
         // cc-rs emits `cargo:rustc-link-lib=static=c++_static`, but rustc

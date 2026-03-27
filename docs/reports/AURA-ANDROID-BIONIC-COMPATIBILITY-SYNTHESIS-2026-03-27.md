@@ -158,7 +158,21 @@ If native crashes and stub survives on same device profile, compatibility class 
 - The fix included here removes a key architectural blocker so fallback mode can actually be used safely on Android.
 - The next reliable outcome comes from runtime gating + probe-first startup + explicit device compatibility policy.
 
-## 10) Document Status
+## 10) Scope Boundary (What This Document Does and Does Not Claim)
+
+### Confirmed by repository evidence
+- Android build/link behavior is feature-gated (native path when stub is OFF; stub-safe path when stub is ON).
+- Backend abstraction can preserve linkability across native and stub-capable builds.
+- Startup failures that trigger in bionic internals before normal stage flow are a real, separate class from inference-time defects.
+
+### Not claimed as fully proven in this document
+- A single universal root cause for all vendor/SoC crash variants.
+- Guaranteed crash-free startup on every Android device class without runtime gating and device-matrix validation.
+
+This synthesis should therefore be treated as an operational decision record with
+clear evidence boundaries, not as universal proof of complete Android runtime stability.
+
+## 11) Document Status
 
 - Status: Complete synthesized assessment for the current incident window.
 - Scope: Architecture, failed attempts, forensic interpretation, remediation direction, and proof plan.

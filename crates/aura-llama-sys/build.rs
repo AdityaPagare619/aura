@@ -13,14 +13,21 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let stub_enabled = std::env::var_os("CARGO_FEATURE_STUB").is_some();
-    println!("cargo:warning=aura-llama-sys build.rs: target_os={target_os} target_arch={target_arch} stub_enabled={stub_enabled}");
+    let server_enabled = std::env::var_os("CARGO_FEATURE_SERVER").is_some();
+    println!(
+        "cargo:warning=aura-llama-sys build.rs: target_os={target_os} target_arch={target_arch} stub_enabled={stub_enabled} server_enabled={server_enabled}"
+    );
 
     // Only compile llama.cpp when targeting Android ARM64
     if target_os == "android" && target_arch == "aarch64" {
-        if stub_enabled {
+        // ENTERPRISE HARD-SKIP POLICY:
+        // In server mode, aura-neocortex delegates inference via HTTP and must NOT
+        // compile/link llama.cpp native C/C++ path. We force stub mode whenever
+        // server OR stub feature is active on Android.
+        if stub_enabled || server_enabled {
             println!("cargo:rustc-cfg=llama_stub");
             println!("cargo:stub=true");
-            println!("cargo:warning=aura-llama-sys build.rs: STUB MODE active on android; skipping llama.cpp native compilation");
+            println!("cargo:warning=aura-llama-sys build.rs: HARD-SKIP native llama.cpp on android (server/stub mode active)");
             return;
         }
 

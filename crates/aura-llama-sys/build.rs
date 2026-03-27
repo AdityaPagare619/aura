@@ -12,31 +12,37 @@
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let stub_enabled = std::env::var_os("CARGO_FEATURE_STUB").is_some();
+    println!("cargo:warning=aura-llama-sys build.rs: target_os={target_os} target_arch={target_arch} stub_enabled={stub_enabled}");
 
     // Only compile llama.cpp when targeting Android ARM64
     if target_os == "android" && target_arch == "aarch64" {
+        if stub_enabled {
+            println!("cargo:rustc-cfg=llama_stub");
+            println!("cargo:stub=true");
+            println!("cargo:warning=aura-llama-sys build.rs: STUB MODE active on android; skipping llama.cpp native compilation");
+            return;
+        }
+
         // Ensure Rust linker can resolve Android libc++ static archive.
         // cc-rs emits `cargo:rustc-link-lib=static=c++_static`, but rustc
         // needs an explicit native search path to locate libc++_static.a.
         emit_android_cpp_runtime_linking();
 
         // Guard: fail with a clear message if the submodule isn't initialized.
-        // Wrap in stub-feature check so CI can compile without the submodule.
-        #[cfg(not(feature = "stub"))]
-        {
-            if !std::path::Path::new("llama.cpp/llama.cpp").exists() {
-                panic!(
-                    "llama.cpp submodule not initialized. \
-                     Run: git submodule update --init --recursive\n\
-                     Or build with --features aura-llama-sys/stub to skip native compilation."
-                );
-            }
+        if !std::path::Path::new("llama.cpp/llama.cpp").exists() {
+            panic!(
+                "llama.cpp submodule not initialized. \
+                 Run: git submodule update --init --recursive\n\
+                 Or build with --features aura-llama-sys/stub to skip native compilation."
+            );
+        }
 
-            // Compile C files separately with -std=c11.
-            // Using .cpp(true) on .c files forces C++ mode and breaks NDK r26b clang
-            // which rejects C99 compound literals and void* implicit casts in C++ mode.
-            let mut c_build = cc::Build::new();
-            c_build
+        // Compile C files separately with -std=c11.
+        // Using .cpp(true) on .c files forces C++ mode and breaks NDK r26b clang
+        // which rejects C99 compound literals and void* implicit casts in C++ mode.
+        let mut c_build = cc::Build::new();
+        c_build
                 .cpp(false)
                 .flag("-std=c11")
                 // CONSERVATIVE: Use generic armv8-a to avoid MediaTek Dimensity 6300 SIGSEGV
@@ -60,11 +66,11 @@ fn main() {
                 .file("llama.cpp/ggml-backend.c")
                 .file("llama.cpp/ggml-quants.c")
                 .include("llama.cpp");
-            c_build.compile("llama_c");
+        c_build.compile("llama_c");
 
-            // Compile C++ files with -std=c++17.
-            let mut cpp_build = cc::Build::new();
-            cpp_build
+        // Compile C++ files with -std=c++17.
+        let mut cpp_build = cc::Build::new();
+        cpp_build
                 .cpp(true)
                 // Disable cc-rs automatic C++ stdlib linkage. We emit explicit
                 // link-search + link-lib directives in `emit_android_cpp_runtime_linking`
@@ -89,18 +95,10 @@ fn main() {
                 .flag("-Wno-error")
                 .file("llama.cpp/llama.cpp")
                 .include("llama.cpp");
-            cpp_build.compile("llama_cpp");
+        cpp_build.compile("llama_cpp");
 
-            println!("cargo:rustc-link-lib=static=llama_c");
-            println!("cargo:rustc-link-lib=static=llama_cpp");
-        }
-
-        // In stub mode on Android: emit the stub marker instead of compiling native code.
-        #[cfg(feature = "stub")]
-        {
-            println!("cargo:rustc-cfg=llama_stub");
-            println!("cargo:stub=true");
-        }
+        println!("cargo:rustc-link-lib=static=llama_c");
+        println!("cargo:rustc-link-lib=static=llama_cpp");
     } else {
         // On host builds (non-Android), nothing to compile — stubs are pure Rust.
         // Emit a DEP_LLAMA_STUB marker so dependent crates can detect stub mode.

@@ -1,6 +1,6 @@
 # NEOCORTEX ENTERPRISE AUDIT COMPENDIUM (CONDENSED FROM FULL LINE LEDGER)
 
-**Source Basis:** `/home/runner/work/aura/aura/docs/reports/NEOCORTEX-CODE-ONLY-FULL-AUDIT-2026-03-27.md` only.
+**Source Basis:** Prior full-ledger revision of this same report path (`/home/runner/work/aura/aura/docs/reports/NEOCORTEX-CODE-ONLY-FULL-AUDIT-2026-03-27.md`).
 **Constraint Mode:** 2000-2200 lines, enterprise-readable, diagrams + flowcharts + prioritized points.
 **Evidence Policy:** No new repository documentation sources added beyond the full audit artifact.
 
@@ -147,7 +147,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0038: `lto = "thin"           # CHANGED: true → thin (F001 fix: NDK #2073 - LTO+panic=abort causes startup SIGSEGV)` -> operational statement.
 - L0039: `codegen-units = 1` -> operational statement.
 - L0040: `strip = true` -> operational statement.
-- L0041: `panic = "unwind"       # CHANGED: abort → unwind (F001 fix: NDK #2073 - LTO+panic=abort causes startup SIGS...` -> operational statement.
+- L0041: `panic = "unwind"       # CHANGED: abort → unwind (F001 fix: NDK #2073 - LTO+panic=abort causes startup SIGSEGV)` -> operational statement.
 - L0042: `(blank)` -> blank/spacing.
 - L0043: `# SBOM Configuration: Defined at crate level, not workspace level` -> operational statement.
 - L0044: `# Individual crates (aura-daemon, aura-neocortex) define their own SBOM metadata` -> operational statement.
@@ -222,7 +222,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0013: `thiserror = { workspace = true }` -> operational statement.
 - L0014: `(blank)` -> blank/spacing.
 - L0015: `[features]` -> operational statement.
-- L0016: `# Build without real llama.cpp (for CI, testing, or host builds).` -> loop / iteration logic.
+- L0016: `# Build without real llama.cpp (for CI, testing, or host builds).` -> comment or documentation.
 - L0017: `# When enabled, the native C compilation step is skipped entirely.` -> operational statement.
 - L0018: `stub = []` -> operational statement.
 - L0019: `(blank)` -> blank/spacing.
@@ -323,8 +323,8 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0002: `(blank)` -> blank/spacing.
 - L0003: `// Clippy configuration for aura-neocortex.` -> comment or documentation.
 - L0004: `#![allow(clippy::assertions_on_constants)] // Test assertions on compile-time constants` -> operational statement.
-- L0005: `#![allow(clippy::manual_range_contains)] // Explicit range contains for readability` -> loop / iteration logic.
-- L0006: `#![allow(clippy::len_zero)] // len() comparisons for test clarity` -> loop / iteration logic.
+- L0005: `#![allow(clippy::manual_range_contains)] // Explicit range contains for readability` -> attribute / cfg / derive.
+- L0006: `#![allow(clippy::len_zero)] // len() comparisons for test clarity` -> attribute / cfg / derive.
 - L0007: `#![allow(unused_imports)] // Some imports used conditionally or in tests` -> operational statement.
 - L0008: `//!` -> comment or documentation.
 - L0009: `//! This is a **separate process** from the AURA daemon.  It communicates via` -> comment or documentation.
@@ -2083,4 +2083,10 @@ flowchart TD
 - Target range required by requester: 2000-2200 lines.
 - This document is auto-shaped to fit that range without dropping any file from scope.
 
+
+## Appendix D - Reference Codes Used in Ledger Samples
+
+- **F001:** Internal finding identifier used in the original full-ledger baseline to mark a startup crash-class fix area.
+- **NDK #2073:** Short reference tag used in the source ledger comments for the Android startup crash context tied to LTO + panic strategy.
+- These tags are preserved only for traceability to the original ledger evidence and not as external issue tracker links.
 **END OF CONDENSED ENTERPRISE AUDIT**

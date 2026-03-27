@@ -155,6 +155,12 @@ jobs:
         run: cargo build --release --lib -p aura-daemon --target aarch64-linux-android --package aura-daemon --features reqwest
 
       - name: Build aura-neocortex binary
+        env:
+          # Workspace profile sets strip=true. Override for this step so we can
+          # preserve symbols in the copied "unstripped" forensic artifact.
+          CARGO_PROFILE_RELEASE_STRIP: "none"
+          # Ensure line/function info exists for addr2line.
+          CARGO_PROFILE_RELEASE_DEBUG: "2"
         run: cargo build --release -p aura-neocortex --target aarch64-linux-android
 
       # ----------------------------------------------------------
@@ -270,6 +276,19 @@ jobs:
             fi
           } > artifacts/debug/aura-neocortex.addr2line.txt
 
+          # Also resolve constructor targets from init_array relocations when present.
+          {
+            echo "=== init_array constructor target symbolization ==="
+            for pc in 0x185d70 0x186020 0x19b0a0 0x1a3afc; do
+              echo "--- $pc ---"
+              if [ -f "$NEO_DBG" ]; then
+                "$ADDR2LINE" -Cfpie "$NEO_DBG" "$pc" || true
+              elif [ -f "$NEO_UN" ]; then
+                "$ADDR2LINE" -Cfpie "$NEO_UN" "$pc" || true
+              fi
+            done
+          } > artifacts/debug/aura-neocortex.init-array.addr2line.txt
+
       # ----------------------------------------------------------
       # 10. Upload artifacts
       # ----------------------------------------------------------
@@ -287,5 +306,6 @@ jobs:
             artifacts/debug/aura-neocortex.unstripped.sha256
             artifacts/debug/aura-neocortex.forensics.txt
             artifacts/debug/aura-neocortex.addr2line.txt
+            artifacts/debug/aura-neocortex.init-array.addr2line.txt
           retention-days: 30
           if-no-files-found: error

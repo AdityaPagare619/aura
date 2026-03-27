@@ -949,8 +949,8 @@ impl LlamaBackend for StubBackend {
         // a well-aligned, non-null pointer that is guaranteed never to alias valid
         // allocations. This is preferred over raw integer casts (0x1, 0x2) which have
         // no alignment guarantees and technically invoke UB under strict provenance.
-        let model_ptr = 1 as *mut LlamaModel;
-        let ctx_ptr = 1 as *mut LlamaContext;
+        let model_ptr = std::ptr::NonNull::<LlamaModel>::dangling().as_ptr();
+        let ctx_ptr = std::ptr::NonNull::<LlamaContext>::dangling().as_ptr();
 
         debug!("stub: model loaded (sentinel pointers)");
         Ok((model_ptr, ctx_ptr))
@@ -1796,7 +1796,7 @@ pub mod stubs {
         ensure_init();
         // The backend load_model already creates both — return sentinel ctx
         let _ = (model, params);
-        1 as *mut LlamaContext
+        std::ptr::NonNull::<LlamaContext>::dangling().as_ptr()
     }
 
     /// Stub: free model.

@@ -1,12 +1,12 @@
 # NEOCORTEX ENTERPRISE AUDIT COMPENDIUM (CONDENSED FROM FULL LINE LEDGER)
 
 **Source Basis:** `/home/runner/work/aura/aura/docs/reports/NEOCORTEX-CODE-ONLY-FULL-AUDIT-2026-03-27.md` only.
-**Constraint Mode:** 2000–2200 lines, enterprise-readable, diagrams + flowcharts + prioritized points.
+**Constraint Mode:** 2000-2200 lines, enterprise-readable, diagrams + flowcharts + prioritized points.
 **Evidence Policy:** No new repository documentation sources added beyond the full audit artifact.
 
 ---
 
-## 1) Executive Snapshot
+## 1) Executive Snapshot (Leadership View)
 
 - Neocortex is implemented as a process-level inference subsystem connected to daemon via framed IPC.
 - Android runtime path adds service lifecycle, JNI bridge, wake-lock control, and process supervision layers.
@@ -14,6 +14,24 @@
 - Reliability upside exists: explicit protocol typing, cancellation controls, and deterministic shutdown choreography.
 - Reliability downside exists: large monolithic modules and cross-crate coupling in startup/inference critical path.
 - Recommended strategy: preserve system identity while reducing unsafe state space through strict backend contract gates.
+
+### 1.1 Leadership Decision Dashboard
+
+| Decision Area | Current State | Business Exposure if Deferred | Recommended Owner | Time Horizon |
+|---|---|---|---|---|
+| Runtime crash-risk containment | Partial controls in place | Service instability + trust erosion | Platform Engineering | 0-30 days |
+| Startup contract hardening | Inconsistent readiness guarantees | Incident MTTR inflation | Runtime/Core Team | 0-30 days |
+| Android lifecycle resilience | Operationally functional, tightly coupled | Mobile reliability regressions | Android Systems Team | 30-90 days |
+| Module decomposition | High concentration in critical files | Review velocity + defect density risk | Architecture Council | 30-90 days |
+| Continuous assurance (CI matrix) | Good baseline, limited mode breadth | Escaped mode-specific failures | DevEx / CI Team | 0-60 days |
+
+### 1.2 Governance Signal Summary
+
+- **Ship posture:** proceed only with explicit crash-boundary guardrails and readiness gates.
+- **Investment signal:** prioritize reliability engineering over feature acceleration in this subsystem.
+- **Audit confidence:** high on architectural coverage, medium on runtime behavior without expanded fault-injection.
+- **Executive ask:** approve a reliability sprint focused on boundary contracts, startup diagnostics, and Android lifecycle hardening.
+
 
 ## 2) Architecture in Reality (Code-Observed)
 
@@ -70,6 +88,31 @@ sequenceDiagram
 | P2 | Config/model discovery fragility | path selection ambiguity on device | aura_config + model path resolution |
 | P2 | Android lifecycle coupling | service, wake-lock, JNI callback orchestration | app service + bridge + accessibility |
 
+## 4.1) Enterprise Action Flow (From Risk to Control)
+
+```mermaid
+flowchart TD
+    A[P0/P1 crash-risk classes] --> B[Executive reliability decision]
+    B --> C[Fund 30-60 day hardening backlog]
+    C --> D[Backend contract + startup readiness gates]
+    C --> E[Android lifecycle stabilization]
+    C --> F[CI mode-matrix assurance]
+    D --> G[Lower crash probability]
+    E --> G
+    F --> G
+    G --> H[Improved SLA confidence + reduced MTTR]
+```
+
+## 4.2) Priority Decision Matrix
+
+| Priority | Workstream | Success Metric | Exit Criteria |
+|---|---|---|---|
+| P0 | Backend lifecycle contract fences | 0 linker/runtime mode mismatch incidents | backend-only API usage enforced + startup self-report |
+| P0 | Startup readiness protocol | deterministic boot success under test matrix | READY handshake gate active in daemon path |
+| P1 | Android lifecycle resilience | reduced restart churn/ANR risk indicators | chaos scenarios pass with watchdog stability |
+| P1 | IPC resilience tightening | fewer timeout/reconnect cascades | reconnect/backoff behavior validated by tests |
+| P2 | File/module decomposition | smaller review units + clearer ownership | high-risk monolith internals split with unit tests |
+
 ## 5) File-by-File Enterprise Review (All In-Scope Files)
 
 Each subsection includes: ownership intent, quantitative profile, risk markers, and selected line-ledger evidence samples from the original full report.
@@ -101,10 +144,10 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0035: `(blank)` -> blank/spacing.
 - L0036: `[profile.release]` -> operational statement.
 - L0037: `opt-level = "z"` -> operational statement.
-- L0038: `lto = "thin"           # CHANGED: true → thin (F001 fix: NDK #2073 — LTO+panic=abort causes startup SIGSEGV)` -> operational statement.
+- L0038: `lto = "thin"           # CHANGED: true → thin (F001 fix: NDK #2073 - LTO+panic=abort causes startup SIGSEGV)` -> operational statement.
 - L0039: `codegen-units = 1` -> operational statement.
 - L0040: `strip = true` -> operational statement.
-- L0041: `panic = "unwind"       # CHANGED: abort → unwind (F001 fix: NDK #2073 — LTO+panic=abort causes startup SIGS...` -> operational statement.
+- L0041: `panic = "unwind"       # CHANGED: abort → unwind (F001 fix: NDK #2073 - LTO+panic=abort causes startup SIGS...` -> operational statement.
 - L0042: `(blank)` -> blank/spacing.
 - L0043: `# SBOM Configuration: Defined at crate level, not workspace level` -> operational statement.
 - L0044: `# Individual crates (aura-daemon, aura-neocortex) define their own SBOM metadata` -> operational statement.
@@ -276,7 +319,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - **Function index snippet:** 46:default_socket_address, 70:parse, 117:print_usage, 141:main, 293:build_startup_capabilities, 326:resolve_model_dir, 359:run_server, 526:spawn_shutdown_listener, 575:args_parse_defaults, 595:shutdown_flag_works, 604:ca
 
 **Ledger samples (start-of-file behavior):**
-- L0001: `//! AURA Neocortex — LLM inference binary.` -> comment or documentation.
+- L0001: `//! AURA Neocortex - LLM inference binary.` -> comment or documentation.
 - L0002: `(blank)` -> blank/spacing.
 - L0003: `// Clippy configuration for aura-neocortex.` -> comment or documentation.
 - L0004: `#![allow(clippy::assertions_on_constants)] // Test assertions on compile-time constants` -> operational statement.
@@ -314,7 +357,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0673: `(blank)` -> blank/spacing.
 - L0674: `// With an empty scanner (no GGUF), the override is the best available source.` -> comment or documentation.
 - L0675: `// build_startup_capabilities falls back to fallback_defaults() when scanner` -> comment or documentation.
-- L0676: `// has no models — so the override is NOT applied (expected: CompiledFallback).` -> comment or documentation.
+- L0676: `// has no models - so the override is NOT applied (expected: CompiledFallback).` -> comment or documentation.
 - L0677: `// This tests the graceful fallback path specifically.` -> comment or documentation.
 - L0678: `let caps = build_startup_capabilities(&mgr, &config);` -> operational statement.
 - L0679: `assert!(caps.embedding_dim > 0);` -> operational statement.
@@ -357,13 +400,13 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0060 [ipc/net]: `/// Manages the IPC connection to the daemon.` -> comment or documentation.
 - L0066 [threading]: `cancel_token: Arc<AtomicBool>,` -> shared-state concurrency primitive.
 - L0074 [ipc/net]: `/// Create a new handler wrapping an accepted connection stream.` -> comment or documentation.
-- L0079 [ipc/net]: `/// mode's `max_tokens * 2` budget — acceptable only before any model loads.` -> comment or documentation.
+- L0079 [ipc/net]: `/// mode's `max_tokens * 2` budget - acceptable only before any model loads.` -> comment or documentation.
 - L0083 [threading]: `cancel_token: Arc<AtomicBool>,` -> shared-state concurrency primitive.
 - L0104 [ipc/net]: `/// Reads messages until the connection closes or a fatal error occurs.` -> comment or documentation.
 - L0115 [error-path]: `if let Err(e) = self.write_message(&resp) {` -> conditional logic / guard.
 - L0117 [error-path]: `return Err(e);` -> explicit return path.
 - L0121 [error-path]: `Err(e) => {` -> result construction path.
-- L0125 [ipc/net]: `info!("daemon disconnected — shutting down");` -> operational statement.
+- L0125 [ipc/net]: `info!("daemon disconnected - shutting down");` -> operational statement.
 - L0141 [error-path]: `return Err(e);` -> explicit return path.
 - L0165 [ipc/net]: `// A legitimate peer should never send this much; drop the connection.` -> comment or documentation.
 
@@ -423,7 +466,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0729 [error-path]: `Err(e) => {` -> result construction path.
 - L0845 [error-path]: `Err(_err) => {` -> result construction path.
 - L0880 [error-path]: `return Err(NeocortexToDaemon::Error {` -> explicit return path.
-- L0971 [ipc/net]: `//   1. Reflection is binary (accept/reject), not generative — needs pattern matching, not` -> comment or documentation.
+- L0971 [ipc/net]: `//   1. Reflection is binary (accept/reject), not generative - needs pattern matching, not` -> comment or documentation.
 
 **Ledger samples (end-of-file closure behavior):**
 - L2432: `let result = engine.infer(&mut manager, prompt, InferenceMode::Planner, &mut sender);` -> operational statement.
@@ -458,8 +501,8 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0006: `//! # Intelligent Cascading (Layer 3)` -> comment or documentation.
 - L0007: `//!` -> comment or documentation.
 - L0008: `//! Instead of static RAM-only tier selection, this module evaluates:` -> comment or documentation.
-- L0009: `//! - Available RAM (hard constraint — cannot load what won't fit)` -> comment or documentation.
-- L0010: `//! - Power state (battery-aware — prefer smaller models on low battery)` -> comment or documentation.
+- L0009: `//! - Available RAM (hard constraint - cannot load what won't fit)` -> comment or documentation.
+- L0010: `//! - Power state (battery-aware - prefer smaller models on low battery)` -> comment or documentation.
 
 **Ledger samples (risk-focused highlights):**
 - L0082 [jni/android]: `#[allow(dead_code)] // Phase 8: called by Android BatteryManager JNI bridge` -> attribute / cfg / derive.
@@ -508,14 +551,14 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - **Function index snippet:** 108:from_gguf, 209:fallback_defaults, 229:is_fully_from_gguf, 234:summary, 253:meta_with_all_dims, 264:meta_empty, 269:from_gguf_uses_metadata_fields, 285:from_gguf_gguf_wins_over_user_override, 299:from_gguf_user_overri
 
 **Ledger samples (start-of-file behavior):**
-- L0001: `//! Model geometry capabilities — single source of truth for all dimension values.` -> comment or documentation.
+- L0001: `//! Model geometry capabilities - single source of truth for all dimension values.` -> comment or documentation.
 - L0002: `//!` -> comment or documentation.
 - L0003: `//! `ModelCapabilities` is derived from GGUF metadata with a strict priority chain:` -> comment or documentation.
 - L0004: `//!` -> comment or documentation.
 - L0005: `//!   **GGUF metadata → user config override → device-probed defaults → compiled fallback**` -> comment or documentation.
 - L0006: `//!` -> comment or documentation.
 - L0007: `//! No step can be skipped. The embedding_dim, context_length, and other geometry` -> comment or documentation.
-- L0008: `//! values are never hardcoded in inference paths — this struct is the only place` -> comment or documentation.
+- L0008: `//! values are never hardcoded in inference paths - this struct is the only place` -> comment or documentation.
 - L0009: `//! those values live at runtime.` -> comment or documentation.
 - L0010: `//!` -> comment or documentation.
 
@@ -558,7 +601,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0010: `//!` -> comment or documentation.
 
 **Ledger samples (risk-focused highlights):**
-- L0420 [ipc/net]: `// If we still can't fit, just accept it — system prompt is never truncated.` -> comment or documentation.
+- L0420 [ipc/net]: `// If we still can't fit, just accept it - system prompt is never truncated.` -> comment or documentation.
 
 **Ledger samples (end-of-file closure behavior):**
 - L1771: `source: MemoryTier::Episodic,` -> operational statement.
@@ -745,7 +788,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 **Ledger samples (start-of-file behavior):**
 - L0001: `//! `aura.config.toml` parser for the AURA Neocortex process.` -> comment or documentation.
 - L0002: `//!` -> comment or documentation.
-- L0003: `//! Provides `NeocortexRuntimeConfig` — loaded once at startup, drives model` -> comment or documentation.
+- L0003: `//! Provides `NeocortexRuntimeConfig` - loaded once at startup, drives model` -> comment or documentation.
 - L0004: `//! path resolution and optional geometry overrides.` -> comment or documentation.
 - L0005: `//!` -> comment or documentation.
 - L0006: `//! # Minimum viable config` -> comment or documentation.
@@ -861,7 +904,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0023 [threading]: `use std::{collections::HashMap, sync::Mutex};` -> import dependency / module.
 - L0032 [ffi-llama]: `/// Opaque model handle returned by llama_load_model_from_file.` -> comment or documentation.
 - L0038 [ffi-llama]: `/// Opaque context handle returned by llama_new_context_with_model.` -> comment or documentation.
-- L0044 [ffi-llama]: `/// Token ID type — matches llama.cpp's llama_token (i32).` -> comment or documentation.
+- L0044 [ffi-llama]: `/// Token ID type - matches llama.cpp's llama_token (i32).` -> comment or documentation.
 - L0090 [threading]: `/// Number of threads for generation.` -> comment or documentation.
 - L0091 [threading]: `pub n_threads: u32,` -> operational statement.
 - L0101 [threading]: `n_threads: 4,` -> operational statement.
@@ -872,9 +915,9 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0276 [error-path]: `/// Bigram transition table: given a token, what tokens can follow?` -> comment or documentation.
 - L0283 [threading]: `rng_state: Mutex<u64>,` -> shared-state concurrency primitive.
 - L0857 [threading]: `rng_state: Mutex::new(seed),` -> shared-state concurrency primitive.
-- L1041 [ffi-llama]: `/// Position type for the batch API — matches llama.cpp's `llama_pos` (i32).` -> comment or documentation.
-- L1044 [ffi-llama]: `/// Sequence ID type — matches llama.cpp's `llama_seq_id` (i32).` -> comment or documentation.
-- L1049 [ffi-llama]: `/// Opaque sampler chain — wraps llama.cpp's `struct llama_sampler`.` -> comment or documentation.
+- L1041 [ffi-llama]: `/// Position type for the batch API - matches llama.cpp's `llama_pos` (i32).` -> comment or documentation.
+- L1044 [ffi-llama]: `/// Sequence ID type - matches llama.cpp's `llama_seq_id` (i32).` -> comment or documentation.
+- L1049 [ffi-llama]: `/// Opaque sampler chain - wraps llama.cpp's `struct llama_sampler`.` -> comment or documentation.
 
 **Ledger samples (end-of-file closure behavior):**
 - L2088: `assert!(!text.is_empty() \|\| tokens.iter().all(\|&t\| t <= 2)); // empty if all special` -> conditional logic / guard.
@@ -903,7 +946,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 **Ledger samples (start-of-file behavior):**
 - L0001: `//! GGUF v2/v3 header metadata parser.` -> comment or documentation.
 - L0002: `//!` -> comment or documentation.
-- L0003: `//! Reads only the header of a GGUF file — no weights are loaded.` -> comment or documentation.
+- L0003: `//! Reads only the header of a GGUF file - no weights are loaded.` -> comment or documentation.
 - L0004: `//! This lets AURA auto-detect model capabilities (context length, RAM estimate,` -> comment or documentation.
 - L0005: `//! architecture, quantization) from whatever GGUF file the user drops in,` -> comment or documentation.
 - L0006: `//! without committing to any specific filename or hardcoded defaults.` -> comment or documentation.
@@ -968,7 +1011,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0007: `//!` -> comment or documentation.
 - L0008: `//! # Submodules` -> comment or documentation.
 - L0009: `//!` -> comment or documentation.
-- L0010: `//! - [`protocol`] — Wire framing, constants, encode/decode helpers.` -> comment or documentation.
+- L0010: `//! - [`protocol`] - Wire framing, constants, encode/decode helpers.` -> comment or documentation.
 
 **Ledger samples (risk-focused highlights):**
 - L0005 [ipc/net]: `//! Unix domain socket (`@aura_ipc_v4`).  On all other platforms, uses TCP on` -> comment or documentation.
@@ -1247,7 +1290,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0979 [unwrap/expect]: `let json2 = serde_json::to_string(&envelope_complex).unwrap();` -> potential panic path (unwrap/expect).
 - L0980 [unwrap/expect]: `let de2: AuthenticatedEnvelope<NeocortexToDaemon> = serde_json::from_str(&json2).unwrap();` -> potential panic path (unwrap/expect).
 - L0991 [unwrap/expect]: `assert!((mood_hint.unwrap() - 0.8).abs() < f32::EPSILON);` -> potential panic path (unwrap/expect).
-- L1005 [ipc/net]: `// 100 req/s is reasonable for IPC (not network — local socket).` -> comment or documentation.
+- L1005 [ipc/net]: `// 100 req/s is reasonable for IPC (not network - local socket).` -> comment or documentation.
 
 **Ledger samples (end-of-file closure behavior):**
 - L1020: `"burst_allowance ({}) must be less than max_requests_per_second ({})",` -> operational statement.
@@ -1612,7 +1655,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0075 [jni/android]: `fun unregisterService() {` -> operational statement.
 - L0077 [jni/android]: `Log.i(TAG, "AccessibilityService unregistered")` -> operational statement.
 - L0080 [jni/android]: `private fun service(): AuraAccessibilityService? = serviceRef?.get()` -> operational statement.
-- L0086 [jni/android]: `//  EXTERNAL (Kotlin → Rust) — called from AuraForegroundService` -> comment or documentation.
+- L0086 [jni/android]: `//  EXTERNAL (Kotlin → Rust) - called from AuraForegroundService` -> comment or documentation.
 
 **Ledger samples (end-of-file closure behavior):**
 - L0598 [jni/android]: `IntentFilter(Intent.ACTION_BATTERY_CHANGED)` -> operational statement.
@@ -1658,7 +1701,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0012 [jni/android]: `import android.os.PowerManager` -> operational statement.
 - L0014 [threading]: `import java.util.concurrent.atomic.AtomicBoolean` -> shared-state concurrency primitive.
 - L0017 [threading]: `* Foreground service that hosts the Rust AURA daemon on a native thread.` -> operational statement.
-- L0021 [threading]: `* 2. `onStartCommand` — spawn a daemon thread that calls `nativeInit` then` -> operational statement.
+- L0021 [threading]: `* 2. `onStartCommand` - spawn a daemon thread that calls `nativeInit` then` -> operational statement.
 - L0022 [threading]: `*    `nativeRun` (blocking). The thread name is "aura-daemon" so it's easy` -> operational statement.
 - L0025 [threading]: `*    and join the daemon thread.` -> operational statement.
 - L0032 [jni/android]: `class AuraForegroundService : Service() {` -> operational statement.
@@ -1716,7 +1759,7 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0020 [jni/android]: `import java.util.concurrent.ExecutorService` -> operational statement.
 - L0023 [threading]: `import java.util.concurrent.atomic.AtomicReference` -> shared-state concurrency primitive.
 - L0026 [jni/android]: `* AURA v4 Accessibility Service.` -> operational statement.
-- L0032 [jni/android]: `* 3. **Text input** — inject text into focused [AccessibilityNodeInfo].` -> operational statement.
+- L0032 [jni/android]: `* 3. **Text input** - inject text into focused [AccessibilityNodeInfo].` -> operational statement.
 - L0046 [jni/android]: `class AuraAccessibilityService : AccessibilityService() {` -> operational statement.
 - L0055 [threading]: `* GAP-HIGH-007: Dedicated background thread for `waitForElement` polling.` -> loop / iteration logic.
 - L0058 [ipc/net, threading, jni/android]: `* thread (which may be the main thread, a binder thread, or a JNI` -> operational statement.
@@ -1773,13 +1816,13 @@ Each subsection includes: ownership intent, quantitative profile, risk markers, 
 - L0016 [jni/android]: `class BootReceiver : BroadcastReceiver() {` -> operational statement.
 - L0022 [jni/android]: `override fun onReceive(context: Context, intent: Intent) {` -> operational statement.
 - L0023 [jni/android]: `if (intent.action != Intent.ACTION_BOOT_COMPLETED &&` -> conditional logic / guard.
-- L0029 [jni/android]: `Log.i(TAG, "Boot completed — starting AuraForegroundService")` -> operational statement.
+- L0029 [jni/android]: `Log.i(TAG, "Boot completed - starting AuraForegroundService")` -> operational statement.
 - L0031 [jni/android]: `val svcIntent = Intent(context, AuraForegroundService::class.java)` -> operational statement.
 - L0033 [jni/android]: `context.startForegroundService(svcIntent)` -> operational statement.
 - L0035 [jni/android]: `context.startService(svcIntent)` -> operational statement.
 
 **Ledger samples (end-of-file closure behavior):**
-- L0029 [jni/android]: `Log.i(TAG, "Boot completed — starting AuraForegroundService")` -> operational statement.
+- L0029 [jni/android]: `Log.i(TAG, "Boot completed - starting AuraForegroundService")` -> operational statement.
 - L0030: `(blank)` -> blank/spacing.
 - L0031 [jni/android]: `val svcIntent = Intent(context, AuraForegroundService::class.java)` -> operational statement.
 - L0032: `if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {` -> conditional logic / guard.
@@ -1984,7 +2027,7 @@ flowchart TD
 
 ---
 
-## Appendix A — Coverage Inventory (all in-scope files from source audit)
+## Appendix A - Coverage Inventory (all in-scope files from source audit)
 
 01. `Cargo.toml`
 02. `crates/aura-neocortex/Cargo.toml`
@@ -2029,15 +2072,15 @@ flowchart TD
 41. `Option 3: IPC-first watchdog choreography`
 42. `Option 4: Crash-fence wrappers around all unsafe FFI calls`
 
-## Appendix B — Condensation Method
+## Appendix B - Condensation Method
 
 - For each file block in the full ledger, this compendium preserves quantitative metrics and selected line notes.
 - Sampling includes start behavior, risk-tag highlights, and end-of-file closure behavior.
 - This preserves whole-audit breadth while compressing line-by-line raw detail into enterprise-review format.
 
-## Appendix C — Line Budget Control
+## Appendix C - Line Budget Control
 
-- Target range required by requester: 2000–2200 lines.
+- Target range required by requester: 2000-2200 lines.
 - This document is auto-shaped to fit that range without dropping any file from scope.
 
 **END OF CONDENSED ENTERPRISE AUDIT**

@@ -1107,7 +1107,7 @@ pub struct LlamaBatch {
     pub all_seq_id: LlamaSeqId,
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 extern "C" {
     fn llama_load_model_from_file(
         path: *const std::ffi::c_char,
@@ -1194,7 +1194,7 @@ extern "C" {
 /// Statically-linked llama.cpp backend for Android.
 ///
 /// Uses standard `extern "C"` blocks, as `build.rs` compiles `llama.cpp` directly.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 pub struct FfiBackend {
     model_ptr: std::sync::Mutex<Option<*mut LlamaModel>>,
     /// Context pointer — stored so `Drop` can free it if the caller
@@ -1221,12 +1221,12 @@ pub struct FfiBackend {
 // and the remaining fields (n_past) are also Mutex-wrapped. The underlying
 // llama.cpp library is safe for single-threaded per-context use, which the Mutex
 // guards enforce.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 unsafe impl Send for FfiBackend {}
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 unsafe impl Sync for FfiBackend {}
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 impl FfiBackend {
     pub fn new(_lib_path: &str) -> BackendResult<Self> {
         info!("Statically-linked FFI backend initialized (lib_path argument ignored)");
@@ -1294,7 +1294,7 @@ impl FfiBackend {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 impl Drop for FfiBackend {
     fn drop(&mut self) {
         // Free grammar sampler FIRST — it may reference model internals.
@@ -1321,7 +1321,7 @@ impl Drop for FfiBackend {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 impl LlamaBackend for FfiBackend {
     fn is_stub(&self) -> bool {
         false
@@ -1716,6 +1716,12 @@ impl LlamaBackend for FfiBackend {
 use std::sync::OnceLock;
 
 static BACKEND: OnceLock<Box<dyn LlamaBackend>> = OnceLock::new();
+/// Default deterministic seed for stub backend initialization.
+///
+/// Chosen to keep host/CI behavior reproducible across runs and preserve
+/// historical output stability in existing tests.
+#[cfg(all(target_os = "android", feature = "stub"))]
+const ANDROID_STUB_SEED: u64 = 0xA0BA;
 
 /// Initialize the global backend.
 ///
@@ -1733,13 +1739,26 @@ pub fn init_stub_backend(seed: u64) -> BackendResult<()> {
 }
 
 /// Initialize the FFI backend for Android.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 pub fn init_ffi_backend(lib_path: &str) -> BackendResult<()> {
     let backend = FfiBackend::new(lib_path)?;
     BACKEND
         .set(Box::new(backend))
         .map_err(|_| BackendError::LibraryLoad("backend already initialized".into()))?;
     info!("FFI backend initialized");
+    Ok(())
+}
+
+/// Android shim for stub-only builds.
+///
+/// When `aura-llama-sys/stub` is enabled on Android, we intentionally avoid
+/// compiling/linking llama.cpp FFI symbols. This shim keeps the public init API
+/// stable while routing initialization to the pure-Rust stub backend.
+#[cfg(all(target_os = "android", feature = "stub"))]
+pub fn init_ffi_backend(_lib_path: &str) -> BackendResult<()> {
+    init_stub_backend(ANDROID_STUB_SEED)
+        .map_err(|e| BackendError::StubMode(format!("android stub init failed: {e}")))?;
+    info!("stub feature enabled on Android: init_ffi_backend() routed to stub backend");
     Ok(())
 }
 

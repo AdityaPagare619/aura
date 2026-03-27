@@ -654,32 +654,27 @@ impl LoadedModel {
 
 impl Drop for LoadedModel {
     fn drop(&mut self) {
-        // Free llama.cpp resources on ALL platforms, including Android.
-        // The previous `#[cfg(not(target_os = "android"))]` guards caused
-        // a memory leak on mobile: neither the context nor the model weights
-        // were released, accumulating hundreds of MB per model reload.
+        // IMPORTANT: Always free through the selected backend abstraction.
         //
-        // On Android the symbols are dynamically loaded via libloading, but
-        // the stubs module resolves them correctly at runtime — there is no
-        // reason to skip cleanup.
-        if !self.ctx_ptr.is_null() {
-            // On Android, call real FFI directly (stubs are non-android only).
-            // The FFI extern name is `llama_free` (not `llama_free_context`).
-            #[cfg(target_os = "android")]
-            unsafe {
-                aura_llama_sys::llama_free(self.ctx_ptr);
-            }
-            #[cfg(not(target_os = "android"))]
-            aura_llama_sys::stubs::llama_free_context(self.ctx_ptr);
+        // Direct calls to Android FFI symbols (`llama_free`, `llama_free_model`)
+        // force the linker to require native llama.cpp symbols even in
+        // server/stub-only builds. That breaks Android server mode where the
+        // binary intentionally does not link native llama.cpp.
+        //
+        // By delegating to `backend().free_model(...)`, cleanup remains correct
+        // for all backends:
+        // - FfiBackend: frees real native resources
+        // - ServerBackend: tears down llama-server process/sentinels
+        // - StubBackend: clears stub state
+        if aura_llama_sys::is_backend_initialized()
+            && (!self.model_ptr.is_null() || !self.ctx_ptr.is_null())
+        {
+            aura_llama_sys::backend().free_model(self.model_ptr, self.ctx_ptr);
         }
-        if !self.model_ptr.is_null() {
-            #[cfg(target_os = "android")]
-            unsafe {
-                aura_llama_sys::llama_free_model(self.model_ptr);
-            }
-            #[cfg(not(target_os = "android"))]
-            aura_llama_sys::stubs::llama_free_model(self.model_ptr);
-        }
+
+        // Defensive: poison pointers after handing off to backend cleanup.
+        self.model_ptr = std::ptr::null_mut();
+        self.ctx_ptr = std::ptr::null_mut();
     }
 }
 

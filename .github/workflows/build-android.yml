@@ -116,6 +116,29 @@ jobs:
           echo "CXX_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
           echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
 
+          # Create custom target spec to force dynamic linking
+          cat > /tmp/aarch64-linux-android.json << 'TARGETEOF'
+          {
+            "arch": "aarch64",
+            "cpu": "generic",
+            "data-layout": "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
+            "executables": true,
+            "linker": "aarch64-linux-android21-clang",
+            "linker-flavor": "ld.lld",
+            "llvm-target": "aarch64-linux-android",
+            "morestack": false,
+            "os": "android",
+            "position-independent-executables": true,
+            "relro-level": "full",
+            "target-c-int-width": "32",
+            "target-endian": "little",
+            "target-pointer-width": "64"
+          }
+          TARGETEOF
+          
+          # Use the custom target spec
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_JSON=/tmp/aarch64-linux-android.json" >> $GITHUB_ENV
+          
           # Provide explicit native search roots for rustc final link step.
           # This prevents "could not find native static library c++_static"
           # when build.rs requests static libc++ for Android artifacts.

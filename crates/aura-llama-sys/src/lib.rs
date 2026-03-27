@@ -949,8 +949,8 @@ impl LlamaBackend for StubBackend {
         // a well-aligned, non-null pointer that is guaranteed never to alias valid
         // allocations. This is preferred over raw integer casts (0x1, 0x2) which have
         // no alignment guarantees and technically invoke UB under strict provenance.
-        let model_ptr = std::ptr::dangling_mut::<LlamaModel>();
-        let ctx_ptr = std::ptr::dangling_mut::<LlamaContext>();
+        let model_ptr = 1 as *mut LlamaModel;
+        let ctx_ptr = 1 as *mut LlamaContext;
 
         debug!("stub: model loaded (sentinel pointers)");
         Ok((model_ptr, ctx_ptr))
@@ -1764,7 +1764,7 @@ pub fn is_backend_initialized() -> bool {
 // Maintains backward compatibility with existing code that calls
 // `aura_llama_sys::stubs::*` directly. These now delegate to the global backend.
 
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "stub"))]
 pub mod stubs {
     use super::*;
 
@@ -1796,7 +1796,7 @@ pub mod stubs {
         ensure_init();
         // The backend load_model already creates both — return sentinel ctx
         let _ = (model, params);
-        std::ptr::dangling_mut::<LlamaContext>()
+        1 as *mut LlamaContext
     }
 
     /// Stub: free model.

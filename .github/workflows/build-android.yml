@@ -162,20 +162,31 @@ jobs:
       # ----------------------------------------------------------
       - name: Strip binaries
         run: |
+          OBJCOPY="$TOOLCHAIN/llvm-objcopy"
           STRIP="$TOOLCHAIN/llvm-strip"
+
+          mkdir -p artifacts/debug
+
           # Strip the cdylib
           CDYLIB="target/aarch64-linux-android/release/libaura_daemon.so"
           if [ -f "$CDYLIB" ]; then
+            cp "$CDYLIB" artifacts/debug/libaura_daemon.so.unstripped
             echo "Stripping libaura_daemon.so: $(du -sh $CDYLIB | cut -f1) before"
             $STRIP "$CDYLIB"
             echo "Stripped libaura_daemon.so: $(du -sh $CDYLIB | cut -f1) after"
           fi
+
           # Strip neocortex binary
           NEO="target/aarch64-linux-android/release/aura-neocortex"
           if [ -f "$NEO" ]; then
+            cp "$NEO" artifacts/debug/aura-neocortex.unstripped
+            # Split debug symbols before stripping for reliable tombstone symbolization.
+            $OBJCOPY --only-keep-debug artifacts/debug/aura-neocortex.unstripped artifacts/debug/aura-neocortex.debug
             echo "Stripping aura-neocortex: $(du -sh $NEO | cut -f1) before"
             $STRIP "$NEO"
             echo "Stripped aura-neocortex: $(du -sh $NEO | cut -f1) after"
+            # Attach debuglink so symbol tools can locate external symbols.
+            $OBJCOPY --add-gnu-debuglink=artifacts/debug/aura-neocortex.debug "$NEO" || true
           fi
 
       - name: Verify Android runtime dependencies
@@ -211,6 +222,54 @@ jobs:
           # Enforce self-contained neocortex binary for real-device reliability.
           assert_no_libcpp_shared "target/aarch64-linux-android/release/aura-neocortex"
 
+      - name: Crash forensics metadata (BuildID, init arrays, addr2line)
+        run: |
+          set -euo pipefail
+          READELF="$TOOLCHAIN/llvm-readelf"
+          ADDR2LINE="$TOOLCHAIN/llvm-addr2line"
+
+          NEO="target/aarch64-linux-android/release/aura-neocortex"
+          NEO_UN="artifacts/debug/aura-neocortex.unstripped"
+          NEO_DBG="artifacts/debug/aura-neocortex.debug"
+
+          mkdir -p artifacts/debug
+
+          sha256sum "$NEO" > artifacts/debug/aura-neocortex.sha256
+          if [ -f "$NEO_UN" ]; then sha256sum "$NEO_UN" > artifacts/debug/aura-neocortex.unstripped.sha256; fi
+
+          {
+            echo "=== Build ID (stripped) ==="
+            "$READELF" -n "$NEO" | sed -n '1,200p'
+            echo
+            if [ -f "$NEO_UN" ]; then
+              echo "=== Build ID (unstripped) ==="
+              "$READELF" -n "$NEO_UN" | sed -n '1,200p'
+              echo
+            fi
+            echo "=== Dynamic section ==="
+            "$READELF" -W -d "$NEO" | sed -n '1,200p'
+            echo
+            echo "=== .preinit_array/.init_array/.fini_array ==="
+            "$READELF" -W -x .preinit_array "$NEO" || true
+            "$READELF" -W -x .init_array "$NEO" || true
+            "$READELF" -W -x .fini_array "$NEO" || true
+            echo
+            echo "=== Relocations touching startup arrays ==="
+            "$READELF" -W -r "$NEO" | grep -E '(1db5b0|1db5c0|1db5f0|init_array|preinit_array|fini_array)' || true
+          } > artifacts/debug/aura-neocortex.forensics.txt
+
+          # Auto-symbolize known startup crash PCs from Moto G45 tombstones.
+          {
+            echo "=== addr2line known crash PCs ==="
+            if [ -f "$NEO_DBG" ]; then
+              "$ADDR2LINE" -Cfpie "$NEO_DBG" 0x18aff4 0x185d7c || true
+            elif [ -f "$NEO_UN" ]; then
+              "$ADDR2LINE" -Cfpie "$NEO_UN" 0x18aff4 0x185d7c || true
+            else
+              echo "No debug/unstripped binary found for addr2line"
+            fi
+          } > artifacts/debug/aura-neocortex.addr2line.txt
+
       # ----------------------------------------------------------
       # 10. Upload artifacts
       # ----------------------------------------------------------
@@ -221,5 +280,12 @@ jobs:
           path: |
             target/aarch64-linux-android/release/libaura_daemon.so
             target/aarch64-linux-android/release/aura-neocortex
+            artifacts/debug/libaura_daemon.so.unstripped
+            artifacts/debug/aura-neocortex.unstripped
+            artifacts/debug/aura-neocortex.debug
+            artifacts/debug/aura-neocortex.sha256
+            artifacts/debug/aura-neocortex.unstripped.sha256
+            artifacts/debug/aura-neocortex.forensics.txt
+            artifacts/debug/aura-neocortex.addr2line.txt
           retention-days: 30
           if-no-files-found: error

@@ -665,19 +665,19 @@ impl Drop for LoadedModel {
         if !self.ctx_ptr.is_null() {
             // On Android, call real FFI directly (stubs are non-android only).
             // The FFI extern name is `llama_free` (not `llama_free_context`).
-            #[cfg(target_os = "android")]
+            #[cfg(all(target_os = "android", not(feature = "stub")))]
             unsafe {
                 aura_llama_sys::llama_free(self.ctx_ptr);
             }
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(not(target_os = "android"), feature = "stub"))]
             aura_llama_sys::stubs::llama_free_context(self.ctx_ptr);
         }
         if !self.model_ptr.is_null() {
-            #[cfg(target_os = "android")]
+            #[cfg(all(target_os = "android", not(feature = "stub")))]
             unsafe {
                 aura_llama_sys::llama_free_model(self.model_ptr);
             }
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(not(target_os = "android"), feature = "stub"))]
             aura_llama_sys::stubs::llama_free_model(self.model_ptr);
         }
     }
@@ -1027,12 +1027,12 @@ fn resolve_model_path(model_dir: &Path, model_path: &str, tier: ModelTier) -> Pa
 /// On Android, reads `/proc/meminfo`.
 /// On host (Windows/Linux), returns a reasonable estimate for development.
 pub fn available_ram_mb() -> u32 {
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", not(feature = "stub")))]
     {
         read_proc_meminfo_available().unwrap_or(2048)
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(not(target_os = "android"), feature = "stub"))]
     {
         // Host development: assume 8 GB available so Full tier is selected.
         8192
@@ -1040,7 +1040,7 @@ pub fn available_ram_mb() -> u32 {
 }
 
 /// Parse MemAvailable from /proc/meminfo (Android only).
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(feature = "stub")))]
 fn read_proc_meminfo_available() -> Option<u32> {
     let contents = std::fs::read_to_string("/proc/meminfo").ok()?;
     for line in contents.lines() {
@@ -1081,14 +1081,14 @@ fn load_model_ffi(
 
     // Ensure backend is initialized
     if !aura_llama_sys::is_backend_initialized() {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(any(not(target_os = "android"), feature = "stub"))]
         {
             if let Err(e) = aura_llama_sys::init_stub_backend(0xA0BA) {
                 error!(error = %e, "failed to initialize stub backend");
                 return (std::ptr::null_mut(), std::ptr::null_mut());
             }
         }
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", not(feature = "stub")))]
         {
             // On Android, the caller (neocortex main) must init the FFI backend
             // before loading models. If we get here without init, it's a bug.

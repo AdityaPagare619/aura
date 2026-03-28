@@ -669,7 +669,7 @@ impl Drop for LoadedModel {
         if aura_llama_sys::is_backend_initialized()
             && (!self.model_ptr.is_null() || !self.ctx_ptr.is_null())
         {
-            aura_llama_sys::backend().free_model(self.model_ptr, self.ctx_ptr);
+            aura_llama_sys::backend_unsafe().free_model(self.model_ptr, self.ctx_ptr);
         }
 
         // Defensive: poison pointers after handing off to backend cleanup.
@@ -1092,7 +1092,7 @@ fn load_model_ffi(
         }
     }
 
-    let backend = aura_llama_sys::backend();
+    let backend = aura_llama_sys::backend_unsafe();
 
     match backend.load_model(&path_str, &model_params, ctx_params) {
         Ok((model_ptr, ctx_ptr)) => {
@@ -1113,7 +1113,7 @@ fn load_model_ffi(
 /// Free model + context via the llama backend.
 fn free_model_ffi(model_ptr: *mut LlamaModel, ctx_ptr: *mut LlamaContext) {
     if aura_llama_sys::is_backend_initialized() {
-        aura_llama_sys::backend().free_model(model_ptr, ctx_ptr);
+        aura_llama_sys::backend_unsafe().free_model(model_ptr, ctx_ptr);
         debug!("model freed via backend");
     } else {
         warn!("attempted to free model but backend not initialized — possible leak");
@@ -1353,7 +1353,7 @@ mod tests {
         // Stub backend returns sentinel non-null pointers (0x1, 0x2),
         // so LoadedModel::is_stub() returns false. Check stub mode via backend instead.
         assert!(!mgr.loaded().expect("should be loaded").is_stub());
-        assert!(aura_llama_sys::backend().is_stub());
+        assert!(aura_llama_sys::backend_unsafe().is_stub());
 
         mgr.unload();
         assert!(!mgr.is_loaded());

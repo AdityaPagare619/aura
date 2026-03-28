@@ -1713,50 +1713,179 @@ impl LlamaBackend for FfiBackend {
 
 // ─── Global backend accessor ────────────────────────────────────────────────
 
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
-static BACKEND: OnceLock<Box<dyn LlamaBackend>> = OnceLock::new();
+/// Errors that can occur during backend initialization.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LlamaError {
+    /// Backend was not initialized before access.
+    #[error("backend not initialized — call init_stub_backend() or init_ffi_backend() first")]
+    NotInitialized,
+    /// Backend initialization panicked (caught via catch_unwind).
+    #[error("backend initialization panicked: {0}")]
+    InitializationPanic(String),
+    /// Backend is already initialized (cannot re-initialize).
+    #[error("backend already initialized")]
+    AlreadyInitialized,
+    /// Failed to initialize the backend.
+    #[error("initialization failed: {0}")]
+    InitializationFailed(String),
+}
 
-/// Initialize the global backend.
+/// Result type for backend access.
+pub type BackendAccessResult<T> = Result<T, LlamaError>;
+
+/// Global backend storage with panic safety.
 ///
-/// On Android, call `init_ffi_backend(lib_path)` with the path to libllama.so.
-/// On desktop, call `init_stub_backend()` for the bigram-based testing stub.
+/// Uses `LazyLock<OnceLock<Result<...>>>` to:
+/// 1. Lazy-initialize on first access (avoids Static Initialization Order Fiasco)
+/// 2. Wrap result in Result type for proper error handling
+/// 3. Catch panics during initialization to prevent SIGSEGV
+static BACKEND: LazyLock<OnceLock<Result<Box<dyn LlamaBackend>, LlamaError>>> =
+    LazyLock::new(OnceLock::new);
+
+/// Initialize the global stub backend (desktop/testing).
 ///
 /// # Errors
 /// Returns an error if the backend is already initialized.
 pub fn init_stub_backend(seed: u64) -> BackendResult<()> {
-    BACKEND
-        .set(Box::new(StubBackend::new(seed)))
-        .map_err(|_| BackendError::StubMode("backend already initialized".into()))?;
-    info!("stub backend initialized (seed={})", seed);
-    Ok(())
+    // Check if already initialized
+    if BACKEND.get().is_some() {
+        return Err(BackendError::StubMode("backend already initialized".into()));
+    }
+
+    // Wrap initialization in catch_unwind to prevent panics from crashing the binary
+    let result =
+        std::panic::catch_unwind(|| Box::new(StubBackend::new(seed)) as Box<dyn LlamaBackend>);
+
+    match result {
+        Ok(backend) => {
+            // OnceLock::set returns Err if already set, Ok(()) if successful
+            if BACKEND.set(Ok(backend)).is_err() {
+                // Race condition: another thread initialized first
+                error!("backend initialized concurrently");
+                return Err(BackendError::StubMode("backend already initialized".into()));
+            }
+            info!("stub backend initialized (seed={})", seed);
+            Ok(())
+        }
+        Err(panic_info) => {
+            let message = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            error!(panic_message = %message, "stub backend initialization panicked");
+            Err(BackendError::StubMode(format!(
+                "initialization panicked: {}",
+                message
+            )))
+        }
+    }
 }
 
-/// Initialize the FFI backend for Android.
+/// Initialize the FFI backend for Android (real llama.cpp).
+///
+/// # Errors
+/// Returns an error if the backend is already initialized or if FFI initialization fails.
 #[cfg(target_os = "android")]
 pub fn init_ffi_backend(lib_path: &str) -> BackendResult<()> {
-    let backend = FfiBackend::new(lib_path)?;
-    BACKEND
-        .set(Box::new(backend))
-        .map_err(|_| BackendError::LibraryLoad("backend already initialized".into()))?;
-    info!("FFI backend initialized");
-    Ok(())
+    // Check if already initialized
+    if BACKEND.get().is_some() {
+        return Err(BackendError::LibraryLoad(
+            "backend already initialized".into(),
+        ));
+    }
+
+    // Wrap initialization in catch_unwind to prevent panics from crashing the binary
+    let result = std::panic::catch_unwind(move || {
+        FfiBackend::new(lib_path).map(|b| Box::new(b) as Box<dyn LlamaBackend>)
+    });
+
+    match result {
+        Ok(Ok(backend)) => {
+            // OnceLock::set returns Err if already set, Ok(()) if successful
+            if BACKEND.set(Ok(backend)).is_err() {
+                error!("backend initialized concurrently");
+                return Err(BackendError::LibraryLoad(
+                    "backend already initialized".into(),
+                ));
+            }
+            info!("FFI backend initialized (lib_path={})", lib_path);
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            error!(error = %e, "FFI backend initialization failed");
+            Err(BackendError::LibraryLoad(format!(
+                "initialization failed: {}",
+                e
+            )))
+        }
+        Err(panic_info) => {
+            let message = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            error!(panic_message = %message, "FFI backend initialization panicked");
+            Err(BackendError::LibraryLoad(format!(
+                "initialization panicked: {}",
+                message
+            )))
+        }
+    }
 }
 
 /// Get a reference to the initialized backend.
 ///
+/// # Errors
+/// Returns `Err(LlamaError::NotInitialized)` if `init_stub_backend()` or
+/// `init_ffi_backend()` has not been called.
+pub fn backend() -> BackendAccessResult<&'static dyn LlamaBackend> {
+    match BACKEND.get() {
+        Some(Ok(backend)) => Ok(backend.as_ref()),
+        Some(Err(e)) => {
+            // Backend failed to initialize previously
+            error!(error = %e, "backend in error state");
+            Err(LlamaError::InitializationFailed(e.to_string()))
+        }
+        None => {
+            error!("backend() called before initialization");
+            Err(LlamaError::NotInitialized)
+        }
+    }
+}
+
+/// Get a reference to the initialized backend (panicking variant for backward compatibility).
+///
 /// # Panics
-/// Panics if `init_stub_backend()` or `init_ffi_backend()` has not been called.
-/// In practice, the neocortex init code guarantees this.
-pub fn backend() -> &'static dyn LlamaBackend {
-    BACKEND.get().map(|b| b.as_ref()).expect(
+/// Panics if backend is not initialized. Use `backend()` for error-safe access.
+pub fn backend_unsafe() -> &'static dyn LlamaBackend {
+    backend().expect(
         "llama backend not initialized — call init_stub_backend() or init_ffi_backend() first",
     )
 }
 
-/// Check whether a backend has been initialized.
+/// Check whether a backend has been initialized and is ready.
 pub fn is_backend_initialized() -> bool {
-    BACKEND.get().is_some()
+    matches!(BACKEND.get(), Some(Ok(_)))
+}
+
+/// Check if backend is in an error state (failed to initialize).
+pub fn is_backend_error() -> bool {
+    matches!(BACKEND.get(), Some(Err(_)))
+}
+
+/// Get the current backend error, if any.
+pub fn backend_error() -> Option<LlamaError> {
+    BACKEND.get().and_then(|r| match r {
+        Ok(_) => None,
+        Err(e) => Some(e.clone()),
+    })
 }
 
 // ─── Legacy stub module (compatibility shim) ────────────────────────────────
@@ -1779,10 +1908,16 @@ pub mod stubs {
     pub fn llama_load_model(path: &str, params: &LlamaModelParams) -> *mut LlamaModel {
         ensure_init();
         let ctx_params = LlamaContextParams::default();
-        match backend().load_model(path, params, &ctx_params) {
-            Ok((model, _ctx)) => model,
+        match backend() {
+            Ok(b) => match b.load_model(path, params, &ctx_params) {
+                Ok((model, _ctx)) => model,
+                Err(e) => {
+                    error!(error = %e, "stub model load failed");
+                    std::ptr::null_mut()
+                }
+            },
             Err(e) => {
-                error!(error = %e, "stub model load failed");
+                error!(error = %e, "backend not available");
                 std::ptr::null_mut()
             }
         }
@@ -1802,27 +1937,43 @@ pub mod stubs {
     /// Stub: free model.
     pub fn llama_free_model(model: *mut LlamaModel) {
         if is_backend_initialized() {
-            backend().free_model(model, std::ptr::null_mut());
+            if let Ok(b) = backend() {
+                b.free_model(model, std::ptr::null_mut());
+            }
         }
     }
 
     /// Stub: free context.
     pub fn llama_free_context(ctx: *mut LlamaContext) {
         if is_backend_initialized() {
-            backend().free_model(std::ptr::null_mut(), ctx);
+            if let Ok(b) = backend() {
+                b.free_model(std::ptr::null_mut(), ctx);
+            }
         }
     }
 
     /// Stub: tokenize text.
     pub fn llama_tokenize(ctx: *mut LlamaContext, text: &str) -> Vec<LlamaToken> {
         ensure_init();
-        backend().tokenize(ctx, text).unwrap_or_default()
+        match backend() {
+            Ok(b) => b.tokenize(ctx, text).unwrap_or_default(),
+            Err(e) => {
+                error!(error = %e, "backend not available for tokenize");
+                vec![]
+            }
+        }
     }
 
     /// Stub: decode tokens to text.
     pub fn llama_decode_tokens(ctx: *mut LlamaContext, tokens: &[LlamaToken]) -> String {
         ensure_init();
-        backend().detokenize(ctx, tokens).unwrap_or_default()
+        match backend() {
+            Ok(b) => b.detokenize(ctx, tokens).unwrap_or_default(),
+            Err(e) => {
+                error!(error = %e, "backend not available for detokenize");
+                String::new()
+            }
+        }
     }
 }
 

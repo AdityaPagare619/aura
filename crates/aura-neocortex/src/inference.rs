@@ -1081,7 +1081,7 @@ impl InferenceEngine {
             }
         };
 
-        let backend = aura_llama_sys::backend();
+        let backend = aura_llama_sys::backend_unsafe();
 
         // Tokenize the full prompt (system + user content)
         let prompt_tokens = backend
@@ -1361,7 +1361,7 @@ fn decode_tokens(manager: &ModelManager, tokens: &[aura_llama_sys::LlamaToken]) 
         }
     };
 
-    aura_llama_sys::backend()
+    aura_llama_sys::backend_unsafe()
         .detokenize(ctx_ptr, tokens)
         .unwrap_or_else(|e| {
             error!(error = %e, "token decoding failed");

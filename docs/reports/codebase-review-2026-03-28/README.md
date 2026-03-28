@@ -36,3 +36,7 @@ At least 5 independent analysis agents were used and merged into this package:
 - Related failure run inspected: `23677813385` (`Device Validate`, artifact download mismatch)
 - Related clippy failure run inspected: `23649714527` (unreachable-code failure in build script at that time)
 
+## Master index
+
+- `MASTER-INDEX-WHOLE-CODEBASE.md` — single-page, whole-codebase map with subsystem-level navigation and file anchors
+

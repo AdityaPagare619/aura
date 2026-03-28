@@ -113,6 +113,18 @@ assert!(libc_path.exists(), "bionic libc not found");
 
 **Failure Code**: F003-ABI_CONTRACT
 
+### 1.7 Runtime Initialization Boundary
+
+This document starts at AURA boot stage checks, but there is an earlier boundary:
+compiler/runtime initialization that happens before regular startup flow.
+
+- If runtime initialization fails first (for example F001 class),
+  boot stage checks may never execute.
+- In that case, the fault is pre-stage startup compatibility, not a later
+  stage-specific functional failure.
+
+See: `infrastructure/docs/failure-taxonomy/F001-SIGSEGV-STARTUP.md`.
+
 ---
 
 ## Stage 2: CONFIG (Configuration Loading)

@@ -24,6 +24,9 @@ fn main() {
         // Wrap in stub-feature check so CI can compile without the submodule.
         #[cfg(not(feature = "stub"))]
         {
+            println!(
+                "cargo:warning=aura-llama-sys: Android native llama.cpp compilation enabled (feature `stub` is OFF)"
+            );
             if !std::path::Path::new("llama.cpp/llama.cpp").exists() {
                 panic!(
                     "llama.cpp submodule not initialized. \
@@ -76,6 +79,9 @@ fn main() {
         // In stub mode on Android: emit the stub marker instead of compiling native code.
         #[cfg(feature = "stub")]
         {
+            println!(
+                "cargo:warning=aura-llama-sys: Android stub mode active (feature `stub` is ON) — skipping native llama.cpp compilation by design"
+            );
             println!("cargo:rustc-cfg=llama_stub");
             println!("cargo:stub=true");
         }

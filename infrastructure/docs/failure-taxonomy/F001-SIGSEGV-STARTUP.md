@@ -19,6 +19,18 @@ SIGSEGV at startup on Android/Termux with NDK r26b
 
 AURA v4 crashes with SIGSEGV (segmentation fault) immediately at startup when running on Termux/Android with NDK r26b. The crash occurs at address 0x5ad0b4 with a NULL dereference pattern.
 
+## Timing Clarification
+
+**Critical:** this failure class occurs during compiler/runtime initialization,
+before meaningful AURA application logic and before llama backend initialization.
+
+- Crash window: PREINIT/early runtime startup
+- Not an inference-path panic inside `aura-neocortex` business logic
+- Not a post-start allocator pressure event (see F002 for that class)
+
+In practice, if this failure triggers, process startup can abort before normal
+runtime stage checks execute.
+
 ## Root Cause
 
 **NDK Issue #2073**: Known incompatibility between:

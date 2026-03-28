@@ -654,32 +654,10 @@ impl LoadedModel {
 
 impl Drop for LoadedModel {
     fn drop(&mut self) {
-        // Free llama.cpp resources on ALL platforms, including Android.
-        // The previous `#[cfg(not(target_os = "android"))]` guards caused
-        // a memory leak on mobile: neither the context nor the model weights
-        // were released, accumulating hundreds of MB per model reload.
-        //
-        // On Android the symbols are dynamically loaded via libloading, but
-        // the stubs module resolves them correctly at runtime — there is no
-        // reason to skip cleanup.
-        if !self.ctx_ptr.is_null() {
-            // On Android, call real FFI directly (stubs are non-android only).
-            // The FFI extern name is `llama_free` (not `llama_free_context`).
-            #[cfg(target_os = "android")]
-            unsafe {
-                aura_llama_sys::llama_free(self.ctx_ptr);
-            }
-            #[cfg(not(target_os = "android"))]
-            aura_llama_sys::stubs::llama_free_context(self.ctx_ptr);
-        }
-        if !self.model_ptr.is_null() {
-            #[cfg(target_os = "android")]
-            unsafe {
-                aura_llama_sys::llama_free_model(self.model_ptr);
-            }
-            #[cfg(not(target_os = "android"))]
-            aura_llama_sys::stubs::llama_free_model(self.model_ptr);
-        }
+        // Always free via the unified backend abstraction.
+        // This avoids hard-linking direct raw FFI symbols (`llama_free*`)
+        // when Android builds intentionally skip native llama.cpp linkage.
+        free_model_ffi(self.model_ptr, self.ctx_ptr);
     }
 }
 

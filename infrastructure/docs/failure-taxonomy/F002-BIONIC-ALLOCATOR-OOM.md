@@ -19,6 +19,16 @@ Out-of-memory failure in bionic libc allocator on Android/Termux
 
 bionic's malloc() returns NULL under memory pressure instead of terminating the process (unlike glibc). AURA may not handle NULL returns correctly, causing crashes or undefined behavior.
 
+## Clarification vs F001
+
+F002 is a different failure class from F001:
+
+- **F001**: startup SIGSEGV during early runtime/toolchain initialization
+- **F002**: process started, then allocation fails under memory pressure
+
+So F002 analysis assumes startup has already succeeded and the system has begun
+normal work. It does not explain pre-main startup crashes by itself.
+
 ## Root Cause
 
 - bionic's memory allocator behaves differently from glibc

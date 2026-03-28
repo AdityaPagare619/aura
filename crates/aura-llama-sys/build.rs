@@ -14,8 +14,10 @@ fn main() {
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let stub_enabled = std::env::var_os("CARGO_FEATURE_STUB").is_some();
     let server_enabled = std::env::var_os("CARGO_FEATURE_SERVER").is_some();
+    let ci_compile = std::env::var("AURA_COMPILE_LLAMA").unwrap_or_default();
+
     println!(
-        "cargo:warning=aura-llama-sys build.rs: target_os={target_os} target_arch={target_arch} stub_enabled={stub_enabled} server_enabled={server_enabled}"
+        "cargo:warning=aura-llama-sys build.rs: target_os={target_os} target_arch={target_arch} stub_enabled={stub_enabled} server_enabled={server_enabled} ci_compile={ci_compile}"
     );
 
     // Check for NDK in various environment variables
@@ -24,36 +26,143 @@ fn main() {
         .or_else(|| std::env::var("ANDROID_NDK_HOME").ok())
         .or_else(|| std::env::var("ANDROID_NDK_ROOT").ok());
 
-    // Only compile llama.cpp when targeting Android ARM64
+    // Only compile llama.cpp when targeting Android ARM64 AND either:
+    // 1. CI_COMPILE_LLAMA=true is set, OR
+    // 2. Not Android (host build)
+    let do_compile = ci_compile == "true" || target_os != "android";
+
+    // Also check if NDK is available for Android builds
+    let has_ndk = ndk_home.is_some();
+
+    // Only compile real llama.cpp if explicitly requested (CI) or on host
     if target_os == "android" && target_arch == "aarch64" {
-        // STUB MODE ENABLED (2026-03-28)
-        // The OnceLock static initialization SIOF has been fixed in src/lib.rs.
-        // However, NDK cross-compilation requires proper CI infrastructure.
-        // For now, we use stub mode which returns hardcoded responses.
-        //
-        // TO ENABLE REAL LLAMA.CPP:
-        // 1. Set up GitHub Actions with proper NDK toolchain
-        // 2. Or build natively on the device using Termux
-        //
-        // The correct build flags (when ready):
-        // -march=armv8.7a+fp16+dotprod (per official llama.cpp docs)
-        // -DGGML_USE_NEON_FP16=ON
-        // -DGGML_NATIVE=ON (runtime CPU detection)
-
-        if ndk_home.is_some() {
-            // NDK found - but still using stub for development stability
-            println!("cargo:warning=aura-llama-sys build.rs: NDK found but using STUB mode for stability");
+        if do_compile && has_ndk {
+            println!("cargo:warning=aura-llama-sys build.rs: COMPILING REAL LLAMA.CPP");
+            compile_llama_cpp();
         } else {
-            println!("cargo:warning=aura-llama-sys build.rs: NDK not found - using STUB mode");
+            // STUB MODE for local development without proper NDK
+            println!("cargo:rustc-cfg=llama_stub");
+            println!("cargo:stub=true");
+            println!("cargo:warning=aura-llama-sys build.rs: Using STUB mode (set AURA_COMPILE_LLAMA=true to compile real llama.cpp)");
         }
-
-        println!("cargo:rustc-cfg=llama_stub");
-        println!("cargo:stub=true");
-        return;
     } else {
-        // On host builds (non-Android), nothing to compile — stubs are pure Rust.
-        // Emit a DEP_LLAMA_STUB marker so dependent crates can detect stub mode.
+        // On host builds (non-Android), use stub
         println!("cargo:rustc-cfg=llama_stub");
         println!("cargo:stub=true");
     }
+}
+
+fn compile_llama_cpp() {
+    // Check for NDK
+    let ndk_home = std::env::var("NDK_HOME")
+        .ok()
+        .or_else(|| std::env::var("ANDROID_NDK_HOME").ok())
+        .or_else(|| std::env::var("ANDROID_NDK_ROOT").ok());
+
+    let Some(ndk_home) = ndk_home else {
+        panic!("NDK not found - cannot compile llama.cpp");
+    };
+
+    println!("cargo:warning=aura-llama-sys build.rs: Using NDK at {ndk_home}");
+
+    // Ensure Rust linker can resolve Android libc++ static archive.
+    emit_android_cpp_runtime_linking();
+
+    // Guard: fail with a clear message if the submodule isn't initialized.
+    if !std::path::Path::new("llama.cpp/llama.cpp").exists() {
+        panic!(
+            "llama.cpp submodule not initialized. \
+             Run: git submodule update --init --recursive\n\
+             Or build with --features aura-llama-sys/stub to skip native compilation."
+        );
+    }
+
+    // Compile C files with -std=c11
+    let mut c_build = cc::Build::new();
+    c_build
+        .cpp(false)
+        .flag("-std=c11")
+        .flag("-march=armv8.7a+fp16+dotprod")
+        .flag("-DGGML_USE_NEON")
+        .flag("-DGGML_USE_NEON_FP16=ON")
+        .flag("-DGGML_NATIVE=ON")
+        .flag("-DGGML_USE_SVE=OFF")
+        .flag("-DGGML_USE_NEON")
+        .flag("-O3")
+        .flag("-DNDEBUG")
+        .flag("-Wno-error")
+        .file("llama.cpp/ggml.c")
+        .file("llama.cpp/ggml-alloc.c")
+        .file("llama.cpp/ggml-backend.c")
+        .file("llama.cpp/ggml-quants.c")
+        .include("llama.cpp");
+    c_build.compile("llama_c");
+
+    // Compile C++ files with -std=c++17
+    let mut cpp_build = cc::Build::new();
+    cpp_build
+        .cpp(true)
+        .cpp_link_stdlib(None)
+        .flag("-std=c++17")
+        .flag("-march=armv8.7a+fp16+dotprod")
+        .flag("-DGGML_USE_NEON")
+        .flag("-DGGML_USE_NEON_FP16=ON")
+        .flag("-DGGML_NATIVE=ON")
+        .flag("-DGGML_USE_SVE=OFF")
+        .flag("-DGGML_USE_NEON")
+        .flag("-O3")
+        .flag("-DNDEBUG")
+        .flag("-Wno-error")
+        .file("llama.cpp/llama.cpp")
+        .include("llama.cpp");
+    cpp_build.compile("llama_cpp");
+
+    println!("cargo:rustc-link-lib=static=llama_c");
+    println!("cargo:rustc-link-lib=static=llama_cpp");
+}
+
+fn emit_android_cpp_runtime_linking() {
+    use std::{env, path::PathBuf};
+
+    let ndk_home = env::var("NDK_HOME")
+        .ok()
+        .or_else(|| env::var("ANDROID_NDK_HOME").ok())
+        .or_else(|| env::var("ANDROID_NDK_ROOT").ok());
+
+    let Some(ndk_home) = ndk_home else {
+        println!("cargo:warning=Android target detected but NDK not found");
+        return;
+    };
+
+    let host_tag = env::var("ANDROID_NDK_HOST_TAG").unwrap_or_else(|_| "linux-x86_64".to_string());
+
+    let mut roots = vec![PathBuf::from(&ndk_home)
+        .join("toolchains")
+        .join("llvm")
+        .join("prebuilt")
+        .join(&host_tag)
+        .join("sysroot")
+        .join("usr")
+        .join("lib")
+        .join("aarch64-linux-android")];
+
+    roots.push(
+        PathBuf::from(&ndk_home)
+            .join("toolchains")
+            .join("llvm")
+            .join("prebuilt")
+            .join(&host_tag)
+            .join("sysroot")
+            .join("usr")
+            .join("lib"),
+    );
+
+    for path in roots {
+        if path.exists() {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+    }
+
+    println!("cargo:rustc-link-lib=static=c++_static");
+    println!("cargo:rustc-link-lib=static=c++abi");
 }

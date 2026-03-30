@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout (with submodules)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
 
@@ -60,21 +60,21 @@ jobs:
       # ----------------------------------------------------------
       - name: "Install Rust — stable (F001 fix: NDK #2073 panic=abort+LTO crash)"
         if: inputs.variant == 'unstripped'
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: stable
           targets: aarch64-linux-android
 
       - name: "Install Rust — nightly-2025-06-01 (H5 test: old nightly)"
         if: inputs.variant == 'old-nightly'
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: nightly-2025-06-01
           targets: aarch64-linux-android
 
       - name: "Install Rust — stable (for unwind-panic)"
         if: inputs.variant == 'unwind-panic'
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: stable
           targets: aarch64-linux-android
@@ -84,7 +84,7 @@ jobs:
       # ----------------------------------------------------------
       - name: Cache Android NDK r26b
         id: ndk-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ~/android-ndk-r26b
           key: ndk-${{ env.NDK_VERSION }}-diag-${{ inputs.variant }}-${{ env.NDK_SHA256 }}
@@ -192,7 +192,7 @@ jobs:
       # Upload artifact
       # ----------------------------------------------------------
       - name: Upload diagnostic binary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: "aura-daemon-${{ inputs.variant }}"
           path: "target/aarch64-linux-android/release/aura-daemon"

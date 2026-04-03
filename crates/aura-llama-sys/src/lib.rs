@@ -290,6 +290,7 @@ pub struct StubBackend {
 
 /// Build the stub vocabulary and bigram transition tables.
 /// Returns (vocab, word_to_token, bigrams) for the StubBackend.
+#[allow(clippy::type_complexity)]
 fn build_stub_bigrams() -> (
     Vec<String>,
     HashMap<String, LlamaToken>,

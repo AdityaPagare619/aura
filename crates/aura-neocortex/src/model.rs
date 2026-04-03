@@ -654,32 +654,27 @@ impl LoadedModel {
 
 impl Drop for LoadedModel {
     fn drop(&mut self) {
-        // Free llama.cpp resources on ALL platforms, including Android.
-        // The previous `#[cfg(not(target_os = "android"))]` guards caused
-        // a memory leak on mobile: neither the context nor the model weights
-        // were released, accumulating hundreds of MB per model reload.
+        // IMPORTANT: Always free through the selected backend abstraction.
         //
-        // On Android the symbols are dynamically loaded via libloading, but
-        // the stubs module resolves them correctly at runtime — there is no
-        // reason to skip cleanup.
-        if !self.ctx_ptr.is_null() {
-            // On Android, call real FFI directly (stubs are non-android only).
-            // The FFI extern name is `llama_free` (not `llama_free_context`).
-            #[cfg(target_os = "android")]
-            unsafe {
-                aura_llama_sys::llama_free(self.ctx_ptr);
-            }
-            #[cfg(not(target_os = "android"))]
-            aura_llama_sys::stubs::llama_free_context(self.ctx_ptr);
+        // Direct calls to Android FFI symbols (`llama_free`, `llama_free_model`)
+        // force the linker to require native llama.cpp symbols even in
+        // server/stub-only builds. That breaks Android server mode where the
+        // binary intentionally does not link native llama.cpp.
+        //
+        // By delegating to `backend().free_model(...)`, cleanup remains correct
+        // for all backends:
+        // - FfiBackend: frees real native resources
+        // - ServerBackend: tears down llama-server process/sentinels
+        // - StubBackend: clears stub state
+        if aura_llama_sys::is_backend_initialized()
+            && (!self.model_ptr.is_null() || !self.ctx_ptr.is_null())
+        {
+            aura_llama_sys::backend_unsafe().free_model(self.model_ptr, self.ctx_ptr);
         }
-        if !self.model_ptr.is_null() {
-            #[cfg(target_os = "android")]
-            unsafe {
-                aura_llama_sys::llama_free_model(self.model_ptr);
-            }
-            #[cfg(not(target_os = "android"))]
-            aura_llama_sys::stubs::llama_free_model(self.model_ptr);
-        }
+
+        // Defensive: poison pointers after handing off to backend cleanup.
+        self.model_ptr = std::ptr::null_mut();
+        self.ctx_ptr = std::ptr::null_mut();
     }
 }
 
@@ -1079,25 +1074,38 @@ fn load_model_ffi(
     let model_params = LlamaModelParams::default();
     let path_str = path.to_string_lossy();
 
-    // Ensure backend is initialized
+    // Ensure backend is initialized - try HTTP backend first (Termux), then stub
     if !aura_llama_sys::is_backend_initialized() {
+        // Try HTTP backend first (for Termux llama-server)
+        // Default: http://localhost:8080 with model "tinyllama"
+        // This can be overridden via config in production
+        #[cfg(target_os = "android")]
+        {
+            // On Android, try HTTP backend first (Termux integration)
+            match aura_llama_sys::init_server_backend("http://localhost:8080", "tinyllama") {
+                Ok(_) => {
+                    info!("HTTP backend initialized (Termux llama-server)");
+                }
+                Err(e) => {
+                    warn!(error = %e, "HTTP backend failed, falling back to stub");
+                    if let Err(e) = aura_llama_sys::init_stub_backend(0xA0BA) {
+                        error!(error = %e, "failed to initialize stub backend");
+                        return (std::ptr::null_mut(), std::ptr::null_mut());
+                    }
+                }
+            }
+        }
         #[cfg(not(target_os = "android"))]
         {
+            // On desktop/host, use stub backend for development
             if let Err(e) = aura_llama_sys::init_stub_backend(0xA0BA) {
                 error!(error = %e, "failed to initialize stub backend");
                 return (std::ptr::null_mut(), std::ptr::null_mut());
             }
         }
-        #[cfg(target_os = "android")]
-        {
-            // On Android, the caller (neocortex main) must init the FFI backend
-            // before loading models. If we get here without init, it's a bug.
-            error!("FFI backend not initialized — call init_ffi_backend() before loading models");
-            return (std::ptr::null_mut(), std::ptr::null_mut());
-        }
     }
 
-    let backend = aura_llama_sys::backend();
+    let backend = aura_llama_sys::backend_unsafe();
 
     match backend.load_model(&path_str, &model_params, ctx_params) {
         Ok((model_ptr, ctx_ptr)) => {
@@ -1118,7 +1126,7 @@ fn load_model_ffi(
 /// Free model + context via the llama backend.
 fn free_model_ffi(model_ptr: *mut LlamaModel, ctx_ptr: *mut LlamaContext) {
     if aura_llama_sys::is_backend_initialized() {
-        aura_llama_sys::backend().free_model(model_ptr, ctx_ptr);
+        aura_llama_sys::backend_unsafe().free_model(model_ptr, ctx_ptr);
         debug!("model freed via backend");
     } else {
         warn!("attempted to free model but backend not initialized — possible leak");
@@ -1358,7 +1366,7 @@ mod tests {
         // Stub backend returns sentinel non-null pointers (0x1, 0x2),
         // so LoadedModel::is_stub() returns false. Check stub mode via backend instead.
         assert!(!mgr.loaded().expect("should be loaded").is_stub());
-        assert!(aura_llama_sys::backend().is_stub());
+        assert!(aura_llama_sys::backend_unsafe().is_stub());
 
         mgr.unload();
         assert!(!mgr.is_loaded());

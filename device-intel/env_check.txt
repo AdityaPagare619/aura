@@ -1,0 +1,1 @@
+HOME=/data/data/com.termux/files/home

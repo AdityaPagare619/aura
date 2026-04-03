@@ -1,0 +1,14 @@
+[package]
+name = "test-minimal-rust"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "test-minimal-rust"
+path = "main.rs"
+
+[profile.release]
+opt-level = "s"
+lto = false

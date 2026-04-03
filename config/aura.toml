@@ -61,6 +61,39 @@ inference_timeout_ms = 60000
 # Path to model files directory.
 model_dir = "/data/local/tmp/aura/models"
 
+# ─── Backend Selection ─────────────────────────────────────────────────────
+# Configurable backend priority order. Tried in sequence until one succeeds.
+
+[neocortex.backend]
+# Backend type: "http", "ffi", "stub"
+# http = Connect to llama-server via HTTP (Termux)
+# ffi = Native llama.cpp FFI (when properly built)
+# stub = Dummy responses (fallback)
+backend_priority = ["http", "ffi", "stub"]
+
+# HTTP backend settings (used when "http" is in priority list)
+[neocortex.backend.http]
+# Base URL for llama-server
+base_url = "http://localhost:8080"
+# Model name as recognized by server
+model_name = "tinyllama"
+# Request timeout in seconds
+timeout_secs = 60
+# Health check on startup (try to connect)
+health_check = true
+
+# FFI backend settings (used when "ffi" is in priority list)  
+[neocortex.backend.ffi]
+# Path to llama.so library (empty = auto-detect)
+libllama_path = ""
+# Path to model GGUF file
+model_path = "/data/local/tmp/llama/models/tinyllama.gguf"
+
+# Stub backend settings (always available as final fallback)
+[neocortex.backend.stub]
+# Seed for deterministic responses
+seed = 41146
+
 # ─── Execution Engine ────────────────────────────────────────────────────────
 
 [execution]

@@ -1,0 +1,115 @@
+# =============================================================================
+# AURA v4 Prometheus Configuration
+# =============================================================================
+# Scrapes the AURA daemon's /metrics endpoint and node-exporter for system
+# metrics. Designed for on-device monitoring on Android/Termux or remote
+# monitoring from a companion machine.
+#
+# The AURA daemon exposes Prometheus metrics via its existing TelemetryEngine:
+#   - Counters: events_received, inference_calls, actions_executed, etc.
+#   - Ring buffer metrics exported as gauge/counter via export_prometheus()
+#   - Health report fields as gauges (battery, thermal, memory, error_rate)
+#
+# Port: 9090 (AURA metrics endpoint, configurable via AURA_METRICS_PORT env)
+# =============================================================================
+
+global:
+  scrape_interval: 15s          # Standard scrape interval
+  scrape_timeout: 10s           # Must be < scrape_interval
+  evaluation_interval: 15s      # Rule evaluation frequency
+  external_labels:
+    cluster: "aura-device"
+    environment: "production"
+
+# =============================================================================
+# Alertmanager (optional — only if alertmanager is running)
+# =============================================================================
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:9093"
+      timeout: 10s
+
+# =============================================================================
+# Recording rules and alerting rules
+# =============================================================================
+rule_files:
+  - "alerting_rules.yml"
+
+# =============================================================================
+# Scrape targets
+# =============================================================================
+scrape_configs:
+
+  # --------------------------------------------------------------------------
+  # AURA Daemon Metrics
+  # --------------------------------------------------------------------------
+  # Primary target: the AURA daemon's Prometheus exporter endpoint.
+  # Exposes all TelemetryEngine counters + ring buffer metrics + health gauges.
+  - job_name: "aura-daemon"
+    scrape_interval: 10s         # More frequent for mobile device monitoring
+    scrape_timeout: 5s
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          instance: "aura-daemon"
+          device: "android-primary"
+    # Relabel to add AURA-specific metadata
+    metric_relabel_configs:
+      # Prefix all AURA metrics with aura_ for namespace isolation
+      - source_labels: [__name__]
+        regex: "(events_|inference_|actions_|memory_|goals_|ipc_|cycle_|safety_|checkpoint_)"
+        target_label: __name__
+        replacement: "aura_${1}"
+
+  # --------------------------------------------------------------------------
+  # Node Exporter (system metrics)
+  # --------------------------------------------------------------------------
+  # Hardware-level metrics: CPU, memory, disk, network, thermal zones.
+  # Install node_exporter on the device or use a Termux-compatible alternative.
+  - job_name: "node-exporter"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["localhost:9100"]
+        labels:
+          instance: "node"
+    # Only keep metrics relevant to mobile device monitoring
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "(node_cpu_|node_memory_|node_disk_|node_network_|node_thermal_|node_battery_|node_power_|node_filesystem_)"
+        action: keep
+
+  # --------------------------------------------------------------------------
+  # Process Exporter (AURA process metrics)
+  # --------------------------------------------------------------------------
+  # Per-process metrics for the AURA daemon binary.
+  - job_name: "process-exporter"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["localhost:9256"]
+        labels:
+          instance: "process"
+
+  # --------------------------------------------------------------------------
+  # SQLite Metrics (custom exporter)
+  # --------------------------------------------------------------------------
+  # If a custom SQLite exporter is deployed, scrape WAL size, page count,
+  # cache hit ratio, and journal mode for each AURA database.
+  - job_name: "sqlite-exporter"
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9190"]
+        labels:
+          instance: "sqlite"
+
+# =============================================================================
+# Remote write (optional — for long-term storage on a companion machine)
+# =============================================================================
+# Uncomment to push metrics to a remote Thanos/Mimir/Cortex instance.
+# remote_write:
+#   - url: "http://companion-machine:9090/api/v1/write"
+#     queue_config:
+#       max_samples_per_send: 1000
+#       batch_send_deadline: 5s

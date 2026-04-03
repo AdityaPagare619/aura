@@ -19,10 +19,13 @@ pub mod spawn;
 use std::io;
 
 pub use client::NeocortexClient;
-pub use protocol::{
-    CONNECT_TIMEOUT, FRAME_HEADER_SIZE, MAX_MESSAGE_SIZE, REQUEST_TIMEOUT, SOCKET_ADDR,
-    TCP_FALLBACK_ADDR, TCP_FALLBACK_PORT,
-};
+// Re-export protocol constants.
+// FRAME_HEADER_SIZE, MAX_MESSAGE_SIZE, REQUEST_TIMEOUT are defined in aura_types::ipc
+// and privately imported in protocol.rs. Re-export them directly from the source
+// to avoid visibility issues.
+pub use aura_types::ipc::{FRAME_HEADER_SIZE, MAX_MESSAGE_SIZE, REQUEST_TIMEOUT};
+// These are defined in protocol.rs as pub const:
+pub use protocol::{CONNECT_TIMEOUT, SOCKET_ADDR, TCP_FALLBACK_ADDR, TCP_FALLBACK_PORT};
 pub use spawn::NeocortexProcess;
 
 /// Errors arising from IPC communication with the Neocortex process.

@@ -5,6 +5,7 @@
 //! platforms, a passthrough mock is used.
 
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -71,15 +72,18 @@ mod rnnoise_ffi {
 #[allow(dead_code)]
 pub struct RnnoiseDenoiser {
     #[cfg(target_os = "android")]
-    state: *mut std::ffi::c_void,
+    state: Mutex<*mut std::ffi::c_void>,
     /// Reusable buffer for upsampled input (480 samples at 48 kHz).
     upsample_buf: Vec<f32>,
     /// Reusable buffer for denoised output (480 samples at 48 kHz).
     output_buf: Vec<f32>,
 }
 
-// SAFETY: The RNNoise state is only accessed from one thread at a time.
-// The VoiceEngine serializes all calls through its async task.
+// SAFETY: The RNNoise state pointer is wrapped in a Mutex, providing interior
+// mutability and cross-thread synchronization. The Mutex ensures only one thread
+// can dereference the RNNoise C library pointer at a time. The VoiceEngine
+// serializes all calls through its async task, and the Mutex provides an
+// additional safety guarantee.
 unsafe impl Send for RnnoiseDenoiser {}
 
 impl RnnoiseDenoiser {
@@ -87,6 +91,9 @@ impl RnnoiseDenoiser {
     pub fn new() -> SignalResult<Self> {
         #[cfg(target_os = "android")]
         let state = unsafe {
+            // SAFETY: rnnoise_create allocates a new RNNoise state. We pass null
+            // for the optional model parameter (uses built-in default). The returned
+            // pointer is null-checked; if null, we return an error rather than storing it.
             let s = rnnoise_ffi::rnnoise_create(std::ptr::null());
             if s.is_null() {
                 return Err(SignalError::RnnoiseInitFailed);
@@ -96,7 +103,7 @@ impl RnnoiseDenoiser {
 
         Ok(Self {
             #[cfg(target_os = "android")]
-            state,
+            state: Mutex::new(state),
             upsample_buf: vec![0.0f32; RNNOISE_FRAME_SIZE],
             output_buf: vec![0.0f32; RNNOISE_FRAME_SIZE],
         })
@@ -123,9 +130,14 @@ impl RnnoiseDenoiser {
             Self::upsample(samples, &mut self.upsample_buf, RESAMPLE_FACTOR);
 
             // RNNoise expects float in roughly [-32768, 32767] range
+            let ptr = *self.state.lock().unwrap();
             let vad_prob = unsafe {
+                // SAFETY: ptr was allocated by rnnoise_create and is non-null
+                // (checked in new()). upsample_buf and output_buf are Vecs with
+                // RNNOISE_FRAME_SIZE capacity, so their pointers are valid for
+                // the duration of this call. The Mutex ensures exclusive access.
                 rnnoise_ffi::rnnoise_process_frame(
-                    self.state,
+                    ptr,
                     self.output_buf.as_mut_ptr(),
                     self.upsample_buf.as_ptr(),
                 )
@@ -174,8 +186,11 @@ impl RnnoiseDenoiser {
 impl Drop for RnnoiseDenoiser {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        unsafe {
-            rnnoise_ffi::rnnoise_destroy(self.state);
+        {
+            let ptr = *self.state.lock().unwrap();
+            if !ptr.is_null() {
+                unsafe { rnnoise_ffi::rnnoise_destroy(ptr) };
+            }
         }
     }
 }

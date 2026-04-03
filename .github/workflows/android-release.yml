@@ -1,0 +1,49 @@
+name: Android Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          
+      - name: Install Android NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y android-sdk sdkmanager
+          yes | sdkmanager --licenses > /dev/null 2>&1
+          sdkmanager "ndk;27.0.12077973" "platforms;android-34"
+        shell: bash
+        
+      - name: Set NDK environment
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "AURA_COMPILE_LLAMA=true" >> $GITHUB_ENV
+          
+      - name: Build Release
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+        run: |
+          cargo build --release --target aarch64-linux-android -p aura-neocortex
+          cargo build --release --target aarch64-linux-android -p aura-daemon
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-android-arm64
+          path: |
+            target/aarch64-linux-android/release/aura-neocortex
+            target/aarch64-linux-android/release/aura-daemon

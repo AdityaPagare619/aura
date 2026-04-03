@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+// ─── Daemon defaults (named constants for RSS thresholds) ───────────────────
+
+/// Default RSS memory warning threshold in MB — daemon begins shedding non-critical load.
+pub const DEFAULT_RSS_WARNING_MB: u32 = 28;
+
+/// Default RSS memory hard ceiling in MB — daemon will aggressively shed load above this.
+pub const DEFAULT_RSS_CEILING_MB: u32 = 30;
+
+/// Low-memory threshold for neocortex IPC handler (MB) — reduced message size limits.
+pub const NEOCORTEX_LOW_MEMORY_MB: u32 = 200;
+
 /// Top-level configuration for the entire AURA system.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuraConfig {
@@ -61,18 +72,30 @@ fn default_daemon_log_level() -> String {
     "info".to_string()
 }
 fn default_daemon_data_dir() -> String {
-    "/data/data/com.aura/files".to_string()
+    std::env::var("AURA_DATA_DIR").unwrap_or_else(|_| {
+        #[cfg(target_os = "android")]
+        {
+            "/data/local/tmp/aura".to_string()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            format!(
+                "{}/.aura",
+                std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+            )
+        }
+    })
 }
 
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             checkpoint_interval_s: 300,
-            rss_warning_mb: 28,
-            rss_ceiling_mb: 30,
+            rss_warning_mb: DEFAULT_RSS_WARNING_MB,
+            rss_ceiling_mb: DEFAULT_RSS_CEILING_MB,
             version: "4.0.0-alpha.8".to_string(),
             log_level: "info".to_string(),
-            data_dir: "/data/data/com.aura/files".to_string(),
+            data_dir: default_daemon_data_dir(),
         }
     }
 }
@@ -175,7 +198,16 @@ impl Default for NeocortexConfig {
             n_threads: 4,
             max_memory_mb: 2048,
             inference_timeout_ms: 60_000,
-            model_dir: "/data/local/tmp/aura/models".to_string(),
+            model_dir: std::env::var("AURA_MODELS_PATH").unwrap_or_else(|_| {
+                #[cfg(target_os = "android")]
+                {
+                    "/data/local/tmp/aura/models".to_string()
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    "./models".to_string()
+                }
+            }),
             default_model_name: default_model_name(),
             default_model_path: default_model_path(),
             default_model_context_size: default_model_context_size(),
@@ -277,7 +309,16 @@ pub struct SqliteConfig {
 impl Default for SqliteConfig {
     fn default() -> Self {
         Self {
-            db_path: "/data/data/com.aura/databases/aura.db".to_string(),
+            db_path: std::env::var("AURA_DB_PATH").unwrap_or_else(|_| {
+                #[cfg(target_os = "android")]
+                {
+                    "/data/local/tmp/aura/aura.db".to_string()
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    "./aura.db".to_string()
+                }
+            }),
             wal_size_limit: 4 * 1024 * 1024, // 4MB
             max_episodes: 10_000,
             max_semantic_entries: 5_000,

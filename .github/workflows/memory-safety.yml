@@ -1,0 +1,285 @@
+# ============================================================
+# AURA v4 — Memory Safety Testing Workflow
+# AddressSanitizer (ASan) + Valgrind memcheck
+#
+# Runs on: push to main, PR, manual dispatch
+# Target: ubuntu-latest (Linux only — ASan/valgrind require ELF)
+# ============================================================
+
+name: Memory Safety
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: memory-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  # ASan configuration
+  RUSTFLAGS: "-Z sanitizer=address"
+  ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=1"
+
+jobs:
+  # ============================================================
+  # ADDRESS SANITIZER — Build and test with ASan
+  # ============================================================
+  address-sanitizer:
+    name: AddressSanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ASan requires nightly for -Z sanitizer flag
+      - name: Install Rust (nightly with ASan support)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libopus-dev
+
+      - name: Build with ASan
+        run: |
+          cargo build \
+            --workspace \
+            --features "aura-llama-sys/stub,aura-daemon/reqwest" \
+            --target x86_64-unknown-linux-gnu \
+            2>&1 | tee asan-build.log
+
+      - name: Run tests with ASan
+        id: asan_test
+        run: |
+          cargo test \
+            --workspace \
+            --features "aura-llama-sys/stub,aura-daemon/reqwest" \
+            --target x86_64-unknown-linux-gnu \
+            -- \
+            --test-threads=1 \
+            2>&1 | tee asan-test.log
+        env:
+          RUST_LOG: debug
+
+      - name: Analyze ASan results
+        if: always()
+        run: |
+          echo "=== ASan Build Log ==="
+          grep -i "error\|leak\|sanitizer" asan-build.log 2>/dev/null || echo "No issues in build"
+          echo ""
+          echo "=== ASan Test Log ==="
+          grep -i "error\|leak\|sanitizer\|SUMMARY" asan-test.log 2>/dev/null || echo "No issues in tests"
+
+          # Check for actual leaks (not just ASan runtime messages)
+          if grep -q "ERROR: AddressSanitizer:.*leak" asan-test.log 2>/dev/null; then
+            echo "::error::Memory leak detected by AddressSanitizer!"
+            exit 1
+          fi
+          if grep -q "ERROR: AddressSanitizer:.*heap-buffer-overflow" asan-test.log 2>/dev/null; then
+            echo "::error::Heap buffer overflow detected!"
+            exit 1
+          fi
+          if grep -q "ERROR: AddressSanitizer:.*stack-buffer-overflow" asan-test.log 2>/dev/null; then
+            echo "::error::Stack buffer overflow detected!"
+            exit 1
+          fi
+          if grep -q "ERROR: AddressSanitizer:.*use-after-free" asan-test.log 2>/dev/null; then
+            echo "::error::Use-after-free detected!"
+            exit 1
+          fi
+          echo "✓ No memory safety issues detected"
+
+      - name: Upload ASan logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-logs
+          path: |
+            asan-build.log
+            asan-test.log
+          retention-days: 90
+
+  # ============================================================
+  # VALGRIND MEMCHECK — Detect leaks and invalid memory access
+  # ============================================================
+  valgrind:
+    name: Valgrind Memcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libopus-dev valgrind
+
+      - name: Build for valgrind
+        run: |
+          # Build in debug mode (valgrind needs debug symbols)
+          cargo build \
+            --workspace \
+            --features "aura-llama-sys/stub,aura-daemon/reqwest"
+
+      - name: Run unit tests (valgrind)
+        id: valgrind_unit
+        run: |
+          mkdir -p valgrind-logs
+
+          # Get list of test binaries
+          TEST_BINARIES=$(find target/debug/deps -type f \( -name "integration_*" -o -name "integration_ipc*" \) -executable 2>/dev/null | head -20)
+
+          if [ -z "$TEST_BINARIES" ]; then
+            echo "No test binaries found, running via cargo test wrapper"
+            # Run through cargo, extract binary paths
+            cargo test \
+              --workspace \
+              --features "aura-llama-sys/stub,aura-daemon/reqwest" \
+              --no-run 2>&1 | tee valgrind-logs/build.log
+
+            # Run each discovered test binary under valgrind
+            for BIN in $(find target/debug/deps -type f -executable -name "integration_ipc*" 2>/dev/null | head -5); do
+              BIN_NAME=$(basename "$BIN")
+              echo "Running valgrind on: $BIN_NAME"
+              valgrind \
+                --tool=memcheck \
+                --leak-check=full \
+                --show-leak-kinds=all \
+                --track-origins=yes \
+                --error-exitcode=1 \
+                --log-file="valgrind-logs/${BIN_NAME}.log" \
+                "$BIN" --test-threads=1 2>&1 || true
+            done
+          fi
+
+      - name: Analyze valgrind results
+        if: always()
+        run: |
+          echo "=== Valgrind Analysis ==="
+          LEAK_FOUND=false
+
+          for log in valgrind-logs/*.log; do
+            if [ -f "$log" ]; then
+              echo "--- $(basename $log) ---"
+              # Extract summary line
+              grep "ERROR SUMMARY" "$log" 2>/dev/null || echo "No summary found"
+
+              # Check for definitely/indirectly lost
+              if grep -q "definitely lost: [^0]" "$log" 2>/dev/null; then
+                echo "::error::Definitely lost memory in $(basename $log)"
+                grep "definitely lost:" "$log"
+                LEAK_FOUND=true
+              fi
+              if grep -q "indirectly lost: [^0]" "$log" 2>/dev/null; then
+                echo "::warning::Indirectly lost memory in $(basename $log)"
+                grep "indirectly lost:" "$log"
+              fi
+              if grep -q "Invalid read" "$log" 2>/dev/null; then
+                echo "::error::Invalid read detected in $(basename $log)"
+                LEAK_FOUND=true
+              fi
+              if grep -q "Invalid write" "$log" 2>/dev/null; then
+                echo "::error::Invalid write detected in $(basename $log)"
+                LEAK_FOUND=true
+              fi
+            fi
+          done
+
+          if [ "$LEAK_FOUND" = "true" ]; then
+            echo "::error::Memory safety issues detected — see valgrind logs"
+            exit 1
+          fi
+          echo "✓ Valgrind: No memory safety issues"
+
+      - name: Upload valgrind logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-logs
+          path: valgrind-logs/
+          retention-days: 90
+
+  # ============================================================
+  # MIRI — Undefined behavior detection (nightly)
+  # ============================================================
+  miri:
+    name: Miri UB Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (nightly with Miri)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libopus-dev
+
+      - name: Run Miri tests
+        id: miri
+        run: |
+          cargo miri test \
+            --workspace \
+            --features "aura-llama-sys/stub,aura-daemon/reqwest" \
+            -- \
+            --test-threads=1 \
+            2>&1 | tee miri-results.log
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-ignore-leaks"
+          RUST_LOG: debug
+        continue-on-error: true
+
+      - name: Analyze Miri results
+        if: always()
+        run: |
+          echo "=== Miri Analysis ==="
+          if grep -q "Undefined Behavior" miri-results.log 2>/dev/null; then
+            echo "::error::Undefined behavior detected by Miri!"
+            grep -A5 "Undefined Behavior" miri-results.log
+            exit 1
+          fi
+          if grep -q "error: abnormal termination" miri-results.log 2>/dev/null; then
+            echo "::warning::Miri terminated abnormally — check for unsupported operations"
+          fi
+          echo "✓ Miri: No undefined behavior detected"
+
+      - name: Upload Miri results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miri-results
+          path: miri-results.log
+          retention-days: 90

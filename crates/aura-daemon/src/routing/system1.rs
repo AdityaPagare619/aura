@@ -109,6 +109,29 @@ impl System1 {
                     };
                 }
             }
+            Intent::InformationRequest => {
+                // Handle basic information requests without LLM
+                // This provides a fallback when neocortex is unavailable
+                if let Some(response) = self.handle_basic_information(&event.content) {
+                    return System1Result {
+                        success: true,
+                        action_plan: None,
+                        response_text: Some(response),
+                        execution_time_ms: 0,
+                    };
+                }
+            }
+            Intent::ConversationContinue => {
+                // Basic conversational responses without LLM
+                if let Some(response) = self.handle_basic_conversation(&event.content) {
+                    return System1Result {
+                        success: true,
+                        action_plan: None,
+                        response_text: Some(response),
+                        execution_time_ms: 0,
+                    };
+                }
+            }
             _ => {}
         }
 
@@ -119,6 +142,78 @@ impl System1 {
             response_text: None,
             execution_time_ms: 0,
         }
+    }
+
+    /// Handle basic information requests without LLM.
+    /// Provides fallback responses when neocortex is unavailable.
+    fn handle_basic_information(&self, content: &str) -> Option<String> {
+        let content_lower = content.to_lowercase();
+
+        // Time-related queries
+        if content_lower.contains("time") || content_lower.contains("what time") {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?;
+            let secs = now.as_secs();
+            let hours = (secs / 3600) % 24;
+            let minutes = (secs / 60) % 60;
+            return Some(format!(
+                "The current time is approximately {:02}:{:02} UTC",
+                hours, minutes
+            ));
+        }
+
+        // Date-related queries
+        if content_lower.contains("date") || content_lower.contains("what day") {
+            return Some("I'm operating in offline mode. My reasoning engine (neocortex) is currently unavailable, but I can still handle basic tasks.".to_string());
+        }
+
+        // Status queries
+        if content_lower.contains("status") || content_lower.contains("how are you") {
+            return Some("AURA is running in degraded mode. My deep reasoning (neocortex) is unavailable, but I'm still operational for basic tasks.".to_string());
+        }
+
+        // Help query
+        if content_lower.contains("help") || content_lower.contains("what can you do") {
+            return Some("In my current state, I can help with:\n- Basic task execution\n- ETG-cached action plans\n- System status queries\n\nMy deep reasoning (neocortex) is currently unavailable.".to_string());
+        }
+
+        // Default: acknowledge and indicate offline mode
+        if content_lower.contains("hey")
+            || content_lower.contains("hello")
+            || content_lower.contains("hi")
+        {
+            return Some("Hello! I'm running in offline mode - my AI reasoning is temporarily unavailable. How can I help you with basic tasks?".to_string());
+        }
+
+        None
+    }
+
+    /// Handle basic conversational messages without LLM.
+    fn handle_basic_conversation(&self, content: &str) -> Option<String> {
+        let content_lower = content.to_lowercase();
+
+        // Greetings
+        if content_lower.contains("hello")
+            || content_lower.contains("hi")
+            || content_lower.contains("hey")
+        {
+            return Some("Hello! I'm currently operating in offline mode. My AI brain (neocortex) is unavailable, but I can still help with basic tasks.".to_string());
+        }
+
+        // Thank you
+        if content_lower.contains("thank") {
+            return Some(
+                "You're welcome! Let me know if there's anything else I can help with.".to_string(),
+            );
+        }
+
+        // Help request
+        if content_lower.contains("help") {
+            return Some("I can help with basic tasks. My AI reasoning is offline - would you like me to try reconnecting?".to_string());
+        }
+
+        None
     }
 
     /// Try to find a known action sequence in the ETG plan cache.

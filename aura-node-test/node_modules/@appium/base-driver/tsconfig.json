@@ -1,0 +1,16 @@
+{
+  "extends": "@appium/tsconfig/tsconfig.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "paths": {
+      "@appium/support": ["../support"],
+      "@appium/types": ["../types"],
+      "@appium/driver-test-support": ["../driver-test-support"]
+    },
+    "checkJs": true,
+    "types": ["node", "mocha"]
+  },
+  "include": ["lib"],
+  "exclude": ["build"],
+  "references": [{"path": "../support"}, {"path": "../types"}]
+}

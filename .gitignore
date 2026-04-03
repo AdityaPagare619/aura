@@ -51,6 +51,7 @@ aura_state/
 config/secrets/
 *.pem
 *.key
+config.toml
 
 # ---- OS ----
 .DS_Store

@@ -1,0 +1,17 @@
+{
+  "name": "aura-node-test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@wdio/browserstack-service": "^9.26.1",
+    "appium": "^3.2.2",
+    "webdriverio": "^9.26.1"
+  }
+}

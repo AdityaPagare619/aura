@@ -4,6 +4,7 @@
 //! On non-Android platforms (or when the model isn't available), we fall back to
 //! a simple energy-based detector.
 
+use std::sync::Mutex;
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -100,7 +101,7 @@ pub enum VadEvent {
 
 pub struct VoiceActivityDetector {
     #[cfg(target_os = "android")]
-    silero_state: *mut std::ffi::c_void,
+    silero_state: Mutex<*mut std::ffi::c_void>,
 
     /// Speech probability threshold.
     threshold: f32,
@@ -119,9 +120,11 @@ pub struct VoiceActivityDetector {
 }
 
 // SAFETY: VoiceActivityDetector is Send because the raw `*mut c_void`
-// silero_state (present only on Android) is only accessed through &mut self
-// methods. The Silero VAD ONNX runtime is not thread-safe per-session, but
-// exclusive &mut access ensures no concurrent aliasing during cross-thread moves.
+// silero_state (present only on Android) is wrapped in a Mutex, which
+// provides both interior mutability and cross-thread synchronization.
+// The Mutex ensures only one thread can dereference the ONNX session
+// pointer at a time. The Silero VAD ONNX runtime is not thread-safe
+// per-session, but Mutex serialization upholds this invariant.
 unsafe impl Send for VoiceActivityDetector {}
 
 impl VoiceActivityDetector {
@@ -138,7 +141,7 @@ impl VoiceActivityDetector {
     pub fn with_params(threshold: f32, min_speech_ms: u32, min_silence_ms: u32) -> Self {
         Self {
             #[cfg(target_os = "android")]
-            silero_state: std::ptr::null_mut(), // initialized on first use
+            silero_state: Mutex::new(std::ptr::null_mut()), // initialized on first use
             threshold,
             min_speech_ms,
             min_silence_ms,
@@ -172,8 +175,12 @@ impl VoiceActivityDetector {
         self.last_frame_time = None;
 
         #[cfg(target_os = "android")]
-        if !self.silero_state.is_null() {
-            unsafe { silero_ffi::silero_vad_reset(self.silero_state) };
+        {
+            let ptr = *self.silero_state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid silero VAD handle, null-checked. Single-threaded via Mutex.
+                unsafe { silero_ffi::silero_vad_reset(ptr) };
+            }
         }
     }
 
@@ -199,9 +206,12 @@ impl VoiceActivityDetector {
         #[cfg(target_os = "android")]
         {
             let float_samples: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
+            let ptr = *self.silero_state.lock().unwrap();
+            // SAFETY: ptr is a valid silero VAD handle. Mutex ensures single-threaded access.
+            // float_samples.as_ptr() is valid for the duration of this call.
             unsafe {
                 silero_ffi::silero_vad_process(
-                    self.silero_state,
+                    ptr,
                     float_samples.as_ptr(),
                     float_samples.len() as std::os::raw::c_int,
                 )
@@ -355,8 +365,12 @@ impl Default for VoiceActivityDetector {
 impl Drop for VoiceActivityDetector {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        if !self.silero_state.is_null() {
-            unsafe { silero_ffi::silero_vad_destroy(self.silero_state) };
+        {
+            let ptr = *self.silero_state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid silero VAD handle, null-checked. Only called once during drop.
+                unsafe { silero_ffi::silero_vad_destroy(ptr) };
+            }
         }
     }
 }

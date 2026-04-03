@@ -29,19 +29,21 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait after sending SIGTERM before escalating to SIGKILL.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// On Android APK mode, the neocortex binary is packaged as a shared library.
+/// On Android, the neocortex binary is at /data/local/tmp/aura-neocortex.
 #[cfg(target_os = "android")]
-const ANDROID_NEOCORTEX_PATH: &str = "/data/data/dev.aura/lib/libaura_neocortex.so";
+const ANDROID_NEOCORTEX_PATH: &str = "/data/local/tmp/aura-neocortex";
 
 // ─── Path resolution ────────────────────────────────────────────────────────
 
 /// Resolve the neocortex binary path for the current platform.
 ///
-/// Resolution order:
+/// Resolution order (enterprise-first: check executable paths before permission-restricted ones):
 /// 1. `AURA_NEOCORTEX_BIN` environment variable (explicit override)
-/// 2. `$PREFIX/bin/aura-neocortex` (Termux convention)
-/// 3. Platform default:
-///    - Android APK: `/data/data/dev.aura/lib/libaura_neocortex.so`
+/// 2. `$PREFIX/bin/aura-neocortex` (Termux system bin - always executable)
+/// 3. `$HOME/bin/aura-neocortex` (user bin - common for manual installs)
+/// 4. `$HOME/.local/bin/aura-neocortex` (XDG-style user bin)
+/// 5. Platform default:
+///    - Android: `/data/local/tmp/aura-neocortex` (legacy, may have permission issues)
 ///    - Host: `aura-neocortex` (relies on PATH)
 fn resolve_neocortex_path() -> PathBuf {
     // 1. Explicit env override.
@@ -57,7 +59,7 @@ fn resolve_neocortex_path() -> PathBuf {
         );
     }
 
-    // 2. Termux: $PREFIX/bin/aura-neocortex.
+    // 2. Termux: $PREFIX/bin/aura-neocortex (preferred - always executable).
     if let Ok(prefix) = std::env::var("PREFIX") {
         let termux_path = PathBuf::from(&prefix).join("bin").join("aura-neocortex");
         if termux_path.exists() {
@@ -66,9 +68,32 @@ fn resolve_neocortex_path() -> PathBuf {
         }
     }
 
-    // 3. Platform default.
+    // 3. User home bin: $HOME/bin/aura-neocortex (common manual install location).
+    if let Ok(home) = std::env::var("HOME") {
+        let home_bin = PathBuf::from(&home).join("bin").join("aura-neocortex");
+        if home_bin.exists() {
+            info!(path = %home_bin.display(), "neocortex binary from $HOME/bin");
+            return home_bin;
+        }
+
+        // 4. XDG-style: $HOME/.local/bin/aura-neocortex.
+        let xdg_bin = PathBuf::from(&home)
+            .join(".local")
+            .join("bin")
+            .join("aura-neocortex");
+        if xdg_bin.exists() {
+            info!(path = %xdg_bin.display(), "neocortex binary from $HOME/.local/bin");
+            return xdg_bin;
+        }
+    }
+
+    // 5. Platform default (last resort - may have permission issues on some devices).
     #[cfg(target_os = "android")]
     {
+        warn!(
+            path = ANDROID_NEOCORTEX_PATH,
+            "using default neocortex path — may fail on devices with restricted /data/local/tmp/ permissions"
+        );
         PathBuf::from(ANDROID_NEOCORTEX_PATH)
     }
 
@@ -196,7 +221,9 @@ impl NeocortexProcess {
     /// Only available on Android targets.
     #[cfg(target_os = "android")]
     pub async fn spawn_android(model_dir: Option<&Path>) -> Result<Self, IpcError> {
-        Self::spawn(Path::new(ANDROID_NEOCORTEX_PATH), model_dir).await
+        let path = std::env::var("AURA_NEOCORTEX_BIN")
+            .unwrap_or_else(|_| ANDROID_NEOCORTEX_PATH.to_string());
+        Self::spawn(Path::new(&path), model_dir).await
     }
 
     /// Whether the child process is believed to be running.
@@ -526,10 +553,7 @@ mod tests {
     #[cfg(target_os = "android")]
     #[test]
     fn android_path_constant() {
-        assert_eq!(
-            ANDROID_NEOCORTEX_PATH,
-            "/data/data/dev.aura/lib/libaura_neocortex.so"
-        );
+        assert_eq!(ANDROID_NEOCORTEX_PATH, "/data/local/tmp/aura-neocortex");
     }
 
     #[test]

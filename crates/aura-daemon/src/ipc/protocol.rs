@@ -13,6 +13,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::debug;
 
+pub use aura_types::ipc::REQUEST_TIMEOUT;
+use aura_types::ipc::{FRAME_HEADER_SIZE, MAX_MESSAGE_SIZE};
+
 use super::IpcError;
 
 // ─── Platform-specific stream type ──────────────────────────────────────────────────
@@ -29,6 +32,8 @@ pub type IpcStream = tokio::net::UnixStream;
 pub type IpcStream = tokio::net::TcpStream;
 
 // ─── Constants ──────────────────────────────────────────────────────────
+// Wire protocol constants (MAX_MESSAGE_SIZE, FRAME_HEADER_SIZE, REQUEST_TIMEOUT)
+// are imported from aura_types::ipc — single source of truth.
 
 /// Abstract socket address used on Android / Linux.
 ///
@@ -44,17 +49,8 @@ pub const TCP_FALLBACK_ADDR: &str = "127.0.0.1";
 /// TCP fallback port.
 pub const TCP_FALLBACK_PORT: u16 = 19400;
 
-/// Maximum allowed message payload size (256 KB).
-pub const MAX_MESSAGE_SIZE: usize = 256 * 1024;
-
 /// Timeout for establishing the initial connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Timeout for a single request→response round-trip.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Size of the length-prefix header (u32 little-endian).
-pub const FRAME_HEADER_SIZE: usize = 4;
 
 // ─── Encoding ───────────────────────────────────────────────────────────
 

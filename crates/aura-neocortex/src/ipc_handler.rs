@@ -26,9 +26,10 @@ type IpcStreamInner = std::os::unix::net::UnixStream;
 #[cfg(not(target_os = "android"))]
 type IpcStreamInner = std::net::TcpStream;
 
+use aura_types::config::NEOCORTEX_LOW_MEMORY_MB;
 use aura_types::ipc::{
     ContextPackage, DaemonToNeocortex, FailureContext, InferenceMode, NeocortexToDaemon,
-    ProactiveTrigger,
+    ProactiveTrigger, LENGTH_PREFIX_SIZE, MAX_MESSAGE_SIZE, REQUEST_TIMEOUT,
 };
 use tracing::{debug, error, info, warn};
 
@@ -42,18 +43,11 @@ use crate::{
 };
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-
-/// Maximum message size under normal conditions (256 KB).
-const MAX_MESSAGE_SIZE: usize = 256 * 1024;
+// Wire protocol constants (MAX_MESSAGE_SIZE, LENGTH_PREFIX_SIZE, REQUEST_TIMEOUT)
+// are imported from aura_types::ipc — single source of truth.
 
 /// Maximum message size under memory pressure (16 KB).
 const MAX_MESSAGE_SIZE_LOW_MEM: usize = 16 * 1024;
-
-/// Timeout for a single request processing (30 seconds).
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Length prefix size: 4 bytes, little-endian u32.
-const LENGTH_PREFIX_SIZE: usize = 4;
 
 // ─── IPC handler ────────────────────────────────────────────────────────────
 
@@ -852,7 +846,7 @@ impl IpcHandler {
 
         // Check for memory warning conditions before inference.
         let available_mb = crate::model::available_ram_mb();
-        if available_mb < 200 {
+        if available_mb < NEOCORTEX_LOW_MEMORY_MB {
             warn!(available_mb, "low memory — sending warning");
             // Send memory warning as a side-effect via the progress channel,
             // but continue with inference (Founder's directive: never refuse).

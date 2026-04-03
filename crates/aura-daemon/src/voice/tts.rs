@@ -110,15 +110,16 @@ mod piper_ffi {
 
 pub struct PiperTts {
     #[cfg(target_os = "android")]
-    state: *mut std::ffi::c_void,
+    state: std::sync::Mutex<*mut std::ffi::c_void>,
 
     pub sample_rate: u32,
 }
 
 // SAFETY: PiperTts is Send because the raw `*mut c_void` state (present only on
-// Android) is only accessed through &mut self methods, ensuring exclusive access.
-// The piper C library is not thread-safe per-instance, but single-owner transfer
-// between threads is safe.
+// Android) is wrapped in a Mutex, providing interior mutability and cross-thread
+// synchronization. The Mutex ensures only one thread can dereference the piper
+// C library pointer at a time. The piper C library is not thread-safe per-instance,
+// but Mutex serialization upholds single-owner access.
 unsafe impl Send for PiperTts {}
 
 impl PiperTts {
@@ -126,7 +127,7 @@ impl PiperTts {
         #[cfg(target_os = "android")]
         let state = {
             // TODO: piper_ffi::piper_init
-            std::ptr::null_mut()
+            std::sync::Mutex::new(std::ptr::null_mut())
         };
 
         Ok(Self {
@@ -155,9 +156,12 @@ impl PiperTts {
             let mut out_ptr: *mut i16 = std::ptr::null_mut();
             let mut out_len: std::os::raw::c_int = 0;
 
+            let ptr = *self.state.lock().unwrap();
+            // SAFETY: ptr is a valid piper TTS handle. Mutex ensures single-threaded access.
+            // out_ptr/out_len are initialized to null/0 before the call.
             let rc = unsafe {
                 piper_ffi::piper_synthesize(
-                    self.state,
+                    ptr,
                     c_text.as_ptr(),
                     _params.speed,
                     &mut out_ptr,
@@ -168,7 +172,15 @@ impl PiperTts {
                 return Err(TtsError::SynthesisError("piper_synthesize failed".into()));
             }
 
+            // CRIT-03 FIX (CWE-119): Validate pointer and length before creating slice.
+            if out_ptr.is_null() || out_len <= 0 {
+                return Err(TtsError::SynthesisError(
+                    "piper returned null or invalid buffer".into(),
+                ));
+            }
+            // SAFETY: out_ptr is non-null, out_len is positive, piper guarantees valid memory.
             let samples = unsafe { std::slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+            // SAFETY: out_ptr was allocated by piper_synthesize, must be freed with piper_free_samples.
             unsafe { piper_ffi::piper_free_samples(out_ptr) };
 
             // Apply volume
@@ -225,8 +237,12 @@ impl PiperTts {
 impl Drop for PiperTts {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        if !self.state.is_null() {
-            unsafe { piper_ffi::piper_destroy(self.state) };
+        {
+            let ptr = *self.state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid piper handle, null-checked. Only called once during drop.
+                unsafe { piper_ffi::piper_destroy(ptr) };
+            }
         }
     }
 }
@@ -263,15 +279,15 @@ mod espeak_ffi {
 
 pub struct ESpeakTts {
     #[cfg(target_os = "android")]
-    initialized: bool,
+    initialized: std::sync::Mutex<bool>,
 
     pub sample_rate: u32,
 }
 
-// SAFETY: ESpeakTts is Send because on Android the only non-Send-by-default field
-// is `initialized: bool`, which is trivially Send. The eSpeak library uses global
-// state internally, but the `initialized` flag just tracks whether init was called;
-// moving this struct between threads does not create data races.
+// SAFETY: ESpeakTts is Send because the only non-trivially-Send field on Android
+// is `initialized: Mutex<bool>`, which is Send. The eSpeak library uses global
+// state internally; the Mutex wrapping of the `initialized` flag ensures
+// synchronized access when tracking initialization status across threads.
 unsafe impl Send for ESpeakTts {}
 
 impl ESpeakTts {
@@ -283,7 +299,7 @@ impl ESpeakTts {
 
         Ok(Self {
             #[cfg(target_os = "android")]
-            initialized: false,
+            initialized: std::sync::Mutex::new(false),
             sample_rate: ESPEAK_SAMPLE_RATE,
         })
     }
@@ -329,7 +345,8 @@ impl ESpeakTts {
 impl Drop for ESpeakTts {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        if self.initialized {
+        if *self.initialized.lock().unwrap() {
+            // SAFETY: espeak was initialized via espeak_Initialize. Called once during drop.
             unsafe { espeak_ffi::espeak_Terminate() };
         }
     }

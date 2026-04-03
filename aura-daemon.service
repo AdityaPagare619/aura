@@ -1,0 +1,63 @@
+# =============================================================================
+# ⚠️ DEPRECATED — DO NOT USE FOR AURA v4
+# =============================================================================
+# This systemd service file is NOT compatible with AURA's primary deployment
+# platform (Termux on Android). Termux does not use systemd.
+#
+# For Termux boot, use: termux-boot/aura-daemon.sh
+#   1. pkg install termux-boot
+#   2. cp termux-boot/aura-daemon.sh ~/.termux/boot/
+#   3. chmod +x ~/.termux/boot/aura-daemon.sh
+#
+# This file is kept for reference only (e.g., if someone wants to run AURA
+# on a Linux server for development/testing).
+#
+# Deprecated: 2026-04-03 by Architecture department
+# =============================================================================
+
+[Unit]
+Description=AURA Daemon — Autonomous cognition service
+After=network.target
+Documentation=https://github.com/aura-project/aura
+
+[Service]
+Type=simple
+User=aura
+Group=aura
+ExecStart=/usr/local/bin/aura-daemon --config /etc/aura/config.toml
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-/etc/aura/env
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aura
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aura-daemon
+
+[Install]
+WantedBy=multi-user.target
+
+# =============================================================================
+# TERMUX-EQUIVALENT SERVICE (for Android/Termux installations)
+# =============================================================================
+# Termux uses termux-services (runit). To enable:
+#
+#   pkg install termux-services
+#   mkdir -p $SVDIR/aura-daemon
+#   cat > $SVDIR/aura-daemon/run << 'EOF'
+#   #!/data/data/com.termux/files/usr/bin/sh
+#   exec aura-daemon --config /data/local/tmp/aura/config/aura.toml 2>&1
+#   EOF
+#   chmod +x $SVDIR/aura-daemon/run
+#   sv-enable aura-daemon
+#   sv up aura-daemon
+#
+# To check status: sv status aura-daemon
+# To stop:          sv down aura-daemon
+# To view logs:     logsv aura-daemon

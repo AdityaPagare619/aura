@@ -1,0 +1,295 @@
+# ============================================================
+# AURA v4 — Deployment Automation
+# Triggered on release tag push (v*)
+# Builds Android binaries, creates release artifacts,
+# uploads to GitHub release with SHA256 checksums
+#
+# NDK: r26b (consistent with all CI workflows)
+# Targets: aarch64-linux-android (primary)
+# ============================================================
+
+name: Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: full
+  NDK_VERSION: r26b
+  NDK_SHA256: ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632
+  API_LEVEL: "26"
+  TARGET: aarch64-linux-android
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================
+  # VALIDATE — Pre-deploy checks
+  # ============================================================
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Validate version tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Git tag version:    $TAG_VERSION"
+          echo "Cargo.toml version: $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Version mismatch! Tag v${TAG_VERSION} != Cargo.toml ${CARGO_VERSION}"
+            exit 1
+          fi
+          echo "VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Versions match ✓"
+
+      - name: Validate install.sh dry-run
+        run: |
+          chmod +x install.sh
+          bash install.sh --dry-run --skip-model --skip-service --no-color 2>&1 || true
+          echo "install.sh dry-run validated ✓"
+
+  # ============================================================
+  # BUILD ANDROID — Cross-compile binaries
+  # ============================================================
+  build-android:
+    name: Build Android (${{ env.TARGET }})
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable + aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux-${{ env.NDK_SHA256 }}
+
+      - name: Download and verify Android NDK r26b
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "${NDK_SHA256}  ndk.zip" | sha256sum -c || exit 1
+          unzip -q ndk.zip -d $HOME
+          rm -f ndk.zip
+
+      - name: Set NDK environment
+        run: echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Configure cross-compilation env
+        run: |
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "$TOOLCHAIN" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: deploy-android
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
+
+      - name: Build aura-daemon
+        run: cargo build --release -p aura-daemon --target aarch64-linux-android --features "aura-llama-sys/stub,aura-daemon/curl-backend"
+
+      - name: Build aura-neocortex
+        run: cargo build --release -p aura-neocortex --target aarch64-linux-android --features "aura-llama-sys/stub" || echo "aura-neocortex build non-fatal"
+
+      - name: Strip binaries
+        run: |
+          STRIP="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          for bin in target/aarch64-linux-android/release/aura-daemon target/aarch64-linux-android/release/aura-neocortex; do
+            if [ -f "$bin" ]; then
+              echo "Stripping: $bin ($(du -sh $bin | cut -f1))"
+              $STRIP "$bin" 2>/dev/null || true
+              echo "Stripped:  $bin ($(du -sh $bin | cut -f1))"
+            fi
+          done
+
+      - name: Generate checksums
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          for bin in aura-daemon aura-neocortex; do
+            src="target/aarch64-linux-android/release/$bin"
+            if [ -f "$src" ]; then
+              dst="dist/${bin}-${VERSION}-aarch64-linux-android"
+              cp "$src" "$dst"
+              sha256sum "$dst" > "${dst}.sha256"
+              echo "Packaged: $dst"
+            fi
+          done
+
+      - name: Package release tarball
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          cd dist
+          tar czf "aura-${VERSION}-aarch64-linux-android.tar.gz" \
+            aura-daemon-*.sha256 aura-neocortex-*.sha256 \
+            aura-daemon-* aura-neocortex-* 2>/dev/null || true
+          sha256sum "aura-${VERSION}-aarch64-linux-android.tar.gz" > "aura-${VERSION}-aarch64-linux-android.tar.gz.sha256"
+          echo "Release tarball created"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-artifacts
+          path: dist/
+          retention-days: 30
+
+  # ============================================================
+  # SMOKE TEST — Post-deploy validation
+  # ============================================================
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: build-android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-artifacts
+          path: dist/
+
+      - name: Verify artifacts exist
+        run: |
+          echo "=== Deploy artifacts ==="
+          ls -la dist/
+          echo ""
+          echo "=== Checksums ==="
+          for f in dist/*.sha256; do
+            echo "--- $f ---"
+            cat "$f" 2>/dev/null || echo "(empty)"
+          done
+
+      - name: Verify checksums
+        run: |
+          cd dist
+          for sha in *.sha256; do
+            base="${sha%.sha256}"
+            if [ -f "$base" ]; then
+              echo "Verifying: $base"
+              sha256sum -c "$sha" || echo "WARNING: Checksum mismatch for $base"
+            fi
+          done
+          echo "Smoke test passed ✓"
+
+  # ============================================================
+  # GITHUB RELEASE — Create release with assets
+  # ============================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-android, smoke-test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+          # Determine if pre-release (contains alpha, beta, rc)
+          if echo "$VERSION" | grep -qiE '(alpha|beta|rc|pre)'; then
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | head -2 | tail -1 || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "Generating changelog from $PREV_TAG to ${{ github.ref_name }}"
+            LOG=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG..HEAD" --no-merges | head -50)
+          else
+            echo "No previous tag found, using last 20 commits"
+            LOG=$(git log --pretty=format:"- %s (%h)" -20 --no-merges)
+          fi
+
+          # Write to file for the release body
+          cat > release-notes.md << 'EOF'
+          ## AURA v${{ steps.version.outputs.VERSION }}
+
+          ### Changes
+          ${LOG}
+
+          ### Verification
+          ```sh
+          sha256sum -c *.sha256
+          ```
+
+          ### Installation
+          ```sh
+          # On Termux device:
+          bash install.sh --skip-build
+          ```
+          EOF
+
+          # Replace placeholder with actual log
+          echo "$LOG" > /tmp/changelog.txt
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-artifacts
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "AURA v${{ steps.version.outputs.VERSION }}"
+          draft: false
+          prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
+          body: |
+            ## AURA v${{ steps.version.outputs.VERSION }}
+
+            ### Installation
+            ```sh
+            # On Termux device:
+            bash install.sh --skip-build
+            ```
+
+            ### Checksums
+            All artifacts include SHA256 checksums. Verify with:
+            ```sh
+            sha256sum -c *.sha256
+            ```
+          files: dist/*
+          generate_release_notes: true

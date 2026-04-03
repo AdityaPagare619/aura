@@ -1,0 +1,135 @@
+# =============================================================================
+# AURA v4 Alertmanager Configuration
+# =============================================================================
+# Routes alerts from Prometheus to notification channels.
+# Primary channel: Telegram (same bot used by AURA for user interaction).
+# Secondary: log file for offline analysis.
+# =============================================================================
+
+global:
+  resolve_timeout: 5m
+  # Telegram bot token — use the same bot as AURA's Telegram integration.
+  # Set via ALERTMANAGER_TELEGRAM_TOKEN env var or replace here.
+  telegram_api_url: "https://api.telegram.org"
+
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+route:
+  # Default route — all unmatched alerts go to Telegram.
+  receiver: "aura-telegram"
+  group_by: ["alertname", "component", "severity"]
+  group_wait: 30s          # Wait 30s to batch alerts
+  group_interval: 5m       # Minimum 5m between grouped notifications
+  repeat_interval: 4h      # Re-notify every 4h for unresolved alerts
+
+  routes:
+    # Critical alerts → immediate Telegram notification
+    - match:
+        severity: critical
+      receiver: "aura-telegram-critical"
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: false
+
+    # Warning alerts → standard Telegram
+    - match:
+        severity: warning
+      receiver: "aura-telegram"
+      group_wait: 30s
+      repeat_interval: 4h
+
+    # Info alerts → log only
+    - match:
+        severity: info
+      receiver: "aura-log"
+      group_wait: 60s
+      repeat_interval: 12h
+
+    # Safety violations → always critical channel
+    - match:
+        component: safety
+      receiver: "aura-telegram-critical"
+      group_wait: 0s
+      repeat_interval: 30m
+
+    # Thermal emergency → always critical channel
+    - match:
+        urgency: emergency
+      receiver: "aura-telegram-critical"
+      group_wait: 0s
+      repeat_interval: 15m
+
+receivers:
+  # --------------------------------------------------------------------------
+  # Standard Telegram receiver (warnings)
+  # --------------------------------------------------------------------------
+  - name: "aura-telegram"
+    telegram_configs:
+      - bot_token: "<TELEGRAM_BOT_TOKEN>"
+        chat_id: 8407946567      # From config.toml telegram.allowed_chat_ids
+        parse_mode: "HTML"
+        message: |
+          <b>[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}</b>
+
+          {{ range .Alerts }}
+          <b>Alert:</b> {{ .Annotations.summary }}
+          <b>Component:</b> {{ .Labels.component }}
+          <b>Details:</b> {{ .Annotations.description }}
+          {{ if .GeneratorURL }}<b>Graph:</b> {{ .GeneratorURL }}{{ end }}
+          {{ end }}
+
+  # --------------------------------------------------------------------------
+  # Critical Telegram receiver (immediate notification)
+  # --------------------------------------------------------------------------
+  - name: "aura-telegram-critical"
+    telegram_configs:
+      - bot_token: "<TELEGRAM_BOT_TOKEN>"
+        chat_id: 8407946567
+        parse_mode: "HTML"
+        message: |
+          🚨 <b>CRITICAL: {{ .GroupLabels.alertname }}</b>
+
+          {{ range .Alerts }}
+          <b>{{ .Annotations.summary }}</b>
+          {{ .Annotations.description }}
+          {{ end }}
+
+          ⚠️ Immediate action may be required.
+
+  # --------------------------------------------------------------------------
+  # Log-only receiver (info alerts, fallback)
+  # --------------------------------------------------------------------------
+  - name: "aura-log"
+    webhook_configs:
+      - url: "http://localhost:9095/alertlog"
+        send_resolved: true
+
+inhibit_rules:
+  # Suppress warning alerts when a critical alert for the same component is active
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["component"]
+
+  # Suppress info alerts when a warning alert is active
+  - source_match:
+      severity: warning
+    target_match:
+      severity: info
+    equal: ["component"]
+
+  # Suppress memory warnings when RSS ceiling alert is active
+  - source_match:
+      alertname: AuraRssMemoryCeiling
+    target_match:
+      alertname: AuraRssMemoryWarning
+    equal: []
+
+  # Suppress thermal warm when thermal hot is active
+  - source_match:
+      alertname: AuraThermalHot
+    target_match:
+      alertname: AuraThermalWarm
+    equal: []

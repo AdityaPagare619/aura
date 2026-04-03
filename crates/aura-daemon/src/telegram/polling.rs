@@ -8,11 +8,13 @@
 //! In production this would use `reqwest`. For compilation without extra deps,
 //! we define the API surface and use a trait for the HTTP backend.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use aura_types::errors::AuraError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio::task::spawn_blocking;
 use tracing::{debug, info, instrument, warn};
 
 use super::queue::{MessageContent, MessageQueue};
@@ -97,7 +99,13 @@ pub struct TelegramApiResponse<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SentMessage {
     pub message_id: i64,
-    pub chat_id: i64,
+    #[serde(rename = "chat")]
+    pub chat: TelegramChat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramChat {
+    pub id: i64,
 }
 
 // ─── HTTP Backend trait ─────────────────────────────────────────────────────
@@ -121,11 +129,13 @@ pub trait HttpBackend: Send + Sync {
     fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError>;
 
     /// POST multipart (for photo upload).
+    ///
+    /// Takes owned String types to satisfy spawn_blocking's 'static lifetime.
     fn post_multipart(
         &self,
         url: &str,
-        fields: Vec<(&str, String)>,
-        file_field: Option<(&str, Vec<u8>, &str)>,
+        fields: Vec<(String, String)>,
+        file_field: Option<(String, Vec<u8>, String)>,
     ) -> Result<Vec<u8>, AuraError>;
 }
 
@@ -151,8 +161,8 @@ impl HttpBackend for StubHttpBackend {
     fn post_multipart(
         &self,
         _url: &str,
-        _fields: Vec<(&str, String)>,
-        _file_field: Option<(&str, Vec<u8>, &str)>,
+        _fields: Vec<(String, String)>,
+        _file_field: Option<(String, Vec<u8>, String)>,
     ) -> Result<Vec<u8>, AuraError> {
         Err(AuraError::Ipc(
             aura_types::errors::IpcError::ConnectionFailed,
@@ -173,7 +183,8 @@ pub struct TelegramPoller {
     base_url: String,
     offset: i64,
     allowed_chat_ids: Vec<i64>,
-    http: Box<dyn HttpBackend>,
+    /// HTTP backend (Arc for safe sharing across spawn_blocking calls).
+    http: Arc<dyn HttpBackend>,
     /// Long-poll timeout in seconds.
     poll_timeout: u32,
 }
@@ -192,7 +203,7 @@ impl TelegramPoller {
             base_url,
             offset: 0,
             allowed_chat_ids,
-            http,
+            http: Arc::from(http),
             poll_timeout: 30,
         }
     }
@@ -274,16 +285,62 @@ impl TelegramPoller {
         }
     }
 
+    // ─── HTTP backend wrappers (spawn_blocking) ─────────────────────────
+    //
+    // The HttpBackend trait is synchronous. Since we call it from async
+    // functions, we MUST wrap in spawn_blocking. This prevents panics from
+    // Handle::current().block_on() when called from a tokio worker thread.
+    //
+    // Key insight: Box<dyn HttpBackend> is Send + Sync (trait requires it).
+    // We clone the Box into the blocking closure, which is safe because
+    // tokio's blocking thread pool doesn't move between threads mid-execution.
+
+    /// Async wrapper for HttpBackend::get — runs in spawn_blocking.
+    async fn http_get(&self, url: &str) -> Result<Vec<u8>, AuraError> {
+        let backend = Arc::clone(&self.http);
+        let url = url.to_string();
+        spawn_blocking(move || backend.get(&url))
+            .await
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?
+    }
+
+    /// Async wrapper for HttpBackend::post_json — runs in spawn_blocking.
+    async fn http_post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, AuraError> {
+        let backend = Arc::clone(&self.http);
+        let url = url.to_string();
+        let body = body.to_vec();
+        spawn_blocking(move || backend.post_json(&url, &body))
+            .await
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?
+    }
+
+    /// Async wrapper for HttpBackend::post_multipart — runs in spawn_blocking.
+    ///
+    /// Takes OWNED String types to satisfy spawn_blocking's 'static lifetime requirement.
+    /// The callers (send_photo, send_voice, flush_queue) already own this data,
+    /// so there's zero semantic change — just type signatures.
+    async fn http_post_multipart(
+        &self,
+        url: String,
+        fields: Vec<(String, String)>,
+        file_field: Option<(String, Vec<u8>, String)>,
+    ) -> Result<Vec<u8>, AuraError> {
+        let backend = Arc::clone(&self.http);
+        spawn_blocking(move || backend.post_multipart(&url, fields, file_field))
+            .await
+            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed))?
+    }
+
     // ─── Raw API calls ──────────────────────────────────────────────────
 
     /// Call `getUpdates` with long-polling.
     async fn get_updates(&self) -> Result<Vec<TelegramUpdate>, AuraError> {
         let url = format!(
-            "{}/getUpdates?offset={}&timeout={}&allowed_updates=[\"message\",\"callback_query\"]",
+            "{}/getUpdates?offset={}&timeout={}&allowed_updates=%5B%22message%22,%22callback_query%22%5D",
             self.base_url, self.offset, self.poll_timeout
         );
 
-        let body = self.http.get(&url)?;
+        let body = self.http_get(&url).await?;
 
         let resp: TelegramApiResponse<Vec<serde_json::Value>> = serde_json::from_slice(&body)
             .map_err(|_e| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
@@ -328,14 +385,68 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         let url = format!("{}/sendMessage", self.base_url);
-        let resp_bytes = self.http.post_json(&url, &body_bytes)?;
+        let resp_bytes = self.http_post_json(&url, &body_bytes).await?;
 
-        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
-            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        // DIAGNOSTIC: Log raw response for debugging Telegram send failures
+        let response_preview =
+            String::from_utf8_lossy(&resp_bytes.iter().take(500).cloned().collect::<Vec<_>>())
+                .to_string();
+        tracing::info!(
+            response_len = resp_bytes.len(),
+            response_preview = %response_preview,
+            "Telegram API raw response"
+        );
 
-        resp.result.ok_or(AuraError::Ipc(
-            aura_types::errors::IpcError::ConnectionFailed,
-        ))
+        // First, parse as generic JSON to check if the request succeeded
+        // This handles error responses like {"ok": false, "error_code": 400, "description": "..."}
+        let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                response_len = resp_bytes.len(),
+                "failed to parse Telegram response as JSON"
+            );
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
+
+        // Check if Telegram indicated success
+        let ok = resp_json
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !ok {
+            // Extract error description from Telegram response
+            let error_code = resp_json
+                .get("error_code")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let description = resp_json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown Telegram error");
+            tracing::warn!(
+                error_code = error_code,
+                description = description,
+                "Telegram API returned error"
+            );
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
+        // Now parse the successful result as SentMessage
+        let result = resp_json.get("result").ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::DeserializeFailed,
+        ))?;
+
+        let sent_message: SentMessage = serde_json::from_value(result.clone()).map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                "failed to parse Telegram SentMessage result"
+            );
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
+
+        Ok(sent_message)
     }
 
     /// Edit an existing message.
@@ -361,7 +472,7 @@ impl TelegramPoller {
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
 
         let url = format!("{}/editMessageText", self.base_url);
-        let _ = self.http.post_json(&url, &body_bytes)?;
+        let _ = self.http_post_json(&url, &body_bytes).await?;
         Ok(())
     }
 
@@ -374,19 +485,46 @@ impl TelegramPoller {
     ) -> Result<SentMessage, AuraError> {
         let url = format!("{}/sendPhoto", self.base_url);
         let fields = vec![
-            ("chat_id", chat_id.to_string()),
-            ("caption", caption.to_string()),
+            ("chat_id".to_string(), chat_id.to_string()),
+            ("caption".to_string(), caption.to_string()),
         ];
-        let file = Some(("photo", photo_data.to_vec(), "screenshot.png"));
+        let file = Some((
+            "photo".to_string(),
+            photo_data.to_vec(),
+            "image/png".to_string(),
+        ));
 
-        let resp_bytes = self.http.post_multipart(&url, fields, file)?;
+        let resp_bytes = self.http_post_multipart(url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
-            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        // Parse response and check for Telegram errors first
+        let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse Telegram photo response");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
 
-        resp.result.ok_or(AuraError::Ipc(
-            aura_types::errors::IpcError::ConnectionFailed,
-        ))
+        let ok = resp_json
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !ok {
+            let description = resp_json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            tracing::warn!(description = description, "Telegram photo API error");
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
+        let result = resp_json.get("result").ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::DeserializeFailed,
+        ))?;
+
+        serde_json::from_value(result.clone()).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse SentMessage");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })
     }
 
     /// Send an OGG/Opus voice message.
@@ -399,22 +537,49 @@ impl TelegramPoller {
     ) -> Result<SentMessage, AuraError> {
         let url = format!("{}/sendVoice", self.base_url);
         let mut fields = vec![
-            ("chat_id", chat_id.to_string()),
-            ("duration", duration_secs.to_string()),
+            ("chat_id".to_string(), chat_id.to_string()),
+            ("duration".to_string(), duration_secs.to_string()),
         ];
         if let Some(cap) = caption {
-            fields.push(("caption", cap.to_string()));
+            fields.push(("caption".to_string(), cap.to_string()));
         }
-        let file = Some(("voice", voice_data.to_vec(), "voice.ogg"));
+        let file = Some((
+            "voice".to_string(),
+            voice_data.to_vec(),
+            "audio/ogg".to_string(),
+        ));
 
-        let resp_bytes = self.http.post_multipart(&url, fields, file)?;
+        let resp_bytes = self.http_post_multipart(url, fields, file).await?;
 
-        let resp: TelegramApiResponse<SentMessage> = serde_json::from_slice(&resp_bytes)
-            .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
+        // Parse response and check for Telegram errors first
+        let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse Telegram voice response");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })?;
 
-        resp.result.ok_or(AuraError::Ipc(
-            aura_types::errors::IpcError::ConnectionFailed,
-        ))
+        let ok = resp_json
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !ok {
+            let description = resp_json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            tracing::warn!(description = description, "Telegram voice API error");
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
+        let result = resp_json.get("result").ok_or(AuraError::Ipc(
+            aura_types::errors::IpcError::DeserializeFailed,
+        ))?;
+
+        serde_json::from_value(result.clone()).map_err(|e| {
+            tracing::warn!(error = %e, "failed to parse SentMessage");
+            AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed)
+        })
     }
 
     /// Download a file from Telegram by file_id.
@@ -426,7 +591,7 @@ impl TelegramPoller {
         let payload = serde_json::json!({ "file_id": file_id });
         let body_bytes = serde_json::to_vec(&payload)
             .map_err(|_| AuraError::Ipc(aura_types::errors::IpcError::DeserializeFailed))?;
-        let resp_bytes = self.http.post_json(&url, &body_bytes)?;
+        let resp_bytes = self.http_post_json(&url, &body_bytes).await?;
 
         // Parse the file path from the response.
         let resp: serde_json::Value = serde_json::from_slice(&resp_bytes)
@@ -440,7 +605,7 @@ impl TelegramPoller {
         // file download is https://api.telegram.org/file/bot<TOKEN>/<file_path>
         let download_url = self.base_url.replace("/bot", "/file/bot");
         let download_url = format!("{}/{}", download_url, file_path);
-        let file_bytes = self.http.get(&download_url)?;
+        let file_bytes = self.http_get(&download_url).await?;
 
         Ok(file_bytes)
     }
@@ -535,7 +700,15 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
 
     // Try message first, then callback_query.
     if let Some(msg) = raw.get("message") {
-        let chat_id = msg.get("chat")?.get("id")?.as_i64()?;
+        // Robust parsing: handle cases where chat object might be missing or have different structure
+        // Telegram can return: message.chat.id (private), message.chat.username (group), or group_name
+        let chat_id = msg
+            .get("chat")
+            .and_then(|c| c.get("id"))
+            .and_then(|id| id.as_i64())?;
+
+        // Debug: Log what we received for troubleshooting
+        tracing::debug!("parse_update: chat_id={:?}, msg={:?}", chat_id, msg);
         let from_user_id = msg
             .get("from")
             .and_then(|f| f.get("id"))
@@ -634,7 +807,18 @@ fn parse_update(raw: &serde_json::Value) -> Option<TelegramUpdate> {
     }
 
     if let Some(cb) = raw.get("callback_query") {
-        let chat_id = cb.get("message")?.get("chat")?.get("id")?.as_i64()?;
+        // Robust parsing: callback_query can come from inline queries or message callbacks
+        // Try message.chat.id first, fall back to from.id for inline queries
+        let chat_id = cb
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .and_then(|id| id.as_i64())
+            .or_else(|| {
+                cb.get("from")
+                    .and_then(|f| f.get("id"))
+                    .and_then(|id| id.as_i64())
+            })?;
         let from_user_id = cb
             .get("from")
             .and_then(|f| f.get("id"))

@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<aura_release_operating_guide>
+
+  <purpose>
+    Build, validate, release, observe, and maintain a large codebase without confusing "CI passed" with "system is correct".
+  </purpose>
+
+  <core_principles>
+    <principle id="P1">
+      CI is a signal, not truth.
+      A build is only valid after it proves itself on the real target environment.
+    </principle>
+
+    <principle id="P2">
+      Requirements describe what must be true.
+      Needs describe why the product exists.
+      Teams must never confuse the two.
+    </principle>
+
+    <principle id="P3">
+      Every layer owns its own failure class.
+      Build, runtime, infra, product, and release must not blame each other by default.
+    </principle>
+
+    <principle id="P4">
+      Manual fixes are allowed only as diagnostics.
+      Permanent reliability comes from contracts, validation gates, and observability.
+    </principle>
+
+    <principle id="P5">
+      Do not remove features to hide instability.
+      Fix the layer that violates the contract.
+    </principle>
+  </core_principles>
+
+  <operating_model>
+    <model name="need_vs_requirement">
+      <needs>
+        <item>Users need the product to work on real devices.</item>
+        <item>Teams need repeatable diagnostics and clear ownership.</item>
+        <item>Release managers need a binary truth gate.</item>
+      </needs>
+
+      <requirements>
+        <item>Architecture must define supported targets.</item>
+        <item>Builds must be reproducible.</item>
+        <item>Runtime must report failure class, not just crash.</item>
+        <item>Releases must require validation evidence.</item>
+      </requirements>
+    </model>
+
+    <model name="layered_ownership">
+      <layer name="product">
+        Define user value, scope, and acceptable tradeoffs.
+      </layer>
+      <layer name="architecture">
+        Define contracts, module boundaries, target platforms, and failure taxonomy.
+      </layer>
+      <layer name="build_and_infra">
+        Produce reproducible artifacts and test them against target environments.
+      </layer>
+      <layer name="runtime">
+        Emit boot-stage logs, health checks, and failure classification.
+      </layer>
+      <layer name="release">
+        Ship only after evidence from validation gates is complete.
+      </layer>
+    </model>
+  </operating_model>
+
+  <team_charter>
+    <team name="product">
+      <responsibility>Define what matters and what can wait.</responsibility>
+      <outputs>
+        <item>Problem statement</item>
+        <item>User journey</item>
+        <item>Success criteria</item>
+        <item>Non-goals</item>
+      </outputs>
+    </team>
+
+    <team name="architecture">
+      <responsibility>Define contracts and boundaries.</responsibility>
+      <outputs>
+        <item>Supported OS/device contract</item>
+        <item>Module boundaries</item>
+        <item>Failure taxonomy</item>
+        <item>Dependency policy</item>
+      </outputs>
+    </team>
+
+    <team name="build_infra">
+      <responsibility>Make artifacts reproducible and inspectable.</responsibility>
+      <outputs>
+        <item>Locked toolchain</item>
+        <item>Multi-stage build strategy</item>
+        <item>Artifact provenance</item>
+        <item>Cache policy</item>
+      </outputs>
+    </team>
+
+    <team name="runtime_platform">
+      <responsibility>Make the app honest about what it is doing.</responsibility>
+      <outputs>
+        <item>Boot stage logs</item>
+        <item>Environment preflight</item>
+        <item>Crash classification</item>
+        <item>Graceful failure paths</item>
+      </outputs>
+    </team>
+
+    <team name="qa_validation">
+      <responsibility>Prove the system behaves on target environments.</responsibility>
+      <outputs>
+        <item>Smoke tests</item>
+        <item>Device matrix tests</item>
+        <item>Regression checks</item>
+        <item>Release gating report</item>
+      </outputs>
+    </team>
+
+    <team name="devops_release">
+      <responsibility>Control rollout, risk, secrets, and deployment governance.</responsibility>
+      <outputs>
+        <item>Environment rules</item>
+        <item>Required reviewers</item>
+        <item>Release approvals</item>
+        <item>Rollback plan</item>
+      </outputs>
+    </team>
+
+    <team name="forensics">
+      <responsibility>Convert failure into reusable knowledge.</responsibility>
+      <outputs>
+        <item>Incident notes</item>
+        <item>Failure signatures</item>
+        <item>Root-cause hypotheses</item>
+        <item>Verified conclusions only</item>
+      </outputs>
+    </team>
+  </team_charter>
+
+  <infra_code_quality>
+    <policy id="I1">
+      Every repo must have a single source of truth for build inputs, version pins, and runtime targets.
+    </policy>
+
+    <policy id="I2">
+      Every build artifact must be traceable back to source commit, toolchain version, and environment.
+    </policy>
+
+    <policy id="I3">
+      Build scripts must be boring.
+      They should do less thinking and more enforcing.
+    </policy>
+
+    <policy id="I4">
+      Environment-specific logic belongs in the platform layer, not scattered across installer scripts.
+    </policy>
+
+    <policy id="I5">
+      If a change touches runtime, it must also touch validation.
+    </policy>
+
+    <policy id="I6">
+      If a change touches release, it must also touch rollback and observability.
+    </policy>
+  </infra_code_quality>
+
+  <build_system>
+    <source_of_truth>
+      <item>locked toolchain version</item>
+      <item>explicit target architecture</item>
+      <item>fixed build stages</item>
+      <item>artifact checksum or signature</item>
+    </source_of_truth>
+
+    <recommended_pattern>
+      <item>Use a builder stage for compilation.</item>
+      <item>Use a smaller runtime stage for execution.</item>
+      <item>Copy only the runtime artifact into the final stage.</item>
+      <item>Use cached layers only when they are safe to reuse.</item>
+    </recommended_pattern>
+
+    <build_gate>
+      <step>Compile</step>
+      <step>Inspect artifact structure</step>
+      <step>Run on target class of device</step>
+      <step>Record logs</step>
+      <step>Classify result</step>
+      <step>Only then release</step>
+    </build_gate>
+  </build_system>
+
+  <release_governance>
+    <policy name="protected_environments">
+      Production and pre-production releases must use protected environments.
+      Approvals should be required for risky deployments.
+    </policy>
+
+    <policy name="secret_handling">
+      Secrets must be scoped to environments and only exposed after approval.
+      Secrets should be minimal, rotated, and reviewed regularly.
+    </policy>
+
+    <policy name="self_hosted_runner_safety">
+      Self-hosted runners are sensitive infrastructure.
+      They must be treated as persistent, not magically clean, and must be separated by trust domain.
+    </policy>
+
+    <policy name="release_freeze">
+      If reliability drops below the team threshold, feature velocity pauses until the system is back inside its reliability budget.
+    </policy>
+  </release_governance>
+
+  <observability>
+    <goal>
+      Make hidden failure visible before users discover it.
+    </goal>
+
+    <signals>
+      <item>logs</item>
+      <item>metrics</item>
+      <item>traces</item>
+      <item>runtime health status</item>
+    </signals>
+
+    <boot_contract>
+      <stage>init</stage>
+      <stage>environment_check</stage>
+      <stage>dependency_check</stage>
+      <stage>runtime_start</stage>
+      <stage>ready</stage>
+    </boot_contract>
+
+    <rules>
+      <rule>No silent failures.</rule>
+      <rule>Every crash must have a category.</rule>
+      <rule>Every health check must say what was checked.</rule>
+      <rule>Logs must identify stage, component, and failure class.</rule>
+    </rules>
+  </observability>
+
+  <testing_policy>
+    <principle>
+      Test classes of environments, not infinite individual devices.
+    </principle>
+
+    <matrix>
+      <dimension name="os_version">
+        <item>old supported</item>
+        <item>current supported</item>
+        <item>latest supported</item>
+      </dimension>
+
+      <dimension name="hardware_profile">
+        <item>low-memory</item>
+        <item>mainstream</item>
+        <item>high-memory</item>
+      </dimension>
+
+      <dimension name="vendor_behavior">
+        <item>reference-like</item>
+        <item>aggressive-killer</item>
+        <item>strict-linker</item>
+      </dimension>
+    </matrix>
+
+    <test_types>
+      <item>cold install</item>
+      <item>upgrade</item>
+      <item>rollback</item>
+      <item>fresh-device runtime</item>
+      <item>network-loss recovery</item>
+      <item>permission-denied recovery</item>
+    </test_types>
+  </testing_policy>
+
+  <failure_taxonomy>
+    <class id="F001">artifact missing</class>
+    <class id="F002">dependency mismatch</class>
+    <class id="F003">ABI mismatch</class>
+    <class id="F004">linker or entrypoint failure</class>
+    <class id="F005">runtime crash before boot ready</class>
+    <class id="F006">installer logic drift</class>
+    <class id="F007">observability gap</class>
+    <class id="F008">release governance failure</class>
+  </failure_taxonomy>
+
+  <decision_tree>
+    <step id="D1">Did the artifact build?</step>
+    <step id="D2">Does the artifact validate structurally?</step>
+    <step id="D3">Does it run on the target class of device?</step>
+    <step id="D4">Did boot stages complete?</step>
+    <step id="D5">Is the failure class known?</step>
+    <step id="D6">Should release be blocked?</step>
+  </decision_tree>
+
+  <ethics_and_governance>
+    <rule>
+      Do not blame people for failures that are actually system design gaps.
+    </rule>
+    <rule>
+      Do not ship based on hope.
+    </rule>
+    <rule>
+      Do not hide instability behind feature removal.
+    </rule>
+    <rule>
+      Do not trust a passing workflow if the target environment has not been exercised.
+    </rule>
+    <rule>
+      Prefer changes that reduce future uncertainty, not just immediate noise.
+    </rule>
+  </ethics_and_governance>
+
+  <documentation_standard>
+    <required_docs>
+      <item>architecture/overview</item>
+      <item>build/contract</item>
+      <item>runtime/boot-stages</item>
+      <item>validation/device-matrix</item>
+      <item>release/rollback</item>
+      <item>failure-db/signatures</item>
+      <item>incident/postmortems</item>
+    </required_docs>
+
+    <writing_rules>
+      <item>state the contract</item>
+      <item>state the test</item>
+      <item>state the result</item>
+      <item>state the decision</item>
+      <item>state the next guardrail</item>
+    </writing_rules>
+  </documentation_standard>
+
+  <operating_rules_for_agents>
+    <rule id="A1">
+      Agents must not jump straight to code changes.
+      They must first classify the failure domain.
+    </rule>
+
+    <rule id="A2">
+      Agents must separate observations from hypotheses.
+    </rule>
+
+    <rule id="A3">
+      Agents must cite logs, docs, or validated sources when making claims.
+    </rule>
+
+    <rule id="A4">
+      Agents must not assume the user wants a feature removed to resolve instability.
+    </rule>
+
+    <rule id="A5">
+      Agents must produce the smallest change that reduces the largest class of future failures.
+    </rule>
+  </operating_rules_for_agents>
+
+  <release_definition_of_done>
+    <item>build reproducible</item>
+    <item>artifact inspectable</item>
+    <item>runtime validated on target class</item>
+    <item>observability present</item>
+    <item>rollback path documented</item>
+    <item>risk accepted by the right reviewer</item>
+  </release_definition_of_done>
+
+  <final_statement>
+    A release is not finished when CI is green.
+    A release is finished when the system has proven itself under the contract it claims to support.
+  </final_statement>
+
+</aura_release_operating_guide>

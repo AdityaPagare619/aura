@@ -1,0 +1,12 @@
+=== EXISTING BINARY CHECK ===
+aura-daemon 4.0.0-alpha.8
+EXIT: 0
+DATE:
+-rwx------. 1 u0_a475 u0_a475 7851672 Mar 21 14:05 /data/data/com.termux/files/home/aura-daemon
+=== RUSTUP TOOLCHAINS ===
+total 18
+drwx------.  4 u0_a475 u0_a475 3452 Mar 17 22:38 .
+drwx------. 12 u0_a475 u0_a475 3452 Mar 21 22:16 ..
+-rw-------.  1 u0_a475 u0_a475   48 Mar 17 22:38 settings.toml
+drwx------.  2 u0_a475 u0_a475 3452 Mar 21 22:32 tmp
+drwx------.  2 u0_a475 u0_a475 3452 Mar 17 22:38 update-hashes

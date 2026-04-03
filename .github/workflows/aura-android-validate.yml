@@ -147,9 +147,11 @@ jobs:
         run: |
           echo "=== Building AURA for Android ==="
           echo "Settings: lto=thin, panic=unwind (fixes NDK #2073)"
+          # reqwest feature for CI (Linux host); curl-backend for Termux device
           cargo build \
             --release \
             --target ${CARGO_TARGET} \
+            --features aura-daemon/reqwest \
             2>&1 | tee /tmp/build.log
           BUILD_EXIT=$?
           echo ""
@@ -178,10 +180,12 @@ jobs:
         id: unit-tests
         run: |
           echo "=== Running Unit Tests ==="
+          # reqwest feature for CI (Linux host); curl-backend for Termux device
           cargo test \
             --lib \
             --release \
             --target ${CARGO_TARGET} \
+            --features aura-daemon/reqwest \
             -- \
             --test-threads=1 \
             2>&1 | tee /tmp/unit-tests.log

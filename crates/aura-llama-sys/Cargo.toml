@@ -5,17 +5,20 @@ edition.workspace = true
 links = "llama"
 
 [dependencies]
-libloading = "0.8"
 tracing = { workspace = true }
 rand = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+ureq = { version = "2", features = ["json"] }
 
 [features]
 # Build without real llama.cpp (for CI, testing, or host builds).
 # When enabled, the native C compilation step is skipped entirely.
 stub = []
+# Enable the ServerBackend — delegates inference to a llama-server process
+# via HTTP on localhost. Requires `ureq` for HTTP requests.
+server = ["stub"]
 
 [build-dependencies]
 cc = "1"

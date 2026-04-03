@@ -1,0 +1,338 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "AURA v4 Daemon Monitoring — telemetry, health, memory, inference, IPC",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "System Health Overview",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "ALIVE", "color": "green" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto" },
+      "title": "Neocortex Status",
+      "type": "stat",
+      "targets": [{ "expr": "aura_neocortex_alive", "legendFormat": "alive" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 20 }, { "color": "green", "value": 40 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "title": "Battery Level",
+      "type": "stat",
+      "targets": [{ "expr": "aura_battery_pct", "legendFormat": "battery%" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "green", "value": 0 }, { "color": "yellow", "value": 45 }, { "color": "orange", "value": 55 }, { "color": "red", "value": 65 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "title": "Thermal Zone",
+      "type": "stat",
+      "targets": [{ "expr": "node_thermal_zone_temp_celsius", "legendFormat": "{{sensor}}" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 28672000 }, { "color": "red", "value": 31457280 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "title": "Daemon RSS",
+      "type": "stat",
+      "targets": [{ "expr": "process_resident_memory_bytes{job=\"aura-daemon\"}", "legendFormat": "RSS" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 0.5 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "title": "Error Rate (1h)",
+      "type": "stat",
+      "targets": [{ "expr": "aura_error_rate_last_hour", "legendFormat": "error rate" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "Healthy", "color": "green" }, "1": { "text": "Degraded", "color": "yellow" }, "2": { "text": "Critical", "color": "red" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "id": 6,
+      "options": { "colorMode": "background", "graphMode": "none" },
+      "title": "Overall Status",
+      "type": "stat",
+      "targets": [{ "expr": "aura_overall_health_status", "legendFormat": "status" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Telemetry Counters",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Event Pipeline Rates",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_events_received_total[5m])", "legendFormat": "received/s" },
+        { "expr": "rate(aura_events_processed_total[5m])", "legendFormat": "processed/s" },
+        { "expr": "rate(aura_events_dropped_total[5m])", "legendFormat": "dropped/s" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Inference & Action Rates",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_inference_calls_total[5m])", "legendFormat": "inference/s" },
+        { "expr": "rate(aura_inference_tokens_total[5m])", "legendFormat": "tokens/s" },
+        { "expr": "rate(aura_actions_executed_total[5m])", "legendFormat": "actions/s" },
+        { "expr": "rate(aura_actions_succeeded_total[5m])", "legendFormat": "success/s" },
+        { "expr": "rate(aura_actions_failed_total[5m])", "legendFormat": "failed/s" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "title": "Memory System",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 20,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Memory Operations",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_memory_queries_total[5m])", "legendFormat": "queries/s" },
+        { "expr": "rate(aura_memory_stores_total[5m])", "legendFormat": "stores/s" },
+        { "expr": "rate(aura_memory_evictions_total[5m])", "legendFormat": "evictions/s" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 21,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Memory Tier Usage",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "aura_working_memory_bytes", "legendFormat": "Working" },
+        { "expr": "aura_episodic_memory_bytes", "legendFormat": "Episodic" },
+        { "expr": "aura_semantic_memory_bytes", "legendFormat": "Semantic" },
+        { "expr": "aura_archive_memory_bytes", "legendFormat": "Archive" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 22,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Working Memory Slot Count",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "aura_working_memory_slots", "legendFormat": "slots" }
+      ],
+      "fieldOverrides": [
+        {
+          "matcher": { "id": "byName", "options": "slots" },
+          "properties": [
+            { "id": "custom.thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 900 }, { "color": "red", "value": 975 }] } },
+            { "id": "max", "value": 1024 }
+          ]
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "count" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 23,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Memory Tier Counts",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "aura_episodic_memory_count", "legendFormat": "Episodes" },
+        { "expr": "aura_semantic_memory_count", "legendFormat": "Semantic entries" },
+        { "expr": "aura_archive_memory_count", "legendFormat": "Archive blobs" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 103,
+      "title": "IPC & Neocortex",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 30,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "IPC Message Rates",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_ipc_messages_sent_total[5m])", "legendFormat": "sent/s" },
+        { "expr": "rate(aura_ipc_messages_received_total[5m])", "legendFormat": "received/s" },
+        { "expr": "rate(aura_ipc_errors_total[5m])", "legendFormat": "errors/s" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 31,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Inference Latency (p50/p95/p99)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(aura_inference_latency_us_bucket[5m])) / 1000000", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(aura_inference_latency_us_bucket[5m])) / 1000000", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(aura_inference_latency_us_bucket[5m])) / 1000000", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "id": 104,
+      "title": "Goals & Safety",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
+      "id": 40,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Goal Lifecycle",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_goals_created_total[5m])", "legendFormat": "created/s" },
+        { "expr": "rate(aura_goals_completed_total[5m])", "legendFormat": "completed/s" },
+        { "expr": "rate(aura_goals_failed_total[5m])", "legendFormat": "failed/s" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
+      "id": 41,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Safety Metrics",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_cycle_detections_total[5m])", "legendFormat": "cycles/s" },
+        { "expr": "rate(aura_safety_violations_total[5m])", "legendFormat": "violations/s" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "id": 42,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Checkpoint Operations",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(aura_checkpoint_saves_total[5m])", "legendFormat": "saves/s" },
+        { "expr": "aura_checkpoint_load_ms / 1000", "legendFormat": "load time (s)" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "id": 43,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Daemon Uptime",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "time() - process_start_time_seconds{job=\"aura-daemon\"}", "legendFormat": "uptime" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["aura", "mobile", "daemon", "monitoring"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AURA v4 Daemon Monitoring",
+  "uid": "aura-v4-monitoring",
+  "version": 1
+}

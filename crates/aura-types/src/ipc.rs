@@ -1,6 +1,25 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{dsl::DslStep, etg::ActionPlan};
+
+// ─── IPC Wire Protocol Constants (single source of truth) ───────────────────
+
+/// Maximum allowed message payload size (256 KB).
+/// Used by both daemon (protocol.rs) and neocortex (ipc_handler.rs).
+pub const MAX_MESSAGE_SIZE: usize = 256 * 1024;
+
+/// Size of the length-prefix header (u32 little-endian, 4 bytes).
+/// Used by both daemon and neocortex for frame encoding/decoding.
+pub const LENGTH_PREFIX_SIZE: usize = 4;
+
+/// Alias for [`LENGTH_PREFIX_SIZE`] — used in daemon protocol.rs.
+pub const FRAME_HEADER_SIZE: usize = LENGTH_PREFIX_SIZE;
+
+/// Timeout for a single request→response round-trip (30 seconds).
+/// Used by both daemon and neocortex IPC handlers.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ─── IPC Protocol Version ───────────────────────────────────────────────────
 

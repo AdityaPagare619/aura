@@ -39,6 +39,7 @@ argon2       = "0.5"
 rand         = { version = "0.8", features = ["getrandom"] }
 zeroize      = { version = "1", features = ["derive"] }
 log          = "0.4"
+dirs         = "5"
 
 # reqwest: used when curl-backend feature is NOT enabled.
 # CRITICAL: rustls-tls on Termux causes rustls-platform-verifier panic.
@@ -58,3 +59,23 @@ jni  = "0.21"
 [dev-dependencies]
 tokio    = { version = "1", features = ["rt", "macros", "sync", "time", "net", "test-util"] }
 tempfile = "3"
+
+# ─── Integration test targets ────────────────────────────────────────────────
+
+[[test]]
+name = "test_platform"
+path = "../../tests/test_platform.rs"
+
+[[test]]
+name = "test_telegram"
+path = "../../tests/test_telegram.rs"
+
+[[test]]
+name = "test_ipc_edge_cases"
+path = "../../tests/test_ipc_edge_cases.rs"
+
+[[test]]
+name = "test_memory_management"
+path = "../../tests/test_memory_management.rs"
+
+

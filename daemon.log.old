@@ -1,0 +1,272 @@
+[2m2026-03-23T11:02:20.116878Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m aura-daemon starting [3mversion[0m[2m=[0m"4.0.0"
+[2m2026-03-23T11:02:20.116945Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m loading configuration [3mconfig[0m[2m=[0m/data/local/tmp/aura/config.toml
+[2m2026-03-23T11:02:20.117330Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m config loaded successfully [3mpath[0m[2m=[0m/data/local/tmp/aura/config.toml
+[2m2026-03-23T11:02:20.117598Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m stdin closed — interpreting as shutdown signal
+[2m2026-03-23T11:02:20.117647Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m JNI load: Android — validating JNI env
+[2m2026-03-23T11:02:20.117763Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m runtime init: tracing subscriber ready
+[2m2026-03-23T11:02:20.118341Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m database opened with WAL + mmap 4MB [3mpath[0m[2m=[0m"/data/local/tmp/aura/db/aura.db"
+[2m2026-03-23T11:02:20.118371Z[0m [32m INFO[0m [2maura_daemon::daemon_core::checkpoint[0m[2m:[0m no checkpoint file — starting fresh [3mpath[0m[2m=[0m/data/local/tmp/aura/db/state.bin
+[2m2026-03-23T11:02:20.118926Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic memory: migrations complete
+[2m2026-03-23T11:02:20.118989Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T11:02:20.119682Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m semantic memory: migrations complete
+[2m2026-03-23T11:02:20.119762Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T11:02:20.120516Z[0m [32m INFO[0m [2maura_daemon::memory::archive[0m[2m:[0m archive memory: migrations complete
+[2m2026-03-23T11:02:20.120948Z[0m [32m INFO[0m [2maura_daemon::memory::workflows[0m[2m:[0m workflow memory initialized at "/data/local/tmp/aura/db/memory/workflows.db"
+[2m2026-03-23T11:02:20.121001Z[0m [32m INFO[0m [2maura_daemon::memory[0m[2m:[0m AuraMemory initialized at "/data/local/tmp/aura/db/memory" — 4-tier system with intelligence ready
+[2m2026-03-23T11:02:20.121017Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m memory subsystem initialised [3mdir[0m[2m=[0m"/data/local/tmp/aura/db/memory"
+[2m2026-03-23T11:02:20.121050Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T11:02:20.121067Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T11:02:20.121073Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m identity subsystem initialised
+[2m2026-03-23T11:02:20.121596Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m ETG: persistent store opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/etg.db
+[2m2026-03-23T11:02:20.121663Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m executor subsystem initialised
+[2m2026-03-23T11:02:20.121672Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m planner subsystem initialised
+[2m2026-03-23T11:02:20.121707Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m pipeline subsystems initialised [3mevent_parser[0m[2m=[0mtrue [3mcommand_parser[0m[2m=[0mtrue [3mamygdala[0m[2m=[0mtrue [3mcontextor[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121717Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m routing subsystems initialised [3mroute_classifier[0m[2m=[0mtrue [3msystem1[0m[2m=[0mtrue [3msystem2[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121752Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m goals subsystems initialised [3mbdi_scheduler[0m[2m=[0mtrue [3mgoal_tracker[0m[2m=[0mtrue [3mconflict_resolver[0m[2m=[0mtrue [3mgoal_decomposer[0m[2m=[0mtrue [3mgoal_registry[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121771Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m screen subsystems initialised [3manti_bot[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121779Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m platform subsystem initialised [3mplatform[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121797Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m extension subsystems initialised [3mcapability_loader[0m[2m=[0mtrue [3mextension_discovery[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121802Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m IPC subsystem initialised (disconnected) [3mneocortex_client[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121813Z[0m [32m INFO[0m [1marc_manager_new[0m: [2maura_daemon::arc[0m[2m:[0m initialising Arc module
+[2m2026-03-23T11:02:20.121857Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m ARC subsystem initialised [3marc[0m[2m=[0mtrue
+[2m2026-03-23T11:02:20.121864Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m all subsystems initialised
+[2m2026-03-23T11:02:20.121871Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m IPC bind: prepared abstract socket address [3maddress[0m[2m=[0m"@aura-daemon"
+[2m2026-03-23T11:02:20.121877Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m cron schedule: timer heap initialized [3mjobs_restored[0m[2m=[0m0
+[2m2026-03-23T11:02:20.121965Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m onboarding: first run detected — onboarding required
+[2m2026-03-23T11:02:20.121975Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"JniLoad" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m100 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.121982Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"RuntimeInit" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m20 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.121986Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"DatabaseOpen" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m150 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.121991Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"StateRestore" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m50 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.121995Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"SubSystemsInit" [3melapsed_ms[0m[2m=[0m3 [3mbudget_ms[0m[2m=[0m200 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.122000Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"IpcBind" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m10 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.122004Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"CronSchedule" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m20 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.122008Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"Ready" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m5 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:02:20.122013Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup complete [3mtotal_ms[0m[2m=[0m4
+[2m2026-03-23T11:02:20.122025Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m startup complete [3mtotal_ms[0m[2m=[0m4 [3mphases[0m[2m=[0m8
+[2m2026-03-23T11:02:20.123183Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m cron scheduler spawned [3minterval_secs[0m[2m=[0m30
+[2m2026-03-23T11:02:20.123208Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m heartbeat loop spawned
+[2m2026-03-23T11:02:20.123227Z[0m [32m INFO[0m [2maura_daemon::bridge::router[0m[2m:[0m bridge registered with response router [3mbridge[0m[2m=[0m"telegram"
+[2m2026-03-23T11:02:20.123237Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m response router spawned
+[2m2026-03-23T11:02:20.123256Z[0m [32m INFO[0m [1mneocortex_spawn[0m: [2maura_daemon::ipc::spawn[0m[2m:[0m spawning neocortex process [3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so [2m[3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so[0m
+[2m2026-03-23T11:02:20.126905Z[0m [31mERROR[0m [1mneocortex_spawn[0m: [2maura_daemon::ipc::spawn[0m[2m:[0m failed to spawn neocortex [3merror[0m[2m=[0mNo such file or directory (os error 2) [3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so [2m[3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so[0m
+[2m2026-03-23T11:02:20.126978Z[0m [31mERROR[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m failed to spawn neocortex process — running without LLM [3merror[0m[2m=[0mneocortex process died: spawn failed: No such file or directory (os error 2)
+[2m2026-03-23T11:02:20.126989Z[0m [33m WARN[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m AURA will operate in degraded mode: System1 cache only, no AI reasoning. Ensure aura-neocortex binary is installed at $PREFIX/bin/aura-neocortex
+[2m2026-03-23T11:02:20.127816Z[0m [32m INFO[0m [1mnew[0m: [2maura_daemon::telegram[0m[2m:[0m Telegram engine initialized [3mallowed_chats[0m[2m=[0m1 [3mtrust[0m[2m=[0m0.5 [2m[3mstartup_time_ms[0m[2m=[0m1774263740127[0m
+[2m2026-03-23T11:02:20.127885Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m telegram engine spawned (polling + queue flush)
+[2m2026-03-23T11:02:20.127901Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m telegram bridge spawned [3mbridge[0m[2m=[0m"telegram"
+[2m2026-03-23T11:02:20.128453Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic memory: migrations complete
+[2m2026-03-23T11:02:20.129677Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m semantic memory: migrations complete
+[2m2026-03-23T11:02:20.129729Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T11:02:20.130834Z[0m [32m INFO[0m [2maura_daemon::memory::archive[0m[2m:[0m archive memory: migrations complete
+[2m2026-03-23T11:02:20.131181Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m BdiScheduler initialised
+[2m2026-03-23T11:02:20.131202Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalTracker initialised
+[2m2026-03-23T11:02:20.131219Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalDecomposer initialised
+[2m2026-03-23T11:02:20.131227Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalRegistry initialised
+[2m2026-03-23T11:02:20.131232Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ConflictResolver initialised
+[2m2026-03-23T11:02:20.131245Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ProactiveEngine initialised
+[2m2026-03-23T11:02:20.131256Z[0m [32m INFO[0m [1marc_manager_new[0m: [2maura_daemon::arc[0m[2m:[0m initialising Arc module
+[2m2026-03-23T11:02:20.131306Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ArcManager initialised
+[2m2026-03-23T11:02:20.131455Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T11:02:20.131504Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T11:02:20.131622Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m execution PolicyGate initialised with hardened safety rules [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T11:02:20.131642Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T11:02:20.131661Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T11:02:20.131674Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m EnhancedPlanner initialised
+[2m2026-03-23T11:02:20.131691Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m WorkflowObserver initialised
+[2m2026-03-23T11:02:20.131743Z[0m [32m INFO[0m [2maura_daemon::persistence::journal[0m[2m:[0m journal opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/identity.wal [3msize[0m[2m=[0m0
+[2m2026-03-23T11:02:20.131759Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m WriteAheadJournal opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/identity.wal
+[2m2026-03-23T11:02:20.131770Z[0m [32m INFO[0m [2maura_daemon::health::monitor[0m[2m:[0m health monitor initialized at 1774263740132ms [3msession[0m[2m=[0m1
+[2m2026-03-23T11:02:20.131803Z[0m [32m INFO[0m [2maura_daemon::bridge::system_api[0m[2m:[0m SystemBridge initialised with all command types [3mcommands[0m[2m=[0m14
+[2m2026-03-23T11:02:20.131897Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m execution PolicyGate initialised with hardened safety rules [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T11:02:20.131906Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m react action-step PolicyGate initialised with relaxed rate limit [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T11:02:20.132007Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m vault key loaded from "/data/local/tmp/aura/db/vault.key"
+[2m2026-03-23T11:02:20.132021Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m vault encryption key provisioned
+[2m2026-03-23T11:02:20.132032Z[0m [32m INFO[0m [2maura_daemon::persistence::journal[0m[2m:[0m journal recovery complete [3mtransactions[0m[2m=[0m0 [3mentries[0m[2m=[0m0 [3muncommitted[0m[2m=[0m0 [3mcorruption[0m[2m=[0mfalse
+[2m2026-03-23T11:02:20.132041Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m journal recovery complete [3mcommitted_txns[0m[2m=[0m0 [3mcommitted_entries[0m[2m=[0m0 [3muncommitted[0m[2m=[0m0 [3mcorruption[0m[2m=[0mfalse
+[2m2026-03-23T11:02:20.132047Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m journal entry replay complete [3mreplayed[0m[2m=[0m0 [3mfailed[0m[2m=[0m0 [3mtotal[0m[2m=[0m0
+[2m2026-03-23T11:02:20.132058Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m startup integrity verification: CLEAN — all checks passed
+[2m2026-03-23T11:02:20.132493Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m main loop starting — all subsystems wired [3mstartup_ms[0m[2m=[0m4 [3mrestored_select_count[0m[2m=[0m0
+[2m2026-03-23T11:02:20.132581Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m all channels closed — exiting main loop [3mselect_count[0m[2m=[0m0
+[2m2026-03-23T11:02:20.132590Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m main loop exited [3mselect_count[0m[2m=[0m0
+[2m2026-03-23T11:02:20.134074Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m aura-daemon shut down cleanly
+[2m2026-03-23T11:34:41.878788Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m aura-daemon starting [3mversion[0m[2m=[0m"4.0.0"
+[2m2026-03-23T11:34:41.882687Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m loading configuration [3mconfig[0m[2m=[0m/data/local/tmp/aura/config.toml
+[2m2026-03-23T11:34:41.883144Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m config loaded successfully [3mpath[0m[2m=[0m/data/local/tmp/aura/config.toml
+[2m2026-03-23T11:34:41.883482Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m stdin closed — interpreting as shutdown signal
+[2m2026-03-23T11:34:41.883552Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m JNI load: Android — validating JNI env
+[2m2026-03-23T11:34:41.883658Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m runtime init: tracing subscriber ready
+[2m2026-03-23T11:34:41.885102Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m database opened with WAL + mmap 4MB [3mpath[0m[2m=[0m"/data/local/tmp/aura/db/aura.db"
+[2m2026-03-23T11:34:41.885167Z[0m [32m INFO[0m [2maura_daemon::daemon_core::checkpoint[0m[2m:[0m no checkpoint file — starting fresh [3mpath[0m[2m=[0m/data/local/tmp/aura/db/state.bin
+[2m2026-03-23T11:34:41.886717Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic memory: migrations complete
+[2m2026-03-23T11:34:41.886889Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T11:34:41.888248Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m semantic memory: migrations complete
+[2m2026-03-23T11:34:41.888436Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T11:34:41.889862Z[0m [32m INFO[0m [2maura_daemon::memory::archive[0m[2m:[0m archive memory: migrations complete
+[2m2026-03-23T11:34:41.890895Z[0m [32m INFO[0m [2maura_daemon::memory::workflows[0m[2m:[0m workflow memory initialized at "/data/local/tmp/aura/db/memory/workflows.db"
+[2m2026-03-23T11:34:41.890967Z[0m [32m INFO[0m [2maura_daemon::memory[0m[2m:[0m AuraMemory initialized at "/data/local/tmp/aura/db/memory" — 4-tier system with intelligence ready
+[2m2026-03-23T11:34:41.890978Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m memory subsystem initialised [3mdir[0m[2m=[0m"/data/local/tmp/aura/db/memory"
+[2m2026-03-23T11:34:41.891027Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T11:34:41.891048Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T11:34:41.891054Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m identity subsystem initialised
+[2m2026-03-23T11:34:41.892759Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m ETG: persistent store opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/etg.db
+[2m2026-03-23T11:34:41.892903Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m executor subsystem initialised
+[2m2026-03-23T11:34:41.892925Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m planner subsystem initialised
+[2m2026-03-23T11:34:41.892958Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m pipeline subsystems initialised [3mevent_parser[0m[2m=[0mtrue [3mcommand_parser[0m[2m=[0mtrue [3mamygdala[0m[2m=[0mtrue [3mcontextor[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.892969Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m routing subsystems initialised [3mroute_classifier[0m[2m=[0mtrue [3msystem1[0m[2m=[0mtrue [3msystem2[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893004Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m goals subsystems initialised [3mbdi_scheduler[0m[2m=[0mtrue [3mgoal_tracker[0m[2m=[0mtrue [3mconflict_resolver[0m[2m=[0mtrue [3mgoal_decomposer[0m[2m=[0mtrue [3mgoal_registry[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893024Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m screen subsystems initialised [3manti_bot[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893032Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m platform subsystem initialised [3mplatform[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893064Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m extension subsystems initialised [3mcapability_loader[0m[2m=[0mtrue [3mextension_discovery[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893070Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m IPC subsystem initialised (disconnected) [3mneocortex_client[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893092Z[0m [32m INFO[0m [1marc_manager_new[0m: [2maura_daemon::arc[0m[2m:[0m initialising Arc module
+[2m2026-03-23T11:34:41.893146Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m ARC subsystem initialised [3marc[0m[2m=[0mtrue
+[2m2026-03-23T11:34:41.893154Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m all subsystems initialised
+[2m2026-03-23T11:34:41.893162Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m IPC bind: prepared abstract socket address [3maddress[0m[2m=[0m"@aura-daemon"
+[2m2026-03-23T11:34:41.893168Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m cron schedule: timer heap initialized [3mjobs_restored[0m[2m=[0m0
+[2m2026-03-23T11:34:41.893307Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m onboarding: first run detected — onboarding required
+[2m2026-03-23T11:34:41.893321Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"JniLoad" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m100 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893327Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"RuntimeInit" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m20 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893331Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"DatabaseOpen" [3melapsed_ms[0m[2m=[0m1 [3mbudget_ms[0m[2m=[0m150 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893336Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"StateRestore" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m50 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893340Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"SubSystemsInit" [3melapsed_ms[0m[2m=[0m7 [3mbudget_ms[0m[2m=[0m200 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893345Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"IpcBind" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m10 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893349Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"CronSchedule" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m20 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893353Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"Ready" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m5 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T11:34:41.893357Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup complete [3mtotal_ms[0m[2m=[0m9
+[2m2026-03-23T11:34:41.893371Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m startup complete [3mtotal_ms[0m[2m=[0m9 [3mphases[0m[2m=[0m8
+[2m2026-03-23T11:34:41.894554Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m cron scheduler spawned [3minterval_secs[0m[2m=[0m30
+[2m2026-03-23T11:34:41.894588Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m heartbeat loop spawned
+[2m2026-03-23T11:34:41.894628Z[0m [32m INFO[0m [2maura_daemon::bridge::router[0m[2m:[0m bridge registered with response router [3mbridge[0m[2m=[0m"telegram"
+[2m2026-03-23T11:34:41.894640Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m response router spawned
+[2m2026-03-23T11:34:41.894667Z[0m [32m INFO[0m [1mneocortex_spawn[0m: [2maura_daemon::ipc::spawn[0m[2m:[0m spawning neocortex process [3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so [2m[3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so[0m
+[2m2026-03-23T11:34:41.897972Z[0m [31mERROR[0m [1mneocortex_spawn[0m: [2maura_daemon::ipc::spawn[0m[2m:[0m failed to spawn neocortex [3merror[0m[2m=[0mNo such file or directory (os error 2) [3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so [2m[3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so[0m
+[2m2026-03-23T11:34:41.898053Z[0m [31mERROR[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m failed to spawn neocortex process — running without LLM [3merror[0m[2m=[0mneocortex process died: spawn failed: No such file or directory (os error 2)
+[2m2026-03-23T11:34:41.898064Z[0m [33m WARN[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m AURA will operate in degraded mode: System1 cache only, no AI reasoning. Ensure aura-neocortex binary is installed at $PREFIX/bin/aura-neocortex
+[2m2026-03-23T11:34:41.900089Z[0m [32m INFO[0m [1mnew[0m: [2maura_daemon::telegram[0m[2m:[0m Telegram engine initialized [3mallowed_chats[0m[2m=[0m1 [3mtrust[0m[2m=[0m0.5 [2m[3mstartup_time_ms[0m[2m=[0m1774265681899[0m
+[2m2026-03-23T11:34:41.900176Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m telegram engine spawned (polling + queue flush)
+[2m2026-03-23T11:34:41.900199Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m telegram bridge spawned [3mbridge[0m[2m=[0m"telegram"
+[2m2026-03-23T11:34:41.901172Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic memory: migrations complete
+[2m2026-03-23T11:34:41.903400Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m semantic memory: migrations complete
+[2m2026-03-23T11:34:41.903505Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T11:34:41.905411Z[0m [32m INFO[0m [2maura_daemon::memory::archive[0m[2m:[0m archive memory: migrations complete
+[2m2026-03-23T11:34:41.906022Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m BdiScheduler initialised
+[2m2026-03-23T11:34:41.906066Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalTracker initialised
+[2m2026-03-23T11:34:41.906091Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalDecomposer initialised
+[2m2026-03-23T11:34:41.906103Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalRegistry initialised
+[2m2026-03-23T11:34:41.906110Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ConflictResolver initialised
+[2m2026-03-23T11:34:41.906130Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ProactiveEngine initialised
+[2m2026-03-23T11:34:41.906149Z[0m [32m INFO[0m [1marc_manager_new[0m: [2maura_daemon::arc[0m[2m:[0m initialising Arc module
+[2m2026-03-23T11:34:41.906222Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ArcManager initialised
+[2m2026-03-23T11:34:41.906262Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T11:34:41.906282Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T11:34:41.906347Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m execution PolicyGate initialised with hardened safety rules [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T11:34:41.906360Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T11:34:41.906374Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T11:34:41.906385Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m EnhancedPlanner initialised
+[2m2026-03-23T11:34:41.906392Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m WorkflowObserver initialised
+[2m2026-03-23T11:34:41.907300Z[0m [32m INFO[0m [2maura_daemon::persistence::journal[0m[2m:[0m journal opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/identity.wal [3msize[0m[2m=[0m0
+[2m2026-03-23T11:34:41.908107Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m WriteAheadJournal opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/identity.wal
+[2m2026-03-23T11:34:41.908129Z[0m [32m INFO[0m [2maura_daemon::health::monitor[0m[2m:[0m health monitor initialized at 1774265681908ms [3msession[0m[2m=[0m1
+[2m2026-03-23T11:34:41.908177Z[0m [32m INFO[0m [2maura_daemon::bridge::system_api[0m[2m:[0m SystemBridge initialised with all command types [3mcommands[0m[2m=[0m14
+[2m2026-03-23T11:34:41.908258Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m execution PolicyGate initialised with hardened safety rules [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T11:34:41.908267Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m react action-step PolicyGate initialised with relaxed rate limit [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T11:34:41.908993Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m vault key loaded from "/data/local/tmp/aura/db/vault.key"
+[2m2026-03-23T11:34:41.909012Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m vault encryption key provisioned
+[2m2026-03-23T11:34:41.909033Z[0m [32m INFO[0m [2maura_daemon::persistence::journal[0m[2m:[0m journal recovery complete [3mtransactions[0m[2m=[0m0 [3mentries[0m[2m=[0m0 [3muncommitted[0m[2m=[0m0 [3mcorruption[0m[2m=[0mfalse
+[2m2026-03-23T11:34:41.909043Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m journal recovery complete [3mcommitted_txns[0m[2m=[0m0 [3mcommitted_entries[0m[2m=[0m0 [3muncommitted[0m[2m=[0m0 [3mcorruption[0m[2m=[0mfalse
+[2m2026-03-23T11:34:41.909049Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m journal entry replay complete [3mreplayed[0m[2m=[0m0 [3mfailed[0m[2m=[0m0 [3mtotal[0m[2m=[0m0
+[2m2026-03-23T11:34:41.909061Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m startup integrity verification: CLEAN — all checks passed
+[2m2026-03-23T11:34:41.909493Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m main loop starting — all subsystems wired [3mstartup_ms[0m[2m=[0m9 [3mrestored_select_count[0m[2m=[0m0
+[2m2026-03-23T11:34:41.909514Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m shutdown signal received — exiting main loop [3mselect_count[0m[2m=[0m0
+[2m2026-03-23T11:34:41.909520Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m main loop exited [3mselect_count[0m[2m=[0m0
+[2m2026-03-23T11:34:41.910849Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m aura-daemon shut down cleanly
+[2m2026-03-23T12:01:24.973988Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m aura-daemon starting [3mversion[0m[2m=[0m"4.0.0"
+[2m2026-03-23T12:01:24.974061Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m loading configuration [3mconfig[0m[2m=[0m/data/local/tmp/aura/config.toml
+[2m2026-03-23T12:01:24.974491Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m config loaded successfully [3mpath[0m[2m=[0m/data/local/tmp/aura/config.toml
+[2m2026-03-23T12:01:24.974772Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m JNI load: Android — validating JNI env
+[2m2026-03-23T12:01:24.974850Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m runtime init: tracing subscriber ready
+[2m2026-03-23T12:01:24.975514Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m database opened with WAL + mmap 4MB [3mpath[0m[2m=[0m"/data/local/tmp/aura/db/aura.db"
+[2m2026-03-23T12:01:24.975559Z[0m [32m INFO[0m [2maura_daemon::daemon_core::checkpoint[0m[2m:[0m no checkpoint file — starting fresh [3mpath[0m[2m=[0m/data/local/tmp/aura/db/state.bin
+[2m2026-03-23T12:01:24.980285Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic memory: migrations complete
+[2m2026-03-23T12:01:24.980369Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T12:01:24.981091Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m semantic memory: migrations complete
+[2m2026-03-23T12:01:24.981189Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T12:01:24.981924Z[0m [32m INFO[0m [2maura_daemon::memory::archive[0m[2m:[0m archive memory: migrations complete
+[2m2026-03-23T12:01:24.982385Z[0m [32m INFO[0m [2maura_daemon::memory::workflows[0m[2m:[0m workflow memory initialized at "/data/local/tmp/aura/db/memory/workflows.db"
+[2m2026-03-23T12:01:24.982440Z[0m [32m INFO[0m [2maura_daemon::memory[0m[2m:[0m AuraMemory initialized at "/data/local/tmp/aura/db/memory" — 4-tier system with intelligence ready
+[2m2026-03-23T12:01:24.982451Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m memory subsystem initialised [3mdir[0m[2m=[0m"/data/local/tmp/aura/db/memory"
+[2m2026-03-23T12:01:24.982497Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T12:01:24.982518Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T12:01:24.982524Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m identity subsystem initialised
+[2m2026-03-23T12:01:24.983128Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m ETG: persistent store opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/etg.db
+[2m2026-03-23T12:01:24.983204Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m executor subsystem initialised
+[2m2026-03-23T12:01:24.983215Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m planner subsystem initialised
+[2m2026-03-23T12:01:24.983258Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m pipeline subsystems initialised [3mevent_parser[0m[2m=[0mtrue [3mcommand_parser[0m[2m=[0mtrue [3mamygdala[0m[2m=[0mtrue [3mcontextor[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983269Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m routing subsystems initialised [3mroute_classifier[0m[2m=[0mtrue [3msystem1[0m[2m=[0mtrue [3msystem2[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983312Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m goals subsystems initialised [3mbdi_scheduler[0m[2m=[0mtrue [3mgoal_tracker[0m[2m=[0mtrue [3mconflict_resolver[0m[2m=[0mtrue [3mgoal_decomposer[0m[2m=[0mtrue [3mgoal_registry[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983359Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m screen subsystems initialised [3manti_bot[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983388Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m platform subsystem initialised [3mplatform[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983414Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m extension subsystems initialised [3mcapability_loader[0m[2m=[0mtrue [3mextension_discovery[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983419Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m IPC subsystem initialised (disconnected) [3mneocortex_client[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983437Z[0m [32m INFO[0m [1marc_manager_new[0m: [2maura_daemon::arc[0m[2m:[0m initialising Arc module
+[2m2026-03-23T12:01:24.983492Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m ARC subsystem initialised [3marc[0m[2m=[0mtrue
+[2m2026-03-23T12:01:24.983500Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m all subsystems initialised
+[2m2026-03-23T12:01:24.983508Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m IPC bind: prepared abstract socket address [3maddress[0m[2m=[0m"@aura-daemon"
+[2m2026-03-23T12:01:24.983514Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m cron schedule: timer heap initialized [3mjobs_restored[0m[2m=[0m0
+[2m2026-03-23T12:01:24.983623Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m onboarding: first run detected — onboarding required
+[2m2026-03-23T12:01:24.983634Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"JniLoad" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m100 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983641Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"RuntimeInit" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m20 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983645Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"DatabaseOpen" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m150 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983650Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"StateRestore" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m50 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983654Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"SubSystemsInit" [3melapsed_ms[0m[2m=[0m7 [3mbudget_ms[0m[2m=[0m200 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983658Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"IpcBind" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m10 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983662Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"CronSchedule" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m20 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983667Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup phase [3mphase[0m[2m=[0m"Ready" [3melapsed_ms[0m[2m=[0m0 [3mbudget_ms[0m[2m=[0m5 [3mstatus[0m[2m=[0m"OK"
+[2m2026-03-23T12:01:24.983672Z[0m [32m INFO[0m [2maura_daemon::daemon_core::startup[0m[2m:[0m startup complete [3mtotal_ms[0m[2m=[0m8
+[2m2026-03-23T12:01:24.983687Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m startup complete [3mtotal_ms[0m[2m=[0m8 [3mphases[0m[2m=[0m8
+[2m2026-03-23T12:01:24.984873Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m cron scheduler spawned [3minterval_secs[0m[2m=[0m30
+[2m2026-03-23T12:01:24.984889Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m heartbeat loop spawned
+[2m2026-03-23T12:01:24.984912Z[0m [32m INFO[0m [2maura_daemon::bridge::router[0m[2m:[0m bridge registered with response router [3mbridge[0m[2m=[0m"telegram"
+[2m2026-03-23T12:01:24.984936Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m response router spawned
+[2m2026-03-23T12:01:24.984961Z[0m [32m INFO[0m [1mneocortex_spawn[0m: [2maura_daemon::ipc::spawn[0m[2m:[0m spawning neocortex process [3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so [2m[3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so[0m
+[2m2026-03-23T12:01:24.987942Z[0m [31mERROR[0m [1mneocortex_spawn[0m: [2maura_daemon::ipc::spawn[0m[2m:[0m failed to spawn neocortex [3merror[0m[2m=[0mNo such file or directory (os error 2) [3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so [2m[3mpath[0m[2m=[0m/data/data/dev.aura/lib/libaura_neocortex.so[0m
+[2m2026-03-23T12:01:24.988033Z[0m [31mERROR[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m failed to spawn neocortex process — running without LLM [3merror[0m[2m=[0mneocortex process died: spawn failed: No such file or directory (os error 2)
+[2m2026-03-23T12:01:24.988047Z[0m [33m WARN[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m AURA will operate in degraded mode: System1 cache only, no AI reasoning. Ensure aura-neocortex binary is installed at $PREFIX/bin/aura-neocortex
+[2m2026-03-23T12:01:24.989022Z[0m [32m INFO[0m [1mnew[0m: [2maura_daemon::telegram[0m[2m:[0m Telegram engine initialized [3mallowed_chats[0m[2m=[0m1 [3mtrust[0m[2m=[0m0.5 [2m[3mstartup_time_ms[0m[2m=[0m1774267284988[0m
+[2m2026-03-23T12:01:24.989087Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m telegram engine spawned (polling + queue flush)
+[2m2026-03-23T12:01:24.989104Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m telegram bridge spawned [3mbridge[0m[2m=[0m"telegram"
+[2m2026-03-23T12:01:24.989842Z[0m [32m INFO[0m [2maura_daemon::memory::episodic[0m[2m:[0m episodic memory: migrations complete
+[2m2026-03-23T12:01:24.991532Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m semantic memory: migrations complete
+[2m2026-03-23T12:01:24.991603Z[0m [32m INFO[0m [2maura_daemon::memory::semantic[0m[2m:[0m HNSW index rebuilt with 0 embeddings
+[2m2026-03-23T12:01:24.993125Z[0m [32m INFO[0m [2maura_daemon::memory::archive[0m[2m:[0m archive memory: migrations complete
+[2m2026-03-23T12:01:24.993600Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m BdiScheduler initialised
+[2m2026-03-23T12:01:24.993629Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalTracker initialised
+[2m2026-03-23T12:01:24.993651Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalDecomposer initialised
+[2m2026-03-23T12:01:24.993660Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m GoalRegistry initialised
+[2m2026-03-23T12:01:24.993666Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ConflictResolver initialised
+[2m2026-03-23T12:01:24.993684Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ProactiveEngine initialised
+[2m2026-03-23T12:01:24.993698Z[0m [32m INFO[0m [1marc_manager_new[0m: [2maura_daemon::arc[0m[2m:[0m initialising Arc module
+[2m2026-03-23T12:01:24.993760Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m ArcManager initialised
+[2m2026-03-23T12:01:24.993813Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T12:01:24.993833Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T12:01:24.993871Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m execution PolicyGate initialised with hardened safety rules [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T12:01:24.993882Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m consent granted [3mcategory[0m[2m=[0m"learning" [3mtrust[0m[2m=[0m0.5 [3mexpires[0m[2m=[0mNone
+[2m2026-03-23T12:01:24.993911Z[0m [32m INFO[0m [2maura_daemon::identity::ethics[0m[2m:[0m ConsentTracker initialized with privacy-first defaults: learning=granted, proactive_actions=denied, data_sharing=denied
+[2m2026-03-23T12:01:24.993922Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m EnhancedPlanner initialised
+[2m2026-03-23T12:01:24.993937Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m WorkflowObserver initialised
+[2m2026-03-23T12:01:24.994018Z[0m [32m INFO[0m [2maura_daemon::persistence::journal[0m[2m:[0m journal opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/identity.wal [3msize[0m[2m=[0m0
+[2m2026-03-23T12:01:24.994031Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m WriteAheadJournal opened [3mpath[0m[2m=[0m/data/local/tmp/aura/db/identity.wal
+[2m2026-03-23T12:01:24.994039Z[0m [32m INFO[0m [2maura_daemon::health::monitor[0m[2m:[0m health monitor initialized at 1774267284994ms [3msession[0m[2m=[0m1
+[2m2026-03-23T12:01:24.994065Z[0m [32m INFO[0m [2maura_daemon::bridge::system_api[0m[2m:[0m SystemBridge initialised with all command types [3mcommands[0m[2m=[0m14
+[2m2026-03-23T12:01:24.994143Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m execution PolicyGate initialised with hardened safety rules [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T12:01:24.994155Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m react action-step PolicyGate initialised with relaxed rate limit [3mrule_count[0m[2m=[0m50
+[2m2026-03-23T12:01:24.995052Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m vault key loaded from "/data/local/tmp/aura/db/vault.key"
+[2m2026-03-23T12:01:24.995073Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m vault encryption key provisioned
+[2m2026-03-23T12:01:24.995086Z[0m [32m INFO[0m [2maura_daemon::persistence::journal[0m[2m:[0m journal recovery complete [3mtransactions[0m[2m=[0m0 [3mentries[0m[2m=[0m0 [3muncommitted[0m[2m=[0m0 [3mcorruption[0m[2m=[0mfalse
+[2m2026-03-23T12:01:24.995096Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m journal recovery complete [3mcommitted_txns[0m[2m=[0m0 [3mcommitted_entries[0m[2m=[0m0 [3muncommitted[0m[2m=[0m0 [3mcorruption[0m[2m=[0mfalse
+[2m2026-03-23T12:01:24.995104Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m journal entry replay complete [3mreplayed[0m[2m=[0m0 [3mfailed[0m[2m=[0m0 [3mtotal[0m[2m=[0m0
+[2m2026-03-23T12:01:24.995116Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m startup integrity verification: CLEAN — all checks passed
+[2m2026-03-23T12:01:24.995628Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m main loop starting — all subsystems wired [3mstartup_ms[0m[2m=[0m8 [3mrestored_select_count[0m[2m=[0m0
+[2m2026-03-23T12:01:24.995715Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m all channels closed — exiting main loop [3mselect_count[0m[2m=[0m0
+[2m2026-03-23T12:01:24.995724Z[0m [32m INFO[0m [2maura_daemon::daemon_core::main_loop[0m[2m:[0m main loop exited [3mselect_count[0m[2m=[0m0
+[2m2026-03-23T12:01:24.996962Z[0m [32m INFO[0m [2maura_daemon[0m[2m:[0m aura-daemon shut down cleanly

@@ -1,0 +1,23 @@
+=== CURRENT AURA STATUS ===
+Binary version:
+aura-daemon 4.0.0-alpha.8
+EXIT: 0
+Binary date:
+-rwx------. 1 u0_a475 u0_a475 7851672 Mar 21 14:05 /data/data/com.termux/files/home/aura-daemon
+Aura source date:
+total 677
+drwx------. 14 u0_a475 u0_a475  3452 Mar 21 22:14 .
+drwx------. 12 u0_a475 u0_a475  3452 Mar 21 22:16 ..
+drwx------.  2 u0_a475 u0_a475  3452 Mar 21 15:56 .cargo
+-rw-------.  1 u0_a475 u0_a475   752 Mar 21 16:54 .dockerignore
+drwx------.  7 u0_a475 u0_a475  3452 Mar 21 18:50 .git
+-rw-------.  1 u0_a475 u0_a475   350 Mar 21 15:56 .gitattributes
+drwx------.  4 u0_a475 u0_a475  3452 Mar 21 15:56 .github
+-rw-------.  1 u0_a475 u0_a475  1246 Mar 21 16:54 .gitignore
+-rw-------.  1 u0_a475 u0_a475   141 Mar 21 15:56 .gitmodules
+Git log:
+1feb1f0 feat(termux): replace reqwest with curl subprocess for Telegram HTTP
+9810961 fix(build): resolve rustls-platform-verifier panic on Android ARM64 native build
+cf26f2a docs: add comprehensive device testing guides for full codebase testing
+f605163 ci: push workflow fixes (release YAML, docker-devimage, android-validate Docker build)
+3767946 ci: rebuild release with NDK cross-compilation

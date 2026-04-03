@@ -1490,7 +1490,13 @@ fn spawn_cron_scheduler(
 ///
 /// All subsystem wiring flows through [`LoopSubsystems`] which is constructed
 /// once at the start and passed by `&mut` to every handler.
-pub async fn run(mut state: DaemonState) {
+///
+/// `shutdown_flag` is checked directly (not via the polling task) to ensure
+/// the daemon exits immediately when stdin closes, without waiting 500ms.
+pub async fn run(
+    mut state: DaemonState,
+    shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     let checkpoint_interval = Duration::from_secs(state.config.daemon.checkpoint_interval_s as u64);
     let mut checkpoint_timer = interval(checkpoint_interval);
     // Consume the first (immediate) tick.
@@ -1505,12 +1511,18 @@ pub async fn run(mut state: DaemonState) {
 
     // Split channels: take rx halves for select!.
     let channels = std::mem::take(&mut state.channels);
-    let (_senders, mut rxs) = channels.split();
-    // Note: _senders is kept alive (NOT dropped) so that all channel rx halves
-    // remain open for the lifetime of run().  The cloned TX handles above
-    // (cron_tx, health_tx) are handed to background producer tasks.  Channels
-    // for external producers (a11y, notification, user_command, ipc) stay open
-    // via _senders, ready for when Android services connect.
+    let (senders, mut rxs) = channels.split();
+    // FIX-BUG: Force senders to stay alive for the entire run() function.
+    // In Rust, `let _senders` (unused binding) CAN be optimized away by the
+    // compiler, causing ALL channel senders to be dropped prematurely.
+    // This was the root cause of "all channels closed — exiting main loop".
+    // Using `let _ = &senders` explicitly prevents this optimization.
+    let _ = &senders;
+    // NOTE: Cloned TX handles (cron_tx, health_tx) are passed to spawned tasks.
+    // External producers (a11y, notification, user_command, ipc) stay open via
+    // the senders struct, ready for when services connect on Android.
+    // On Termux, a11y/notification won't connect (no Android services), but
+    // the daemon should still run — it just won't receive those events.
 
     // Spawn the cron scheduler — fires periodic maintenance ticks.
     let _cron_handle = spawn_cron_scheduler(cron_tx, state.cancel_flag.clone());
@@ -2087,22 +2099,31 @@ pub async fn run(mut state: DaemonState) {
         }
     }
 
-    // Track how many channels are still open.
-    // 7 original receiver channels + bridge_cmd_rx + health_event_rx = 9 total.
-    // (response_rx was replaced by a dummy — it is no longer counted;
-    //  bridge_cmd_rx takes its slot as the 8th channel; health_event_rx is 9th.)
+    // Track how many channels are still open (informational, no longer triggers exit).
+    // 9 total channels in the select! loop.
+    // On Termux: a11y_rx and notification_rx close immediately (no Android services).
+    // Internal channels (cron_tick_rx, health_event_rx) stay open via spawned tasks.
+    // The daemon stays alive until cancel_flag or shutdown_flag is set.
     let mut open_channels: u8 = 9;
 
     tracing::info!(
         startup_ms = state.startup_time_ms,
         restored_select_count = select_count,
+        open_channels,
         "main loop starting — all subsystems wired"
     );
 
     loop {
-        // Check cancellation flag (non-blocking).
+        // Check cancellation flag OR shutdown flag (non-blocking).
+        // shutdown_flag is set by the signal handler when stdin closes.
+        // We check it directly here (not via the 500ms polling task) so the
+        // daemon exits immediately on stdin EOF rather than waiting 500ms.
         if state.cancel_flag.load(Ordering::Acquire) {
             tracing::info!(select_count, "cancellation flag set — exiting main loop");
+            break;
+        }
+        if shutdown_flag.load(Ordering::Acquire) {
+            tracing::info!(select_count, "shutdown signal received — exiting main loop");
             break;
         }
 
@@ -2124,11 +2145,17 @@ pub async fn run(mut state: DaemonState) {
             }
         }
 
-        // Exit if all channels have closed.
-        if open_channels == 0 {
-            tracing::info!(select_count, "all channels closed — exiting main loop");
-            break;
-        }
+        // NOTE: The `open_channels == 0` check was removed.
+        //
+        // REASON: On Termux (no Android services), external channels like
+        // a11y_rx and notification_rx will NEVER have senders connected, so they
+        // close immediately. But the daemon should still run — it just won't receive
+        // Android-specific events. Internal producers (cron_scheduler,
+        // heartbeat_loop) keep cron_tick_rx and health_event_rx open indefinitely.
+        //
+        // The daemon exits when cancel_flag or shutdown_flag is set, which is
+        // the correct behavior for a long-running background service.
+        // See fix-bug commit for full analysis.
 
         tokio::select! {
             // ----- A11y events (accessibility service) -----
@@ -8216,7 +8243,8 @@ mod tests {
         cancel.store(true, Ordering::Release);
 
         let start = Instant::now();
-        run(state).await;
+        let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        run(state, shutdown_flag).await;
         assert!(start.elapsed().as_millis() < 500, "should exit quickly");
     }
 
@@ -8236,7 +8264,8 @@ mod tests {
 
         let local = tokio::task::LocalSet::new();
         let handle = local.spawn_local(async move {
-            run(state).await;
+            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            run(state, shutdown_flag).await;
         });
 
         local
@@ -8267,7 +8296,8 @@ mod tests {
 
         let local = tokio::task::LocalSet::new();
         let handle = local.spawn_local(async move {
-            run(state).await;
+            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            run(state, shutdown_flag).await;
         });
 
         local

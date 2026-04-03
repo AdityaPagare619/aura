@@ -1,0 +1,11 @@
+aura-daemon — AURA v4 Always-On Daemon
+
+USAGE:
+    aura-daemon [OPTIONS]
+
+OPTIONS:
+    -c, --config <PATH>    Path to config.toml
+                           Default: ~/.config/aura/config.toml
+    -h, --help             Print this help message
+    -V, --version          Print version
+

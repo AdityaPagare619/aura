@@ -12,100 +12,132 @@
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let stub_enabled = std::env::var_os("CARGO_FEATURE_STUB").is_some();
+    let server_enabled = std::env::var_os("CARGO_FEATURE_SERVER").is_some();
+    let ci_compile = std::env::var("AURA_COMPILE_LLAMA").unwrap_or_default();
 
-    // Only compile llama.cpp when targeting Android ARM64
+    println!(
+        "cargo:warning=aura-llama-sys build.rs: target_os={target_os} target_arch={target_arch} stub_enabled={stub_enabled} server_enabled={server_enabled} ci_compile={ci_compile}"
+    );
+
+    // Check for NDK in various environment variables
+    let ndk_home = std::env::var("NDK_HOME")
+        .ok()
+        .or_else(|| std::env::var("ANDROID_NDK_HOME").ok())
+        .or_else(|| std::env::var("ANDROID_NDK_ROOT").ok());
+
+    // Only compile llama.cpp when targeting Android ARM64 AND either:
+    // 1. CI_COMPILE_LLAMA=true is set, OR
+    // 2. Not Android (host build)
+    let do_compile = ci_compile == "true" || target_os != "android";
+
+    // Also check if NDK is available for Android builds
+    let has_ndk = ndk_home.is_some();
+
+    // Only compile real llama.cpp if explicitly requested (CI) or on host
     if target_os == "android" && target_arch == "aarch64" {
-        // Ensure Rust linker can resolve Android libc++ static archive.
-        // cc-rs emits `cargo:rustc-link-lib=static=c++_static`, but rustc
-        // needs an explicit native search path to locate libc++_static.a.
-        emit_android_cpp_runtime_linking();
-
-        // Guard: fail with a clear message if the submodule isn't initialized.
-        // Wrap in stub-feature check so CI can compile without the submodule.
-        #[cfg(not(feature = "stub"))]
-        {
-            if !std::path::Path::new("llama.cpp/llama.cpp").exists() {
-                panic!(
-                    "llama.cpp submodule not initialized. \
-                     Run: git submodule update --init --recursive\n\
-                     Or build with --features aura-llama-sys/stub to skip native compilation."
-                );
-            }
-
-            // Compile C files separately with -std=c11.
-            // Using .cpp(true) on .c files forces C++ mode and breaks NDK r26b clang
-            // which rejects C99 compound literals and void* implicit casts in C++ mode.
-            let mut c_build = cc::Build::new();
-            c_build
-                .cpp(false)
-                .flag("-std=c11")
-                .flag("-march=armv8-a+fp+simd")
-                .flag("-DGGML_USE_NEON")
-                .flag("-O3")
-                .flag("-DNDEBUG")
-                .flag("-Wno-error")
-                .file("llama.cpp/ggml.c")
-                .file("llama.cpp/ggml-alloc.c")
-                .file("llama.cpp/ggml-backend.c")
-                .file("llama.cpp/ggml-quants.c")
-                .include("llama.cpp");
-            c_build.compile("llama_c");
-
-            // Compile C++ files with -std=c++17.
-            let mut cpp_build = cc::Build::new();
-            cpp_build
-                .cpp(true)
-                // Disable cc-rs automatic C++ stdlib linkage. We emit explicit
-                // link-search + link-lib directives in `emit_android_cpp_runtime_linking`
-                // so rustc can reliably resolve static libc++ in CI cross builds.
-                .cpp_link_stdlib(None)
-                .flag("-std=c++17")
-                .flag("-march=armv8-a+fp+simd")
-                .flag("-DGGML_USE_NEON")
-                .flag("-O3")
-                .flag("-DNDEBUG")
-                .flag("-Wno-error")
-                .file("llama.cpp/llama.cpp")
-                .include("llama.cpp");
-            cpp_build.compile("llama_cpp");
-
-            println!("cargo:rustc-link-lib=static=llama_c");
-            println!("cargo:rustc-link-lib=static=llama_cpp");
-        }
-
-        // In stub mode on Android: emit the stub marker instead of compiling native code.
-        #[cfg(feature = "stub")]
-        {
+        if do_compile && has_ndk {
+            println!("cargo:warning=aura-llama-sys build.rs: COMPILING REAL LLAMA.CPP");
+            compile_llama_cpp();
+        } else {
+            // STUB MODE for local development without proper NDK
             println!("cargo:rustc-cfg=llama_stub");
             println!("cargo:stub=true");
+            println!("cargo:warning=aura-llama-sys build.rs: Using STUB mode (set AURA_COMPILE_LLAMA=true to compile real llama.cpp)");
         }
     } else {
-        // On host builds (non-Android), nothing to compile — stubs are pure Rust.
-        // Emit a DEP_LLAMA_STUB marker so dependent crates can detect stub mode.
+        // On host builds (non-Android), use stub
         println!("cargo:rustc-cfg=llama_stub");
         println!("cargo:stub=true");
     }
 }
 
+fn compile_llama_cpp() {
+    // Check for NDK
+    let ndk_home = std::env::var("NDK_HOME")
+        .ok()
+        .or_else(|| std::env::var("ANDROID_NDK_HOME").ok())
+        .or_else(|| std::env::var("ANDROID_NDK_ROOT").ok());
+
+    let Some(ndk_home) = ndk_home else {
+        panic!("NDK not found - cannot compile llama.cpp");
+    };
+
+    println!("cargo:warning=aura-llama-sys build.rs: Using NDK at {ndk_home}");
+
+    // Ensure Rust linker can resolve Android libc++ static archive.
+    emit_android_cpp_runtime_linking();
+
+    // Guard: fail with a clear message if the submodule isn't initialized.
+    if !std::path::Path::new("llama.cpp/llama.cpp").exists() {
+        panic!(
+            "llama.cpp submodule not initialized. \
+             Run: git submodule update --init --recursive\n\
+             Or build with --features aura-llama-sys/stub to skip native compilation."
+        );
+    }
+
+    // Compile C files with -std=c11
+    // Use conservative defaults for maximum device compatibility
+    // Runtime detection will be handled by PlatformCpuFeatures in the Rust code
+    let mut c_build = cc::Build::new();
+    c_build
+        .cpp(false)
+        .flag("-std=c11")
+        // Use armv8-a as baseline (supported by all 64-bit Android devices)
+        .flag("-march=armv8-a")
+        .flag("-DGGML_USE_NEON")
+        // Don't enable FP16/DotProd at compile time - use runtime detection
+        .flag("-DGGML_USE_NEON_FP16=OFF")
+        .flag("-DGGML_NATIVE=OFF")
+        .flag("-DGGML_USE_SVE=OFF")
+        .flag("-O3")
+        .flag("-DNDEBUG")
+        .flag("-Wno-error")
+        .file("llama.cpp/ggml.c")
+        .file("llama.cpp/ggml-alloc.c")
+        .file("llama.cpp/ggml-backend.c")
+        .file("llama.cpp/ggml-quants.c")
+        .include("llama.cpp");
+    c_build.compile("llama_c");
+
+    // Compile C++ files with -std=c++17
+    let mut cpp_build = cc::Build::new();
+    cpp_build
+        .cpp(true)
+        .cpp_link_stdlib(None)
+        .flag("-std=c++17")
+        // Use armv8-a as baseline (supported by all 64-bit Android devices)
+        .flag("-march=armv8-a")
+        .flag("-DGGML_USE_NEON")
+        // Don't enable FP16/DotProd at compile time - use runtime detection
+        .flag("-DGGML_USE_NEON_FP16=OFF")
+        .flag("-DGGML_NATIVE=OFF")
+        .flag("-DGGML_USE_SVE=OFF")
+        .flag("-O3")
+        .flag("-DNDEBUG")
+        .flag("-Wno-error")
+        .file("llama.cpp/llama.cpp")
+        .include("llama.cpp");
+    cpp_build.compile("llama_cpp");
+
+    println!("cargo:rustc-link-lib=static=llama_c");
+    println!("cargo:rustc-link-lib=static=llama_cpp");
+}
+
 fn emit_android_cpp_runtime_linking() {
     use std::{env, path::PathBuf};
 
-    // Android NDK root can be exposed under multiple conventional names.
     let ndk_home = env::var("NDK_HOME")
         .ok()
         .or_else(|| env::var("ANDROID_NDK_HOME").ok())
         .or_else(|| env::var("ANDROID_NDK_ROOT").ok());
 
     let Some(ndk_home) = ndk_home else {
-        println!(
-            "cargo:warning=Android target detected but NDK_HOME/ANDROID_NDK_HOME/ANDROID_NDK_ROOT is not set; c++_static link may fail"
-        );
-        println!("cargo:rustc-link-lib=static=c++_static");
+        println!("cargo:warning=Android target detected but NDK not found");
         return;
     };
 
-    // Prefer explicit host tag if provided by setup; otherwise use Linux default
-    // (our CI runs on ubuntu-latest).
     let host_tag = env::var("ANDROID_NDK_HOST_TAG").unwrap_or_else(|_| "linux-x86_64".to_string());
 
     let mut roots = vec![PathBuf::from(&ndk_home)
@@ -118,8 +150,6 @@ fn emit_android_cpp_runtime_linking() {
         .join("lib")
         .join("aarch64-linux-android")];
 
-    // Also include the generic sysroot lib dir. Some NDK layouts place
-    // libc++ artifacts there instead of (or in addition to) triple-specific dirs.
     roots.push(
         PathBuf::from(&ndk_home)
             .join("toolchains")
@@ -131,53 +161,12 @@ fn emit_android_cpp_runtime_linking() {
             .join("lib"),
     );
 
-    // Some NDK layouts also place API-specific variants under .../<triple>/<api>.
-    // Emit both if present to make rustc static-lib resolution robust.
-    let api_level = env::var("API_LEVEL")
-        .ok()
-        .or_else(|| env::var("CARGO_NDK_ANDROID_PLATFORM").ok())
-        .or_else(|| env::var("ANDROID_PLATFORM").ok());
-    if let Some(api_level) = api_level {
-        if !api_level.is_empty() {
-            roots.push(
-                PathBuf::from(&ndk_home)
-                    .join("toolchains")
-                    .join("llvm")
-                    .join("prebuilt")
-                    .join(&host_tag)
-                    .join("sysroot")
-                    .join("usr")
-                    .join("lib")
-                    .join("aarch64-linux-android")
-                    .join(api_level),
-            );
-        }
-    }
-
-    let mut found_static_archive = false;
     for path in roots {
         if path.exists() {
-            let archive = path.join("libc++_static.a");
-            if archive.exists() {
-                found_static_archive = true;
-                println!(
-                    "cargo:warning=Found Android static libc++ archive at {}",
-                    archive.display()
-                );
-            }
             println!("cargo:rustc-link-search=native={}", path.display());
         }
     }
 
-    if !found_static_archive {
-        println!(
-            "cargo:warning=Did not find libc++_static.a in emitted Android link-search paths; rustc may fail if NDK layout differs"
-        );
-    }
-
-    // Enforce static C++ runtime for self-contained Android release binaries.
-    // NDK splits some exception ABI symbols into libc++abi.a, so link it
-    // explicitly to avoid unresolved __cxa* / __gxx_personality_* symbols.
     println!("cargo:rustc-link-lib=static=c++_static");
     println!("cargo:rustc-link-lib=static=c++abi");
 }

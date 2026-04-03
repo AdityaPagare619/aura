@@ -12,17 +12,34 @@
 //! - Simpler dependency tree (no rustls, no webpki, no platform verifier)
 //!
 //! The `HttpBackend` trait is synchronous. This implementation uses
-//! `tokio::process::Command` which is async-native, but we expose it
-//! through a sync interface. Callers wrap these in `spawn_blocking`.
+//! `std::process::Command` for fully synchronous curl calls.
+//! No tokio runtime access needed — safe to call from spawn_blocking.
+//!
+//! IMPORTANT: TelegramPoller passes FULL URLs (https://api.telegram.org/botTOKEN/endpoint).
+//! This backend handles both:
+//!   - Full URLs (already include base + token): use as-is
+//!   - Relative endpoints (getUpdates, sendMessage): prepend base + token
+
+use std::process::Command;
 
 use aura_types::errors::AuraError;
-use tokio::process::Command;
 use tracing::{debug, warn};
 
 use super::polling::HttpBackend;
 
 /// Maximum time for a curl request to complete.
-const CURL_TIMEOUT_SECS: u64 = 30;
+/// Maximum time for a curl request to complete.
+///
+/// We intentionally do NOT set --max-time because Telegram already enforces
+/// its own long-poll timeout (30s). When Telegram sends a response (either
+/// an update or an empty result array), curl will immediately receive it
+/// and exit. The only case where --max-time would help is if the network
+/// hangs indefinitely, but Termux's network stack handles this.
+///
+/// Note: Telegram's getUpdates long-poll timeout is 30s. After 30s of
+/// no updates, Telegram responds with {"ok": true, "result": []}. curl
+/// receives this immediately and exits. No explicit timeout needed.
+const CURL_TIMEOUT_SECS: u64 = 0; // 0 = no timeout, Telegram controls it
 
 /// Telegram API base URL.
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
@@ -47,9 +64,17 @@ impl CurlHttpBackend {
 
     /// Execute a curl request and return the response body as bytes.
     ///
+    /// This is a SYNCHRONOUS function. It uses `std::process::Command`
+    /// directly, with NO tokio runtime access. This is safe to call from
+    /// any context including `spawn_blocking` closures.
+    ///
+    /// Handles both full URLs (from TelegramPoller which already includes
+    /// base + token) and relative endpoints (for direct API calls).
+    ///
     /// # Arguments
     /// * `method` - HTTP method (GET, POST)
-    /// * `endpoint` - Telegram API endpoint (e.g., "getUpdates")
+    /// * `endpoint` - Either a full URL or a relative endpoint path.
+    ///   TelegramPoller always passes full URLs with base + token already.
     /// * `body` - Optional JSON body for POST requests
     /// * `content_type` - Content-Type header value
     fn curl_request_sync(
@@ -59,22 +84,15 @@ impl CurlHttpBackend {
         body: Option<&[u8]>,
         content_type: Option<&str>,
     ) -> Result<Vec<u8>, AuraError> {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            self.curl_request_impl(method, endpoint, body, content_type)
-                .await
-        })
-    }
-
-    /// Internal async implementation (called from sync wrapper).
-    async fn curl_request_impl(
-        &self,
-        method: &str,
-        endpoint: &str,
-        body: Option<&[u8]>,
-        content_type: Option<&str>,
-    ) -> Result<Vec<u8>, AuraError> {
-        let url = format!("{}/bot{}/{}", TELEGRAM_API_BASE, self.bot_token, endpoint);
+        // If endpoint is already a full URL, use it as-is.
+        // TelegramPoller::get_updates passes full URLs like:
+        //   https://api.telegram.org/botTOKEN/getUpdates?offset=0&timeout=30...
+        // In that case, self.bot_token is NOT prepended again.
+        let url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            endpoint.to_string()
+        } else {
+            format!("{}/bot{}/{}", TELEGRAM_API_BASE, self.bot_token, endpoint)
+        };
 
         debug!(url = %url, method = %method, "curl HTTP request");
 
@@ -83,12 +101,18 @@ impl CurlHttpBackend {
             "-S".to_string(),
             "-w".to_string(),
             "\\n%{http_code}".to_string(),
-            "--max-time".to_string(),
-            CURL_TIMEOUT_SECS.to_string(),
-            "-X".to_string(),
-            method.to_string(),
-            url.clone(),
         ];
+
+        // Only add --max-time if a timeout is configured.
+        // When 0, we rely on Telegram's built-in long-poll timeout (30s).
+        if CURL_TIMEOUT_SECS > 0 {
+            args.push("--max-time".to_string());
+            args.push(CURL_TIMEOUT_SECS.to_string());
+        }
+
+        args.push("-X".to_string());
+        args.push(method.to_string());
+        args.push(url);
 
         if let Some(ct) = content_type {
             args.push("-H".to_string());
@@ -101,14 +125,12 @@ impl CurlHttpBackend {
             args.push(body_str.to_string());
         }
 
-        let output = Command::new("curl")
-            .args(&args)
-            .output()
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "failed to spawn curl");
-                AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
-            })?;
+        // Use std::process::Command — fully synchronous, no tokio runtime needed.
+        // This is safe to call from spawn_blocking or any thread context.
+        let output = Command::new("curl").args(&args).output().map_err(|e| {
+            warn!(error = %e, "failed to spawn curl");
+            AuraError::Ipc(aura_types::errors::IpcError::ConnectionFailed)
+        })?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -157,6 +179,13 @@ impl CurlHttpBackend {
             ));
         }
 
+        if response_body.is_empty() {
+            warn!("Telegram returned empty response body");
+            return Err(AuraError::Ipc(
+                aura_types::errors::IpcError::ConnectionFailed,
+            ));
+        }
+
         Ok(response_body.into_bytes())
     }
 }
@@ -173,8 +202,8 @@ impl HttpBackend for CurlHttpBackend {
     fn post_multipart(
         &self,
         endpoint: &str,
-        fields: Vec<(&str, String)>,
-        file_field: Option<(&str, Vec<u8>, &str)>,
+        fields: Vec<(String, String)>,
+        file_field: Option<(String, Vec<u8>, String)>,
     ) -> Result<Vec<u8>, AuraError> {
         let boundary = "AURA_BOUNDARY_123456789";
 
@@ -225,7 +254,8 @@ mod tests {
     async fn test_curl_get_request() {
         // This test requires curl to be available
         // Skip if curl is not in PATH
-        let result = Command::new("curl").args(&["--version"]).output().await;
+        use std::process::Command as StdCommand;
+        let result = StdCommand::new("curl").args(&["--version"]).output();
 
         if result.is_err() {
             return; // Skip if curl not available

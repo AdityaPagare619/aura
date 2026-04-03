@@ -224,6 +224,9 @@ pub enum PlatformError {
     #[error("JNI call failed: {0}")]
     JniFailed(String),
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("callback capacity exceeded: max {max}")]
     CallbackCapacityExceeded { max: usize },
 

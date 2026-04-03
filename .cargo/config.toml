@@ -1,11 +1,10 @@
 # Cross-compilation targets for AURA v4
 # Primary target: aarch64-linux-android (Termux on ARM64 devices)
 #
-# These are defaults used by `cargo build --target aarch64-linux-android`.
-# The NDK toolchain path must be in PATH, or set CARGO_TARGET_*_LINKER
-# in the environment (CI sets these via workflow env vars).
+# Uses $ANDROID_NDK_HOME env var — set this to your NDK root (e.g. r26b).
+# CI sets these via workflow env vars; local builds need ANDROID_NDK_HOME.
+# API level 26 matches minSdk (Android 8.0+).
 
 [target.aarch64-linux-android]
-# Full path required for cross-compilation on Windows
-linker = "C:/Android/ndk/android-ndk-r27d/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
-ar = "C:/Android/ndk/android-ndk-r27d/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar"
+linker = "aarch64-linux-android26-clang"
+ar = "llvm-ar"

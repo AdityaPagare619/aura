@@ -252,15 +252,17 @@ panic = "unwind"    # F001 fix: changed from abort (SIGSEGV)
 
 | Artifact | Path | Size |
 |----------|------|------|
-| aura-daemon (Linux) | `artifacts/aura-daemon` | 8.4 MB |
-| Android APK | `artifacts/termux-arm64.apk` | 35 MB |
+| aura-daemon (Termux native) | `target/release/aura-daemon` | ~8-10 MB |
+| aura-neocortex (Termux native) | `target/release/aura-neocortex` | ~10-15 MB |
+
+> **Note:** Termux app is installed separately (from F-Droid or GitHub), not bundled. AURA runs inside Termux.
 
 **SHA256:**
 ```
 6d649c29d1bc862bed5491b7a132809c5c3fd8438ff397f71b8ec91c832ac919 *artifacts/aura-daemon
 ```
 
-### NDK Cross-Compilation
+### Build (Termux Native)
 
 - Target: aarch64-linux-android (arm64)
 - Uses cross-compilation target in `.cargo/config.toml`

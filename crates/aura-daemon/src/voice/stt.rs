@@ -87,7 +87,7 @@ mod zipformer_ffi {
 
 pub struct ZipformerStt {
     #[cfg(target_os = "android")]
-    state: *mut std::ffi::c_void,
+    state: std::sync::Mutex<*mut std::ffi::c_void>,
 
     /// Accumulated partial result.
     partial_result: String,
@@ -98,9 +98,9 @@ pub struct ZipformerStt {
 }
 
 // SAFETY: ZipformerStt is Send because the raw `*mut c_void` state pointer
-// (present only on Android) is only accessed through &mut self methods, ensuring
-// exclusive access. The C sherpa-onnx STT library is not thread-safe per-instance,
-// but since we never share the pointer across threads without &mut, Send is sound.
+// (present only on Android) is wrapped in a Mutex, providing interior mutability
+// and cross-thread synchronization. The Mutex ensures only one thread can
+// dereference the sherpa-onnx C library pointer at a time.
 unsafe impl Send for ZipformerStt {}
 
 impl ZipformerStt {
@@ -108,7 +108,7 @@ impl ZipformerStt {
         #[cfg(target_os = "android")]
         let state = {
             // TODO: sherpa_stt_create_streaming with model path
-            std::ptr::null_mut()
+            std::sync::Mutex::new(std::ptr::null_mut())
         };
 
         Ok(Self {
@@ -136,18 +136,22 @@ impl ZipformerStt {
         #[cfg(target_os = "android")]
         {
             let float_samples: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
+            let ptr = *self.state.lock().unwrap();
+            // SAFETY: ptr is a valid sherpa-onnx streaming recognizer handle.
+            // The Mutex ensures single-threaded access. CStr::from_ptr result
+            // is immediately copied to String before the next FFI call.
             unsafe {
                 zipformer_ffi::sherpa_stt_accept_waveform(
-                    self.state,
+                    ptr,
                     float_samples.as_ptr(),
                     float_samples.len() as std::os::raw::c_int,
                 );
-                let result_ptr = zipformer_ffi::sherpa_stt_get_result(self.state);
+                let result_ptr = zipformer_ffi::sherpa_stt_get_result(ptr);
                 if !result_ptr.is_null() {
                     let c_str = std::ffi::CStr::from_ptr(result_ptr);
                     self.partial_result = c_str.to_string_lossy().into_owned();
                 }
-                let is_endpoint = zipformer_ffi::sherpa_stt_is_endpoint(self.state) != 0;
+                let is_endpoint = zipformer_ffi::sherpa_stt_is_endpoint(ptr) != 0;
                 if is_endpoint {
                     self.finalized_segments.push(self.partial_result.clone());
                     self.partial_result.clear();
@@ -173,8 +177,11 @@ impl ZipformerStt {
         #[cfg(target_os = "android")]
         {
             // Flush the recognizer
+            let ptr = *self.state.lock().unwrap();
+            // SAFETY: ptr is a valid sherpa-onnx streaming recognizer handle.
+            // CStr::from_ptr result is immediately copied to String.
             unsafe {
-                let result_ptr = zipformer_ffi::sherpa_stt_get_result(self.state);
+                let result_ptr = zipformer_ffi::sherpa_stt_get_result(ptr);
                 if !result_ptr.is_null() {
                     let c_str = std::ffi::CStr::from_ptr(result_ptr);
                     let final_text = c_str.to_string_lossy().into_owned();
@@ -203,8 +210,12 @@ impl ZipformerStt {
         self.frames_fed = 0;
 
         #[cfg(target_os = "android")]
-        if !self.state.is_null() {
-            unsafe { zipformer_ffi::sherpa_stt_reset(self.state) };
+        {
+            let ptr = *self.state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid handle, null-checked. Single-threaded via Mutex.
+                unsafe { zipformer_ffi::sherpa_stt_reset(ptr) };
+            }
         }
     }
 }
@@ -212,8 +223,12 @@ impl ZipformerStt {
 impl Drop for ZipformerStt {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        if !self.state.is_null() {
-            unsafe { zipformer_ffi::sherpa_stt_destroy(self.state) };
+        {
+            let ptr = *self.state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid handle, null-checked. Only called once during drop.
+                unsafe { zipformer_ffi::sherpa_stt_destroy(ptr) };
+            }
         }
     }
 }
@@ -268,15 +283,15 @@ impl WhisperModelSize {
 
 pub struct WhisperStt {
     #[cfg(target_os = "android")]
-    ctx: *mut std::ffi::c_void,
+    ctx: std::sync::Mutex<*mut std::ffi::c_void>,
 
     pub model_size: WhisperModelSize,
 }
 
 // SAFETY: WhisperStt is Send because the raw `*mut c_void` ctx pointer
-// (present only on Android) is only accessed through &mut self methods, ensuring
-// exclusive access. The whisper.cpp library is not thread-safe per-context, but
-// ownership transfer between threads is safe since we never alias the pointer.
+// (present only on Android) is wrapped in a Mutex, providing interior
+// mutability and cross-thread synchronization. The Mutex ensures only
+// one thread can dereference the whisper.cpp context pointer at a time.
 unsafe impl Send for WhisperStt {}
 
 impl WhisperStt {
@@ -284,7 +299,7 @@ impl WhisperStt {
         #[cfg(target_os = "android")]
         let ctx = {
             // TODO: whisper_ffi::whisper_init_from_file with model path
-            std::ptr::null_mut()
+            std::sync::Mutex::new(std::ptr::null_mut())
         };
 
         Ok(Self {
@@ -331,8 +346,12 @@ impl WhisperStt {
 impl Drop for WhisperStt {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        if !self.ctx.is_null() {
-            unsafe { whisper_ffi::whisper_free(self.ctx) };
+        {
+            let ptr = *self.ctx.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid whisper.cpp context, null-checked. Only called once during drop.
+                unsafe { whisper_ffi::whisper_free(ptr) };
+            }
         }
     }
 }

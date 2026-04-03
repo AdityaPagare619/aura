@@ -78,16 +78,19 @@ fn compile_llama_cpp() {
     }
 
     // Compile C files with -std=c11
+    // Use conservative defaults for maximum device compatibility
+    // Runtime detection will be handled by PlatformCpuFeatures in the Rust code
     let mut c_build = cc::Build::new();
     c_build
         .cpp(false)
         .flag("-std=c11")
-        .flag("-march=armv8.7a+fp16+dotprod")
+        // Use armv8-a as baseline (supported by all 64-bit Android devices)
+        .flag("-march=armv8-a")
         .flag("-DGGML_USE_NEON")
-        .flag("-DGGML_USE_NEON_FP16=ON")
-        .flag("-DGGML_NATIVE=ON")
+        // Don't enable FP16/DotProd at compile time - use runtime detection
+        .flag("-DGGML_USE_NEON_FP16=OFF")
+        .flag("-DGGML_NATIVE=OFF")
         .flag("-DGGML_USE_SVE=OFF")
-        .flag("-DGGML_USE_NEON")
         .flag("-O3")
         .flag("-DNDEBUG")
         .flag("-Wno-error")
@@ -104,12 +107,13 @@ fn compile_llama_cpp() {
         .cpp(true)
         .cpp_link_stdlib(None)
         .flag("-std=c++17")
-        .flag("-march=armv8.7a+fp16+dotprod")
+        // Use armv8-a as baseline (supported by all 64-bit Android devices)
+        .flag("-march=armv8-a")
         .flag("-DGGML_USE_NEON")
-        .flag("-DGGML_USE_NEON_FP16=ON")
-        .flag("-DGGML_NATIVE=ON")
+        // Don't enable FP16/DotProd at compile time - use runtime detection
+        .flag("-DGGML_USE_NEON_FP16=OFF")
+        .flag("-DGGML_NATIVE=OFF")
         .flag("-DGGML_USE_SVE=OFF")
-        .flag("-DGGML_USE_NEON")
         .flag("-O3")
         .flag("-DNDEBUG")
         .flag("-Wno-error")

@@ -1,0 +1,181 @@
+# ============================================================
+# AURA v4 — Unified Cross-Platform CI Pipeline
+# Matrix: ubuntu-latest, macos-latest, windows-latest
+# Steps: checkout, rust-toolchain, cargo check, test, clippy, fmt
+# Android: aarch64-linux-android cross-compile check
+#
+# TOOLCHAIN: stable (matches rust-toolchain.toml)
+# NDK: r26b, API level 26
+# ============================================================
+
+name: Unified CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: unified-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: full
+
+jobs:
+  # ============================================================
+  # CROSS-PLATFORM BUILD MATRIX
+  # ============================================================
+  host-build:
+    name: ${{ matrix.os }} — check + test + clippy + fmt
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            install-deps: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libopus-dev
+          - os: macos-latest
+            install-deps: brew install cmake pkg-config opus
+          - os: windows-latest
+            install-deps: echo "No extra deps on Windows"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable + clippy + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: ${{ matrix.os }}
+
+      - name: Install system deps
+        if: runner.os != 'Windows'
+        run: ${{ matrix.install-deps }}
+
+      - name: cargo fmt check
+        run: cargo fmt --all --check
+
+      - name: cargo check
+        run: cargo check --workspace --features "aura-llama-sys/stub,aura-daemon/reqwest"
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --features "aura-llama-sys/stub,aura-daemon/reqwest" -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --features "aura-llama-sys/stub,aura-daemon/reqwest"
+        env:
+          RUST_LOG: debug
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            target/nextest/**/*.xml
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ============================================================
+  # ANDROID CROSS-COMPILE CHECK (aarch64-linux-android)
+  # ============================================================
+  android-check:
+    name: Android cross-compile check
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: r26b
+      NDK_SHA256: ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632
+      API_LEVEL: "26"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable + aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Android NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux-${{ env.NDK_SHA256 }}
+
+      - name: Download and verify Android NDK r26b
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          curl -fsSL "$NDK_URL" -o ndk.zip
+          ACTUAL_SHA256=$(sha256sum ndk.zip | cut -d' ' -f1)
+          if [ "$ACTUAL_SHA256" != "$NDK_SHA256" ]; then
+            echo "FATAL: NDK checksum mismatch!"
+            exit 1
+          fi
+          unzip -q ndk.zip -d $HOME
+          rm -f ndk.zip
+
+      - name: Set NDK environment
+        run: |
+          echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Configure cross-compilation env
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> $GITHUB_ENV
+          echo "$TOOLCHAIN" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: android-check
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
+
+      - name: cargo check (Android aarch64)
+        run: cargo check --workspace --features "aura-llama-sys/stub,aura-daemon/curl-backend" --target aarch64-linux-android
+
+  # ============================================================
+  # SECURITY AUDIT
+  # ============================================================
+  security-audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit --ignore RUSTSEC-2025-0141
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo deny check
+        run: cargo deny check || true

@@ -14,6 +14,10 @@
 
 // Workspace-wide clippy configuration for aura-daemon.
 // These are intentional style choices for this codebase:
+
+// TASK 2: Deny unsafe code at crate level — all unsafe must be explicitly allowed.
+#![deny(unsafe_code)]
+#![allow(no_mangle_with_rust_abi)] // JNI functions require #[no_mangle] with extern "system"
 #![allow(clippy::too_many_arguments)] // Complex internal APIs need many params
 #![allow(clippy::new_without_default)] // Many types have non-trivial constructors
 #![allow(clippy::if_same_then_else)] // Used for clarity in branching logic
@@ -36,6 +40,21 @@
 // General unused lints — some modules conditionally use imports:
 #![allow(unused_imports)] // Some imports used conditionally via cfg flags
 #![allow(unused_variables)] // Some variables used conditionally in tests
+
+// ── Feature flag validation ──────────────────────────────────────────────────
+// curl-backend and reqwest are mutually exclusive HTTP backends.
+// curl-backend: Termux-compatible (uses system curl + OpenSSL)
+// reqwest: CI/Linux (uses rustls — panics on Termux Android)
+#[cfg(all(feature = "curl-backend", feature = "reqwest"))]
+compile_error!(
+    "Features `curl-backend` and `reqwest` are mutually exclusive. \
+     Use `curl-backend` for Termux/Android builds, `reqwest` for CI/Linux."
+);
+#[cfg(not(any(feature = "curl-backend", feature = "reqwest")))]
+compile_error!(
+    "One HTTP backend feature must be enabled: `curl-backend` (Termux) or `reqwest` (CI/Linux). \
+     Add --features curl-backend or --features reqwest to your cargo command."
+);
 
 pub mod arc;
 pub mod bridge;
@@ -132,12 +151,19 @@ mod jni_bridge {
     /// Set during `init()`, read during `shutdown()`.
     static CANCEL_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
+    // CRIT-01 FIX (CWE-416): Sentinel to prevent JNI use-after-free.
+    // Tracks whether the DaemonState pointer has been consumed by `run()`.
+    // Without this, calling `run()` twice on the same pointer causes
+    // double-free and use-after-free — the second call dereferences freed memory.
+    static STATE_CONSUMED: AtomicBool = AtomicBool::new(false);
+
     /// `JNI_OnLoad` equivalent — called when the Kotlin shell loads
     /// `libaura_core.so`.
     ///
     /// # Safety
     /// Called by the JVM — raw JNI pointer.
     #[no_mangle]
+    #[allow(unsafe_code)]
     pub unsafe extern "system" fn Java_dev_aura_core_NativeBridge_init(
         mut env: JNIEnv,
         _class: JClass,
@@ -166,6 +192,7 @@ mod jni_bridge {
     /// # Safety
     /// `state_ptr` must be a valid pointer from `init`.
     #[no_mangle]
+    #[allow(unsafe_code)]
     pub unsafe extern "system" fn Java_dev_aura_core_NativeBridge_run(
         _env: JNIEnv,
         _class: JClass,
@@ -176,6 +203,22 @@ mod jni_bridge {
             return;
         }
 
+        // CRIT-01 FIX (CWE-416): Check sentinel before consuming pointer.
+        // If `run()` was already called (or pointer was freed), refuse to
+        // reconstitute the Box — this prevents use-after-free and double-free.
+        if STATE_CONSUMED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            tracing::error!(
+                "SECURITY: run() called on already-consumed state pointer (double-call detected). \
+                 Refusing to dereference freed memory."
+            );
+            return;
+        }
+
+        // SAFETY: state_ptr was allocated by Box::new(state) in init().
+        // CRIT-01 FIX: STATE_CONSUMED sentinel prevents double-free.
         let state = unsafe { *Box::from_raw(state_ptr as *mut crate::DaemonState) };
 
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -202,6 +245,7 @@ mod jni_bridge {
     /// Called from Kotlin — `state_ptr` is best-effort (may already be freed
     /// if shutdown raced).  The cancel flag is the safe signal path.
     #[no_mangle]
+    #[allow(unsafe_code)]
     pub unsafe extern "system" fn Java_dev_aura_core_NativeBridge_shutdown(
         _env: JNIEnv,
         _class: JClass,

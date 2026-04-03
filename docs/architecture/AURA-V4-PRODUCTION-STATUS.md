@@ -9,10 +9,9 @@
 
 ## TL;DR
 
-AURA v4 Rust platform layer is **architecturally mature** with 2362 passing tests. Android
-deployment is **blocked** on three P0 items: (1) llama.cpp not vendored, (2) Kotlin shell app
-missing, (3) llama.cpp FFI outdated. A functional device build is weeks away with focused effort;
-a production release is months away.
+AURA v4 Rust platform layer is **architecturally mature** with 2362 passing tests. **Termux deployment is the current model** (verified March 29, 2026). Remaining P0 items: (1) llama.cpp not vendored, (2) FFI outdated. A functional Termux build is achievable with focused effort.
+
+> **IMPORTANT:** AURA v4 is Termux-based, NOT APK-based. See `docs/TERMUX-DEPLOYMENT.md` for the current deployment model.
 
 ---
 
@@ -80,16 +79,18 @@ a production release is months away.
 
 ### ❌ Stub / Not Implemented
 
+> **NOTE (March 30, 2026):** AURA v4 is **Termux-based**, NOT APK-based. The Kotlin/Android APK blockers below are **NOT APPLICABLE** to the current deployment model. See `docs/TERMUX-DEPLOYMENT.md` for details.
+
 | Subsystem | Status | What Exists | Why Blocked |
 |-----------|--------|-------------|------------|
 | `llama.cpp` submodule | ❌ NOT VENDORED | `aura-llama-sys` exists but `vendor/llama.cpp` missing | **P0 blocker** — cannot build |
-| Kotlin shell app | ❌ MISSING | `build.gradle.kts` scaffolding only; no Kotlin source | **P0 blocker** — no APK possible |
-| `AndroidManifest.xml` | ❌ MISSING | No file exists | **P0 blocker** — no APK possible |
-| `AuraDaemonBridge.kt` (JNI host) | ❌ MISSING | Rust side expects this class; it does not exist | **P0 blocker** |
-| Accessibility service (Kotlin) | ❌ MISSING | No `AuraAccessibilityService` | **P0 blocker** |
-| Model delivery pipeline | ❌ MISSING | No download mechanism, no storage management | P1 |
-| APK build pipeline (CI) | ❌ MISSING | No script to build `.so` → copy to jniLibs → assemble APK | P1 |
-| Android instrumented tests | ❌ MISSING | No on-device test infrastructure | P2 |
+| ~~Kotlin shell app~~ | ~~❌ MISSING~~ | ~~No longer applicable~~ | ✅ N/A — Termux-based |
+| ~~`AndroidManifest.xml`~~ | ~~❌ MISSING~~ | ~~No longer applicable~~ | ✅ N/A — Termux-based |
+| ~~`AuraDaemonBridge.kt`~~ | ~~❌ MISSING~~ | ~~No longer applicable~~ | ✅ N/A — Termux-based |
+| ~~Accessibility service (Kotlin)~~ | ~~❌ MISSING~~ | ~~No longer applicable~~ | ✅ N/A — Termux-based |
+| Model delivery pipeline | ✅ IMPLEMENTED | `install.sh` downloads GGUF models | ✅ Done |
+| ~~APK build pipeline (CI)~~ | ~~❌ MISSING~~ | ~~No longer applicable~~ | ✅ N/A — Termux-based |
+| Termux service testing | ✅ IMPLEMENTED | termux-services configuration | ✅ Done |
 | E2E test suite | ❌ MISSING | No end-to-end tests | P2 |
 | `aura doctor` health command | ❌ MISSING | Planned post-v4 milestone | P3 |
 | Crash reporting | ❌ MISSING | No crash analytics (by design — anti-telemetry) | Design decision |
@@ -98,7 +99,7 @@ a production release is months away.
 
 ## P0 Blockers — First Functional Device Build
 
-These must all be resolved before AURA can run on an Android device at all.
+> **NOTE:** These blockers are for the **Termux-native** deployment model. There is no APK, no Kotlin shell, and no Android app — see `docs/TERMUX-DEPLOYMENT.md`.
 
 ### P0-1: Vendor llama.cpp as Git Submodule
 
@@ -120,41 +121,17 @@ Update the FFI bindings to match the current API.
 
 ---
 
-### P0-2: Kotlin Shell App (Minimum Viable)
-
-**What's needed:**
-
-```
-android-app/app/src/main/
-├── AndroidManifest.xml         ← declare permissions, services, receivers
-├── java/dev/aura/v4/
-│   ├── AuraActivity.kt         ← main UI (can be minimal — just a button to start service)
-│   ├── AuraDaemonBridge.kt     ← JNI host: loads libaura_core.so, exposes native methods
-│   ├── AuraForegroundService.kt ← starts daemon, holds wakelock
-│   └── AuraAccessibilityService.kt ← screen reader, forwards events to daemon
-└── res/
-    ├── layout/activity_main.xml
-    └── values/strings.xml
-```
-
-The JNI method signatures that Rust expects are in `crates/aura-daemon/src/platform/jni.rs`.
-
-**Owner:** — | **Estimate:** 3–5 days | **How to contribute:** See §How to Contribute below.
-
----
-
-### P0-3: Verify End-to-End Cross-Compilation
+### P0-2: Verify End-to-End Termux Build (Previously P0-3)
 
 **What's needed:**
 
 1. Vendor llama.cpp (P0-1)
 2. Fix FFI bindings
-3. Run: `cargo build --release --target aarch64-linux-android -p aura-daemon`
-4. Verify the `.so` exports the expected JNI symbols
+3. Run native build in Termux: `cargo build --release -p aura-daemon`
+4. Verify the binary runs and connects to llama-server
 5. Repeat for `aura-neocortex` binary
 
-**Owner:** — | **Estimate:** 1 day (after P0-1) | **How to contribute:** Run the build, report
-errors.
+**Owner:** — | **Estimate:** 1 day (after P0-1) | **How to contribute:** Run the build, report errors.
 
 ---
 
@@ -166,12 +143,12 @@ These are required before AURA is fit for real users.
 |------|-------|----------|-------|
 | Fix `ping_neocortex` | — | 1–2h | Neocortex health check broken |
 | Fix `score_plan` | — | 2–4h | Plan quality scoring broken |
-| Model download pipeline | — | 3–5d | Download GGUF, verify checksum, manage storage |
-| APK signing + CI build | — | 2–3d | Full pipeline: Rust → `.so` → Kotlin APK |
+| Model download pipeline | ✅ DONE | — | Implemented in `install.sh` |
+| Termux CI build | ✅ DONE | — | GitHub Actions workflow exists |
 | Battery drain validation | — | 1–2d | Measure idle drain; target < 5%/hr |
 | Integration test suite | — | 1w | End-to-end request flow tests |
-| First-run onboarding UI | — | 3–5d | Model selection, permission grants, profile setup |
-| GDPR export UI | — | 2–3d | User-accessible data export |
+| First-run onboarding (CLI) | ✅ DONE | — | Implemented in `install.sh` |
+| GDPR export | ❌ MISSING | 2–3d | User-accessible data export |
 | Token budget manager | — | 2–3d | In progress; complete + test |
 | Hebbian wiring | — | 2–3d | In progress; complete + test |
 
@@ -203,6 +180,8 @@ These are required before AURA is fit for real users.
 | **Usable alpha** (real tasks work) | Full ReAct loop + P1 work | 8–12 weeks |
 | **Production release** | All P1 complete + P2 battery/test | 16–24 weeks |
 
+> **Timeline Note (March 30, 2026):** Termux + llama-server verified working on March 29, 2026 (Moto G45 5G, MediaTek Dimensity 6300). HTTP backend connects to localhost:8080. Core infrastructure is functional.
+
 ---
 
 ## How to Contribute to Unblocking Each Item
@@ -214,23 +193,19 @@ These are required before AURA is fit for real users.
 3. Pick a stable llama.cpp commit (check their releases page for the latest stable tag)
 4. Update `crates/aura-llama-sys/src/lib.rs` — replace `llama_eval` calls with `llama_batch` /
    `llama_decode` pattern
-5. Run `cargo build --target aarch64-linux-android -p aura-llama-sys`
+5. Run `cargo build --release -p aura-llama-sys` (native Termux build)
 6. Fix any linker errors
 7. PR with title: `fix(llama-sys): vendor llama.cpp and update to batch API`
 
 **Reference:** llama.cpp batch API migration guide is in their repo at `docs/backend/`.
 
-### Contributing to P0-2 (Kotlin shell)
+### Contributing to P0-2 (Termux Build Verification)
 
-1. Create `android-app/app/src/main/AndroidManifest.xml` with required permissions
-2. Implement `AuraDaemonBridge.kt` — look at `crates/aura-daemon/src/platform/jni.rs` for the
-   exact native method signatures expected
-3. Implement `AuraForegroundService.kt` — standard Android foreground service that loads the `.so`
-   and calls `init()` on the bridge
-4. Implement minimal `AuraAccessibilityService.kt` — capture accessibility events and forward to
-   daemon
-5. Test: does `System.loadLibrary("aura_core")` work?
-6. PR with title: `feat(android): add Kotlin shell app (minimum viable)`
+1. Run `bash install.sh` in Termux on device
+2. Verify `aura-daemon` starts
+3. Verify `aura-neocortex` connects via HTTP to localhost:8080
+4. Test basic inference: `curl -X POST http://localhost:8080/v1/completions -d '{"prompt": "Hello"}'`
+5. Report any errors
 
 ### Contributing to P1 Fixes (`ping_neocortex`, `score_plan`)
 

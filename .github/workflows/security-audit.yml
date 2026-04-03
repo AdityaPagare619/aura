@@ -1,0 +1,236 @@
+# ============================================================
+# AURA v4 — Security Audit Workflow
+# cargo-audit + cargo-deny + SARIF output for GitHub Security
+#
+# Runs on: every PR, push to main, weekly schedule
+# ============================================================
+
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan: Monday 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+permissions:
+  contents: read
+  # Needed for uploading SARIF to GitHub Security tab
+  security-events: write
+
+jobs:
+  # ============================================================
+  # CARGO AUDIT — Known vulnerability scan
+  # ============================================================
+  cargo-audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit (JSON)
+        id: audit_json
+        run: |
+          cargo audit --json > audit-results.json 2>&1 || true
+          # Check for vulnerabilities (not just advisories)
+          VULN_COUNT=$(jq '[.vulnerabilities.list[]] | length' audit-results.json 2>/dev/null || echo "0")
+          echo "vuln_count=$VULN_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Found $VULN_COUNT vulnerabilities"
+
+      - name: Generate SARIF output
+        run: |
+          # Convert cargo-audit JSON to SARIF format for GitHub Security tab
+          if [ -f audit-results.json ]; then
+            cargo audit --json > audit-results.json 2>&1 || true
+            # Use cargo-audit's built-in SARIF if available, otherwise create manually
+            cat > audit-to-sarif.jq << 'JQEOF'
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [{
+    "tool": {
+      "driver": {
+        "name": "cargo-audit",
+        "version": "0.21",
+        "informationUri": "https://github.com/rustsec/rustsec/tree/main/cargo-audit",
+        "rules": [.vulnerabilities.list[] | {
+          "id": .advisory.id,
+          "shortDescription": { "text": .advisory.title },
+          "helpUri": (.advisory.url // ("https://rustsec.org/advisories/" + .advisory.id)),
+          "properties": { "severity": (.advisory.cvss // "unknown") }
+        }]
+      }
+    },
+    "results": [.vulnerabilities.list[] | {
+      "ruleId": .advisory.id,
+      "level": "error",
+      "message": { "text": (.advisory.title + " — " + .advisory.id) },
+      "locations": [{
+        "physicalLocation": {
+          "artifactLocation": { "uri": "Cargo.lock" },
+          "region": { "startLine": 1 }
+        }
+      }]
+    }]
+  }]
+}
+JQEOF
+            jq -f audit-to-sarif.jq audit-results.json > audit-results.sarif 2>/dev/null || \
+              echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"cargo-audit","rules":[]}},"results":[]}]}' > audit-results.sarif
+          fi
+
+      - name: Upload SARIF to GitHub Security
+        if: always() && hashFiles('audit-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: audit-results.sarif
+          category: cargo-audit
+
+      - name: Fail on vulnerabilities
+        if: steps.audit_json.outputs.vuln_count != '0'
+        run: |
+          echo "::error::Found ${{ steps.audit_json.outputs.vuln_count }} known vulnerabilities!"
+          echo "Review audit-results.json for details."
+          exit 1
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-results
+          path: audit-results.*
+          retention-days: 90
+
+  # ============================================================
+  # CARGO DENY — License + Advisory checks
+  # ============================================================
+  cargo-deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [advisories, licenses, bans, sources]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Create deny.toml (if missing)
+        run: |
+          if [ ! -f deny.toml ]; then
+            cat > deny.toml << 'TOMLEOF'
+# cargo-deny configuration for AURA v4
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = true
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+ignore = []
+
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Zlib",
+    "BSL-1.0",
+    "OpenSSL",
+]
+copyleft = "warn"
+default = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+TOMLEOF
+          fi
+
+      - name: Run cargo-deny (${{ matrix.check }})
+        run: cargo deny check ${{ matrix.check }}
+
+  # ============================================================
+  # DEPENDENCY SBOM — Generate Software Bill of Materials
+  # ============================================================
+  sbom:
+    name: SBOM Generation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked || true
+
+      - name: Generate SBOM
+        run: |
+          if command -v cargo-cyclonedx &>/dev/null; then
+            cargo cyclonedx --format json --output-file sbom.json
+            echo "SBOM generated: sbom.json"
+          else
+            echo "cargo-cyclonedx not available, falling back to lock file analysis"
+            cp Cargo.lock sbom-lock.json 2>/dev/null || echo "No Cargo.lock found"
+          fi
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom.json
+            sbom-lock.json
+          retention-days: 90

@@ -15,4 +15,14 @@ bitflags = "2"
 serde_json.workspace = true
 async-trait.workspace = true
 
-[dev-dependencies]
+[[test]]
+name = "test_ffi_safety"
+path = "../../tests/security/test_ffi_safety.rs"
+
+[[test]]
+name = "test_config"
+path = "../../tests/integration/test_config.rs"
+
+[[test]]
+name = "test_ipc"
+path = "../../tests/integration/test_ipc.rs"

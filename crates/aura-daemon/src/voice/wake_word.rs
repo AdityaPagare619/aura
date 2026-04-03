@@ -4,6 +4,7 @@
 //! detection. On non-Android platforms, provides a mock that never triggers
 //! (or can be forced for testing).
 
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -87,7 +88,7 @@ pub struct WakeWordEvent {
 #[allow(dead_code)]
 pub struct WakeWordDetector {
     #[cfg(target_os = "android")]
-    kws_state: *mut std::ffi::c_void,
+    kws_state: Mutex<*mut std::ffi::c_void>,
 
     /// Registered keywords.
     keywords: Vec<String>,
@@ -103,9 +104,11 @@ pub struct WakeWordDetector {
 }
 
 // SAFETY: WakeWordDetector is Send because the raw `*mut c_void` kws_state
-// (present only on Android) is only accessed through &mut self methods. The
-// sherpa-onnx KWS library is single-threaded per-instance; exclusive &mut
-// access ensures no concurrent aliasing when the detector moves between threads.
+// (present only on Android) is wrapped in a Mutex, which provides both
+// interior mutability and cross-thread synchronization. The Mutex ensures
+// only one thread can dereference the C pointer at a time. The sherpa-onnx
+// KWS library is single-threaded per-instance, and the Mutex serialization
+// upholds this invariant.
 unsafe impl Send for WakeWordDetector {}
 
 impl WakeWordDetector {
@@ -122,7 +125,7 @@ impl WakeWordDetector {
         #[cfg(target_os = "android")]
         let kws_state = {
             // TODO: call sherpa_kws_ffi::sherpa_kws_create with model path
-            std::ptr::null_mut()
+            Mutex::new(std::ptr::null_mut())
         };
 
         Self {
@@ -170,8 +173,12 @@ impl WakeWordDetector {
         self.last_detection = None;
 
         #[cfg(target_os = "android")]
-        if !self.kws_state.is_null() {
-            unsafe { sherpa_kws_ffi::sherpa_kws_reset(self.kws_state) };
+        {
+            let ptr = *self.kws_state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid sherpa KWS handle, null-checked. Single-threaded via Mutex.
+                unsafe { sherpa_kws_ffi::sherpa_kws_reset(ptr) };
+            }
         }
     }
 
@@ -197,9 +204,12 @@ impl WakeWordDetector {
         #[cfg(target_os = "android")]
         {
             let float_samples: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
+            let ptr = *self.kws_state.lock().unwrap();
+            // SAFETY: ptr is a valid sherpa KWS handle. Mutex ensures single-threaded access.
+            // float_samples.as_ptr() is valid for the duration of this call.
             let result = unsafe {
                 sherpa_kws_ffi::sherpa_kws_process(
-                    self.kws_state,
+                    ptr,
                     float_samples.as_ptr(),
                     float_samples.len() as std::os::raw::c_int,
                 )
@@ -228,8 +238,12 @@ impl Default for WakeWordDetector {
 impl Drop for WakeWordDetector {
     fn drop(&mut self) {
         #[cfg(target_os = "android")]
-        if !self.kws_state.is_null() {
-            unsafe { sherpa_kws_ffi::sherpa_kws_destroy(self.kws_state) };
+        {
+            let ptr = *self.kws_state.lock().unwrap();
+            if !ptr.is_null() {
+                // SAFETY: ptr is a valid sherpa KWS handle, null-checked. Only called once during drop.
+                unsafe { sherpa_kws_ffi::sherpa_kws_destroy(ptr) };
+            }
         }
     }
 }

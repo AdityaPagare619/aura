@@ -32,6 +32,7 @@ use aura_types::errors::PlatformError;
 
 #[cfg(target_os = "android")]
 mod inner {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::OnceLock;
 
     use aura_types::errors::PlatformError;
@@ -44,6 +45,13 @@ mod inner {
 
     /// Cached `JavaVM` pointer — set once in `JNI_OnLoad`.
     static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
+    /// CRIT-01 FIX (CWE-416): Sentinel to prevent JNI use-after-free in nativeRun.
+    /// Tracks whether the DaemonState pointer has been consumed by `run()`.
+    /// Without this, calling `run()` twice on the same pointer causes
+    /// double-free and use-after-free — the second call dereferences freed memory.
+    /// Uses compare_exchange for atomic, race-free consumption.
+    static STATE_CONSUMED: AtomicBool = AtomicBool::new(false);
 
     /// JNI class path for the Kotlin-side bridge.
     ///
@@ -59,10 +67,12 @@ mod inner {
     /// # Safety
     /// Raw JNI pointer from the VM.
     #[no_mangle]
+    #[allow(unsafe_code)]
     pub unsafe extern "system" fn JNI_OnLoad(
         vm: *mut jni::sys::JavaVM,
         _reserved: *mut std::ffi::c_void,
     ) -> jint {
+        // SAFETY: vm is a valid raw pointer from the JNI runtime.
         let vm = match unsafe { JavaVM::from_raw(vm) } {
             Ok(v) => v,
             Err(e) => {
@@ -137,6 +147,7 @@ mod inner {
     /// # Safety
     /// JNI call.
     #[no_mangle]
+    #[allow(unsafe_code)]
     pub unsafe extern "system" fn Java_dev_aura_v4_AuraDaemonBridge_nativeInit(
         mut env: JNIEnv,
         _class: JClass,
@@ -179,7 +190,12 @@ mod inner {
     ///
     /// # Safety
     /// `state_ptr` must be a valid pointer from `nativeInit`.
+    ///
+    /// # CRIT-01: Double-free protection
+    /// Uses `STATE_CONSUMED` atomic sentinel to ensure the state pointer is
+    /// only consumed once. Subsequent calls are rejected with an error log.
     #[no_mangle]
+    #[allow(unsafe_code)]
     pub unsafe extern "system" fn Java_dev_aura_v4_AuraDaemonBridge_nativeRun(
         _env: JNIEnv,
         _class: JClass,
@@ -190,6 +206,22 @@ mod inner {
             return;
         }
 
+        // CRIT-01 FIX (CWE-416): Check sentinel before consuming pointer.
+        // If `run()` was already called (or pointer was freed), refuse to
+        // reconstitute the Box — this prevents use-after-free and double-free.
+        if STATE_CONSUMED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            error!(
+                "SECURITY: nativeRun() called on already-consumed state pointer \
+                 (double-call detected). Refusing to dereference freed memory."
+            );
+            return;
+        }
+
+        // SAFETY: state_ptr was allocated by Box::new(state) in nativeInit().
+        // CRIT-01 FIX: STATE_CONSUMED sentinel prevents double-free.
         let state = unsafe { *Box::from_raw(state_ptr as *mut crate::DaemonState) };
 
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -663,7 +695,34 @@ mod inner {
     /// Invoke `AuraDaemonBridge.openUrl(url)` → `Z`.
     ///
     /// Kotlin impl: `Intent(ACTION_VIEW, Uri.parse(url)) + startActivity()`.
+    ///
+    /// # CRIT-02: URL scheme validation
+    /// Only `http://` and `https://` schemes are allowed. All other schemes
+    /// (javascript:, data:, file:, intent:, tel:, etc.) are rejected to prevent
+    /// URL injection attacks that could execute arbitrary code or access local files.
     pub fn jni_open_url(url: &str) -> Result<bool, PlatformError> {
+        // CRIT-02 FIX: Validate URL is not empty
+        if url.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "openUrl: URL must not be empty".into(),
+            ));
+        }
+
+        // CRIT-02 FIX: Scheme allowlist — only http and https
+        let is_allowed = url.starts_with("http://") || url.starts_with("https://");
+        if !is_allowed {
+            // Extract the scheme for logging (if present)
+            let scheme = url.split(':').next().unwrap_or("<none>");
+            warn!(
+                "SECURITY: openUrl rejected dangerous scheme '{}' — only http/https allowed",
+                scheme
+            );
+            return Err(PlatformError::InvalidInput(format!(
+                "openUrl: scheme '{}' not allowed — only http:// and https:// URLs are permitted",
+                scheme
+            )));
+        }
+
         let mut env = jni_env()?;
         let j_url = env
             .new_string(url)
@@ -869,6 +928,16 @@ mod inner {
     /// Invoke `AuraDaemonBridge.hasAutostartPermission()` → `Z`.
     pub fn jni_has_autostart_permission() -> Result<bool, PlatformError> {
         call_bool_no_args("hasAutostartPermission")
+    }
+
+    /// Invoke `AuraDaemonBridge.getDeviceApiLevel()` → `I`.
+    pub fn jni_get_device_api_level() -> Result<u32, PlatformError> {
+        let mut env = jni_env()?;
+        let result = env
+            .call_static_method(BRIDGE_CLASS_PATH, "getDeviceApiLevel", "()I", &[])
+            .map_err(|e| PlatformError::JniFailed(format!("getDeviceApiLevel: {e}")))?;
+        check_jni_exception(&mut env, "getDeviceApiLevel")?;
+        Ok(result.i().unwrap_or(24) as u32)
     }
 }
 
@@ -1283,6 +1352,17 @@ pub fn jni_has_autostart_permission() -> Result<bool, PlatformError> {
 #[cfg(not(target_os = "android"))]
 pub fn jni_has_autostart_permission() -> Result<bool, PlatformError> {
     Ok(true)
+}
+
+/// Get device Android API level (e.g., 33 for Android 13).
+#[cfg(target_os = "android")]
+pub fn jni_get_device_api_level() -> Result<u32, PlatformError> {
+    inner::jni_get_device_api_level()
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn jni_get_device_api_level() -> Result<u32, PlatformError> {
+    Ok(0)
 }
 
 // ── Action intents ───────────────────────────────────────────────────────────

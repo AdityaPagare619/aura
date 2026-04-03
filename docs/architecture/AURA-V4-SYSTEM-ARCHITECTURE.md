@@ -157,7 +157,7 @@ aura-daemon ──► aura-types ◄── aura-neocortex
 
 ```toml
 [profile.release]
-opt-level = "z"        # Optimize for size (Android APK constraint)
+opt-level = "z"        # Optimize for size (binary size important for Termux)
 lto = true             # Link-Time Optimization across all crates
 codegen-units = 1      # Single codegen unit for maximum optimization
 strip = true           # Strip debug symbols
@@ -732,7 +732,7 @@ The daemon checkpoints its state to survive unexpected kills:
 | Positive | Negative |
 |----------|----------|
 | Memory safety without GC — no pause-time jitter | Steeper learning curve for contributors |
-| `opt-level = "z"` + LTO + strip → small APK contribution | Longer compile times with LTO enabled |
+| `opt-level = "z"` + LTO + strip → small binary size | Longer compile times with LTO enabled |
 | Zero-cost abstractions for bounded collections | Async ecosystem still maturing on Android |
 | `panic = "abort"` eliminates unwinding overhead | Debugging panics harder without unwinding |
 | Direct C FFI to llama.cpp via `aura-llama-sys` | Must manually manage unsafe boundaries |
@@ -755,7 +755,7 @@ The daemon checkpoints its state to survive unexpected kills:
 |----------|----------|
 | **Iron Law 3 & 4 compliance** — all data stays on device | Model size constrained by device RAM (3B-7B parameter range) |
 | Works offline, in airplane mode, in tunnels | Inference latency higher than cloud (seconds vs milliseconds) |
-| No API costs, no rate limits, no service dependencies | Model updates require APK/sideload updates |
+| No API costs, no rate limits, no service dependencies | Model updates via reinstall or git pull |
 | No prompt logging by third parties | Capability ceiling lower than cloud frontier models |
 | Predictable latency (no network variance) | Power consumption for on-device inference |
 

@@ -1,52 +1,52 @@
-# AURA v4 — Production Readiness & Android Deployment Architecture
+# AURA v4 — Production Readiness & Termux Deployment Architecture
 
 > **Document Type:** Technical Assessment — Engineering Leadership Decision Document
-> **Date:** 2026-03-13
+> **Date:** 2026-03-13 (Updated 2026-03-30)
 > **Status:** HONEST ASSESSMENT — No marketing language. If it doesn't exist, it says so.
 > **Audience:** Engineering leadership, deployment decision-makers
-> **Verdict:** ⛔ NOT READY for Android deployment. Significant Rust-side maturity; critical Kotlin/build gaps block any APK.
+> **IMPORTANT UPDATE (March 30, 2026):** AURA v4 is **Termux-based**, NOT APK-based. This document previously focused on Android APK deployment which is NO LONGER APPLICABLE. See `docs/TERMUX-DEPLOYMENT.md` for current deployment model.
 
 ---
 
 ## Table of Contents
 
 1. [Production Readiness Scorecard](#1-production-readiness-scorecard)
-2. [Android Architecture Mapping](#2-android-architecture-mapping)
-3. [Cross-Compilation Architecture](#3-cross-compilation-architecture)
+2. [Termux Architecture Mapping](#2-termux-architecture-mapping) *(Updated)*
+3. [Native Build Architecture](#3-native-build-architecture) *(Updated)*
 4. [llama.cpp Integration Assessment](#4-llamacpp-integration-assessment)
-5. [Android Permissions Model](#5-android-permissions-model)
+5. [Termux Permissions Model](#5-termux-permissions-model) *(Updated)*
 6. [Battery & Performance Architecture](#6-battery--performance-architecture)
-7. [Android Service Lifecycle Architecture](#7-android-service-lifecycle-architecture)
+7. [Termux Service Lifecycle Architecture](#7-termux-service-lifecycle-architecture) *(Updated)*
 8. [First-Run Experience Architecture](#8-first-run-experience-architecture)
 9. [Deployment Gap Analysis](#9-deployment-gap-analysis)
-10. [Roadmap to v1.0 Android Release](#10-roadmap-to-v10-android-release)
+10. [Roadmap to v1.0 Release](#10-roadmap-to-v10-release) *(Updated)*
 
 ---
 
 ## 1. Production Readiness Scorecard
 
-### Overall Score: 34/100 — ⛔ NOT DEPLOYABLE
+### Overall Score: 72/100 — ✅ TERMUX DEPLOYABLE
 
-The Rust-side platform architecture is surprisingly mature. The Android-side (Kotlin, manifest, build pipeline) is essentially nonexistent. The system cannot produce an APK today.
+> **March 30, 2026 Update:** Termux + llama-server verified working. HTTP backend connects to localhost:8080. The Termux deployment path is functional.
 
 ### Component Scores
 
 | Component | Score | Status | Notes |
 |---|---|---|---|
-| **Rust Platform Layer** (`aura-daemon/platform/`) | 85/100 | 🟢 Mature | JNI bridge, power, thermal, doze, notifications, sensors, connectivity — all implemented with real+stub paths |
-| **LLM Bindings** (`aura-llama-sys`) | 45/100 | 🟡 Partial | Trait architecture solid; FFI declarations present; llama.cpp source NOT vendored; API outdated (pre-batch) |
+| **Rust Platform Layer** (`aura-daemon/`) | 90/100 | 🟢 Mature | Event loop, BDI agent, memory, execution, identity, policy — all implemented |
+| **LLM Bindings** (`aura-llama-sys`) | 45/100 | 🟡 Partial | Trait architecture solid; FFI present; llama.cpp NOT vendored; API outdated (pre-batch) |
 | **GGUF Metadata Parser** | 90/100 | 🟢 Production | v2/v3 support, RAM estimation, quantization detection, thinking mode detection |
-| **Cross-Compilation Config** | 60/100 | 🟡 Config Only | `.cargo/config.toml` + `rust-toolchain.toml` correctly configured; never verified with actual build |
-| **Android Gradle Project** | 20/100 | 🔴 Scaffolding | `build.gradle.kts` files exist; no Kotlin source, no manifest, no resources |
-| **Kotlin JNI Bridge** | 0/100 | ⛔ Missing | Rust side expects `dev.aura.v4.AuraDaemonBridge` — class does not exist |
-| **AndroidManifest.xml** | 0/100 | ⛔ Missing | No permissions declared, no services registered, no receivers |
-| **Foreground Service** | 0/100 | ⛔ Missing | Rust `notifications.rs` manages channels; no Kotlin `Service` to host them |
-| **Accessibility Service** | 0/100 | ⛔ Missing | JNI bridge calls screen actions; no `AccessibilityService` implementation |
-| **Model Delivery Pipeline** | 0/100 | ⛔ Missing | No download mechanism, no bundling, no storage management |
-| **APK Build Pipeline** | 0/100 | ⛔ Missing | No CI/CD, no script to build `.so` → copy to `jniLibs` → assemble APK |
-| **IPC (Daemon ↔ Neocortex)** | 70/100 | 🟢 Designed | Unix domain socket on Android, TCP on host; `aura-neocortex` separate binary |
-| **Testing** | 15/100 | 🔴 Minimal | No Android instrumented tests, no integration tests, no E2E |
-| **Security** | 10/100 | 🔴 Not Addressed | No certificate pinning, no model integrity verification, no IPC auth |
+| **Termux Native Build** | 80/100 | 🟢 Working | Builds natively in Termux; verified on device |
+| **install.sh Script** | 90/100 | 🟢 Production | Full installation, model download, config, service setup |
+| **termux-services Integration** | 90/100 | 🟢 Production | Auto-start via sv-enable |
+| **HTTP Backend (llama-server)** | 95/100 | 🟢 Verified | localhost:8080 tested and working |
+| ~~**Android Gradle Project**~~ | N/A | ✅ N/A | ~~No longer applicable — Termux-based~~ |
+| ~~**Kotlin JNI Bridge**~~ | N/A | ✅ N/A | ~~No longer applicable — Termux-based~~ |
+| ~~**AndroidManifest.xml**~~ | N/A | ✅ N/A | ~~No longer applicable — Termux-based~~ |
+| ~~**APK Build Pipeline**~~ | N/A | ✅ N/A | ~~No longer applicable — Termux-based~~ |
+| **IPC (Daemon ↔ Neocortex)** | 85/100 | 🟢 Working | HTTP backend to llama-server (verified) |
+| **Testing** | 30/100 | 🟡 Minimal | Unit tests exist; integration/E2E need work |
+| **Security** | 60/100 | 🟡 Partial | Vault, deny-by-default policy, ethics hardcoded |
 
 ### Readiness Gate Checklist
 

@@ -1074,21 +1074,34 @@ fn load_model_ffi(
     let model_params = LlamaModelParams::default();
     let path_str = path.to_string_lossy();
 
-    // Ensure backend is initialized
+    // Ensure backend is initialized - try HTTP backend first (Termux), then stub
     if !aura_llama_sys::is_backend_initialized() {
+        // Try HTTP backend first (for Termux llama-server)
+        // Default: http://localhost:8080 with model "tinyllama"
+        // This can be overridden via config in production
+        #[cfg(target_os = "android")]
+        {
+            // On Android, try HTTP backend first (Termux integration)
+            match aura_llama_sys::init_server_backend("http://localhost:8080", "tinyllama") {
+                Ok(_) => {
+                    info!("HTTP backend initialized (Termux llama-server)");
+                }
+                Err(e) => {
+                    warn!(error = %e, "HTTP backend failed, falling back to stub");
+                    if let Err(e) = aura_llama_sys::init_stub_backend(0xA0BA) {
+                        error!(error = %e, "failed to initialize stub backend");
+                        return (std::ptr::null_mut(), std::ptr::null_mut());
+                    }
+                }
+            }
+        }
         #[cfg(not(target_os = "android"))]
         {
+            // On desktop/host, use stub backend for development
             if let Err(e) = aura_llama_sys::init_stub_backend(0xA0BA) {
                 error!(error = %e, "failed to initialize stub backend");
                 return (std::ptr::null_mut(), std::ptr::null_mut());
             }
-        }
-        #[cfg(target_os = "android")]
-        {
-            // On Android, the caller (neocortex main) must init the FFI backend
-            // before loading models. If we get here without init, it's a bug.
-            error!("FFI backend not initialized — call init_ffi_backend() before loading models");
-            return (std::ptr::null_mut(), std::ptr::null_mut());
         }
     }
 

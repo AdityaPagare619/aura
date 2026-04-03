@@ -20,18 +20,27 @@
 //! └──────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod battery;
 pub mod connectivity;
+pub mod cpu;
+pub mod detect;
 pub mod doze;
 pub mod jni_bridge;
 pub mod notifications;
+pub mod path_resolver;
+pub mod permissions;
 pub mod power;
 pub mod sensors;
 pub mod thermal;
 
 use aura_types::{errors::PlatformError, ipc::ModelTier, power::PowerBudget};
+pub use battery::BatteryPaths;
 pub use connectivity::{ConnectivityManager, ConnectivitySnapshot, NetworkQuality, NetworkType};
+pub use cpu::PlatformCpuFeatures;
+pub use detect::DeviceInfo;
 pub use doze::{check_oem_status, detect_oem_vendor, DozeManager, OemVendor, OemWhitelistGuidance};
 pub use notifications::{NotificationChannel, NotificationManager, NotificationPriority};
+pub use permissions::{AuraPermission, PermissionStatus, PlatformPermissions};
 pub use power::{BatteryTier, PowerManager, TierPolicy};
 pub use sensors::{AmbientLight, ProximityState, SensorManager, SensorSnapshot};
 pub use thermal::{ThermalManager, ThermalThresholds};
@@ -253,17 +262,13 @@ fn read_battery_info() -> Result<(u8, bool), PlatformError> {
 
 #[cfg(target_os = "android")]
 fn read_battery_from_sysfs() -> Result<(u8, bool), PlatformError> {
-    use std::fs;
-    let capacity = fs::read_to_string("/sys/class/power_supply/battery/capacity")
-        .map_err(|e| PlatformError::BatteryReadFailed(e.to_string()))?;
-    let level: u8 = capacity
-        .trim()
-        .parse()
-        .map_err(|e: std::num::ParseIntError| PlatformError::BatteryReadFailed(e.to_string()))?;
+    let paths = BatteryPaths::detect();
 
-    let status = fs::read_to_string("/sys/class/power_supply/battery/status")
-        .map_err(|e| PlatformError::BatteryReadFailed(e.to_string()))?;
-    let charging = status.trim() == "Charging" || status.trim() == "Full";
+    let level = paths.read_capacity().ok_or_else(|| {
+        PlatformError::BatteryReadFailed("Failed to read battery capacity".to_string())
+    })?;
+
+    let charging = paths.is_charging();
 
     Ok((level.min(100), charging))
 }

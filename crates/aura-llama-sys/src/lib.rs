@@ -19,7 +19,12 @@
 //! implementation uses raw pointers obtained from `libloading`. On desktop, the
 //! `StubBackend` implementation uses safe Rust only.
 
+// FFI crate: all unsafe blocks are documented with SAFETY comments.
+// This crate requires unsafe for llama.cpp C FFI bindings.
+#![allow(unsafe_code)]
+
 pub mod gguf_meta;
+pub mod server_http_backend;
 use std::{collections::HashMap, sync::Mutex};
 
 pub use gguf_meta::{parse_from_reader, parse_gguf_meta, GgufError, GgufMeta};
@@ -283,572 +288,587 @@ pub struct StubBackend {
     rng_state: Mutex<u64>,
 }
 
+/// Build the stub vocabulary and bigram transition tables.
+/// Returns (vocab, word_to_token, bigrams) for the StubBackend.
+fn build_stub_bigrams() -> (
+    Vec<String>,
+    HashMap<String, LlamaToken>,
+    HashMap<LlamaToken, Vec<(LlamaToken, f32)>>,
+) {
+    let words: Vec<&str> = vec![
+        "<s>",       // 0
+        "</s>",      // 1
+        "<unk>",     // 2
+        "the",       // 3
+        "I",         // 4
+        "will",      // 5
+        "to",        // 6
+        "a",         // 7
+        "and",       // 8
+        "is",        // 9
+        "open",      // 10
+        "tap",       // 11
+        "on",        // 12
+        "button",    // 13
+        "navigate",  // 14
+        "screen",    // 15
+        "then",      // 16
+        "click",     // 17
+        "scroll",    // 18
+        "down",      // 19
+        "find",      // 20
+        "select",    // 21
+        "option",    // 22
+        "enable",    // 23
+        "disable",   // 24
+        "toggle",    // 25
+        "menu",      // 26
+        "search",    // 27
+        "for",       // 28
+        "type",      // 29
+        "text",      // 30
+        "in",        // 31
+        "field",     // 32
+        "wait",      // 33
+        "until",     // 34
+        "appears",   // 35
+        "confirm",   // 36
+        "action",    // 37
+        "done",      // 38
+        "next",      // 39
+        "back",      // 40
+        "home",      // 41
+        "wifi",      // 42
+        "bluetooth", // 43
+        "display",   // 44
+        "this",      // 45
+        "plan",      // 46
+        "step",      // 47
+        "first",     // 48
+        "second",    // 49
+        "ok",        // 50
+        "yes",       // 51
+        "no",        // 52
+        "let",       // 53
+        "me",        // 54
+        "help",      // 55
+        "you",       // 56
+        "with",      // 57
+        "that",      // 58
+        "sure",      // 59
+        "here",      // 60
+        "go",        // 61
+        "check",     // 62
+        "settings",  // 63
+        "app",       // 64
+        "it",        // 65
+        "off",       // 66
+        "if",        // 67
+    ];
+
+    let vocab: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    let mut word_to_token = HashMap::new();
+    for (i, w) in words.iter().enumerate() {
+        word_to_token.insert(w.to_string(), i as LlamaToken);
+    }
+
+    // Build bigram transitions (word flows that make sense for AURA's domain)
+    let mut bigrams: HashMap<LlamaToken, Vec<(LlamaToken, f32)>> = HashMap::new();
+
+    // Helper closure to add transitions
+    let mut add = |from: &str, transitions: &[(&str, f32)]| {
+        if let Some(&from_id) = word_to_token.get(from) {
+            let entries: Vec<(LlamaToken, f32)> = transitions
+                .iter()
+                .filter_map(|(to, prob)| word_to_token.get(*to).map(|&to_id| (to_id, *prob)))
+                .collect();
+            bigrams.insert(from_id, entries);
+        }
+    };
+
+    // Domain-specific bigram transitions
+    add(
+        "<s>",
+        &[
+            ("I", 0.3),
+            ("the", 0.1),
+            ("first", 0.15),
+            ("let", 0.15),
+            ("sure", 0.1),
+            ("ok", 0.05),
+            ("open", 0.15),
+        ],
+    );
+    add("I", &[("will", 0.7), ("can", 0.1), ("open", 0.2)]); // "can" not in vocab, will be filtered
+    add(
+        "will",
+        &[
+            ("open", 0.3),
+            ("navigate", 0.2),
+            ("tap", 0.15),
+            ("scroll", 0.1),
+            ("find", 0.1),
+            ("select", 0.1),
+            ("check", 0.05),
+        ],
+    );
+    add(
+        "open",
+        &[("the", 0.4), ("settings", 0.3), ("app", 0.2), ("menu", 0.1)],
+    );
+    add(
+        "the",
+        &[
+            ("settings", 0.2),
+            ("app", 0.15),
+            ("button", 0.1),
+            ("screen", 0.1),
+            ("menu", 0.1),
+            ("option", 0.1),
+            ("text", 0.1),
+            ("home", 0.05),
+            ("display", 0.05),
+            ("search", 0.05),
+        ],
+    );
+    add(
+        "settings",
+        &[
+            ("app", 0.3),
+            ("screen", 0.2),
+            ("menu", 0.2),
+            ("and", 0.15),
+            ("</s>", 0.15),
+        ],
+    );
+    add(
+        "app",
+        &[
+            ("and", 0.3),
+            ("settings", 0.2),
+            ("</s>", 0.2),
+            ("then", 0.15),
+            ("screen", 0.15),
+        ],
+    );
+    add(
+        "and",
+        &[
+            ("tap", 0.2),
+            ("click", 0.15),
+            ("select", 0.15),
+            ("scroll", 0.1),
+            ("navigate", 0.1),
+            ("find", 0.1),
+            ("enable", 0.1),
+            ("confirm", 0.1),
+        ],
+    );
+    add("tap", &[("on", 0.5), ("the", 0.3), ("button", 0.2)]);
+    add(
+        "on",
+        &[
+            ("the", 0.4),
+            ("button", 0.2),
+            ("screen", 0.15),
+            ("wifi", 0.1),
+            ("bluetooth", 0.05),
+            ("display", 0.05),
+            ("a", 0.05),
+        ],
+    );
+    add(
+        "button",
+        &[
+            ("and", 0.2),
+            ("to", 0.2),
+            ("then", 0.2),
+            ("</s>", 0.2),
+            ("on", 0.1),
+            ("in", 0.1),
+        ],
+    );
+    add("navigate", &[("to", 0.7), ("back", 0.2), ("home", 0.1)]);
+    add(
+        "to",
+        &[
+            ("the", 0.3),
+            ("settings", 0.15),
+            ("home", 0.1),
+            ("find", 0.1),
+            ("open", 0.1),
+            ("confirm", 0.1),
+            ("a", 0.05),
+            ("navigate", 0.05),
+            ("select", 0.05),
+        ],
+    );
+    add(
+        "screen",
+        &[
+            ("and", 0.3),
+            ("then", 0.2),
+            ("</s>", 0.2),
+            ("to", 0.15),
+            ("with", 0.15),
+        ],
+    );
+    add(
+        "then",
+        &[
+            ("tap", 0.2),
+            ("click", 0.15),
+            ("select", 0.15),
+            ("scroll", 0.1),
+            ("navigate", 0.1),
+            ("find", 0.1),
+            ("wait", 0.1),
+            ("confirm", 0.1),
+        ],
+    );
+    add("click", &[("on", 0.5), ("the", 0.3), ("button", 0.2)]);
+    add("scroll", &[("down", 0.6), ("to", 0.2), ("until", 0.2)]);
+    add(
+        "down",
+        &[("to", 0.3), ("and", 0.3), ("until", 0.2), ("</s>", 0.2)],
+    );
+    add(
+        "find",
+        &[
+            ("the", 0.4),
+            ("a", 0.2),
+            ("settings", 0.15),
+            ("wifi", 0.1),
+            ("bluetooth", 0.05),
+            ("option", 0.1),
+        ],
+    );
+    add(
+        "select",
+        &[
+            ("the", 0.3),
+            ("a", 0.2),
+            ("option", 0.2),
+            ("wifi", 0.1),
+            ("bluetooth", 0.1),
+            ("it", 0.1),
+        ],
+    );
+    add(
+        "option",
+        &[
+            ("and", 0.3),
+            ("then", 0.2),
+            ("to", 0.15),
+            ("</s>", 0.2),
+            ("in", 0.15),
+        ],
+    );
+    add(
+        "enable",
+        &[
+            ("wifi", 0.2),
+            ("bluetooth", 0.2),
+            ("the", 0.2),
+            ("it", 0.2),
+            ("toggle", 0.2),
+        ],
+    );
+    add(
+        "disable",
+        &[
+            ("wifi", 0.2),
+            ("bluetooth", 0.2),
+            ("the", 0.2),
+            ("it", 0.2),
+            ("toggle", 0.2),
+        ],
+    );
+    add(
+        "toggle",
+        &[
+            ("wifi", 0.2),
+            ("bluetooth", 0.2),
+            ("the", 0.2),
+            ("on", 0.2),
+            ("off", 0.2),
+        ],
+    );
+    add(
+        "menu",
+        &[
+            ("and", 0.3),
+            ("button", 0.2),
+            ("option", 0.2),
+            ("</s>", 0.15),
+            ("screen", 0.15),
+        ],
+    );
+    add("search", &[("for", 0.6), ("the", 0.2), ("in", 0.2)]);
+    add(
+        "for",
+        &[
+            ("the", 0.3),
+            ("a", 0.2),
+            ("wifi", 0.1),
+            ("settings", 0.15),
+            ("bluetooth", 0.1),
+            ("it", 0.15),
+        ],
+    );
+    add(
+        "type",
+        &[("text", 0.3), ("in", 0.3), ("the", 0.2), ("a", 0.2)],
+    );
+    add(
+        "text",
+        &[("in", 0.3), ("field", 0.3), ("and", 0.2), ("</s>", 0.2)],
+    );
+    add(
+        "in",
+        &[
+            ("the", 0.4),
+            ("a", 0.2),
+            ("settings", 0.15),
+            ("field", 0.15),
+            ("search", 0.1),
+        ],
+    );
+    add(
+        "field",
+        &[("and", 0.3), ("then", 0.2), ("</s>", 0.3), ("to", 0.2)],
+    );
+    add("wait", &[("until", 0.5), ("for", 0.3), ("a", 0.2)]);
+    add(
+        "until",
+        &[("the", 0.3), ("it", 0.3), ("a", 0.2), ("done", 0.2)],
+    );
+    add(
+        "appears",
+        &[("and", 0.3), ("then", 0.3), ("on", 0.2), ("</s>", 0.2)],
+    );
+    add(
+        "confirm",
+        &[("the", 0.3), ("action", 0.3), ("and", 0.2), ("</s>", 0.2)],
+    );
+    add(
+        "action",
+        &[
+            ("and", 0.3),
+            ("then", 0.2),
+            ("is", 0.2),
+            ("done", 0.15),
+            ("</s>", 0.15),
+        ],
+    );
+    add(
+        "done",
+        &[("</s>", 0.5), ("and", 0.2), ("then", 0.15), ("next", 0.15)],
+    );
+    add(
+        "next",
+        &[
+            ("step", 0.3),
+            ("screen", 0.2),
+            ("button", 0.2),
+            ("option", 0.15),
+            ("is", 0.15),
+        ],
+    );
+    add(
+        "back",
+        &[("to", 0.4), ("and", 0.2), ("button", 0.2), ("home", 0.2)],
+    );
+    add(
+        "home",
+        &[
+            ("screen", 0.4),
+            ("button", 0.2),
+            ("and", 0.2),
+            ("</s>", 0.2),
+        ],
+    );
+    add(
+        "wifi",
+        &[
+            ("settings", 0.2),
+            ("option", 0.2),
+            ("toggle", 0.15),
+            ("and", 0.15),
+            ("</s>", 0.15),
+            ("on", 0.15),
+        ],
+    );
+    add(
+        "bluetooth",
+        &[
+            ("settings", 0.2),
+            ("option", 0.2),
+            ("toggle", 0.15),
+            ("and", 0.15),
+            ("</s>", 0.15),
+            ("on", 0.15),
+        ],
+    );
+    add(
+        "display",
+        &[
+            ("settings", 0.3),
+            ("screen", 0.3),
+            ("option", 0.2),
+            ("</s>", 0.2),
+        ],
+    );
+    add(
+        "a",
+        &[
+            ("button", 0.15),
+            ("screen", 0.1),
+            ("menu", 0.1),
+            ("text", 0.1),
+            ("field", 0.1),
+            ("search", 0.1),
+            ("plan", 0.1),
+            ("step", 0.1),
+            ("option", 0.15),
+        ],
+    );
+    add(
+        "this",
+        &[
+            ("is", 0.5),
+            ("screen", 0.2),
+            ("option", 0.15),
+            ("step", 0.15),
+        ],
+    );
+    add(
+        "is",
+        &[
+            ("the", 0.2),
+            ("a", 0.2),
+            ("done", 0.15),
+            ("here", 0.15),
+            ("to", 0.15),
+            ("on", 0.15),
+        ],
+    );
+    add(
+        "plan",
+        &[("is", 0.3), ("to", 0.3), ("step", 0.2), ("</s>", 0.2)],
+    );
+    add(
+        "step",
+        &[
+            ("is", 0.2),
+            ("to", 0.2),
+            ("open", 0.15),
+            ("navigate", 0.15),
+            ("tap", 0.15),
+            ("find", 0.15),
+        ],
+    );
+    add(
+        "first",
+        &[
+            ("open", 0.2),
+            ("navigate", 0.2),
+            ("I", 0.15),
+            ("tap", 0.1),
+            ("find", 0.1),
+            ("scroll", 0.1),
+            ("step", 0.15),
+        ],
+    );
+    add(
+        "second",
+        &[
+            ("step", 0.3),
+            ("tap", 0.2),
+            ("navigate", 0.2),
+            ("open", 0.15),
+            ("find", 0.15),
+        ],
+    );
+    add("let", &[("me", 0.9), ("the", 0.1)]);
+    add(
+        "me",
+        &[
+            ("help", 0.4),
+            ("open", 0.2),
+            ("navigate", 0.15),
+            ("find", 0.15),
+            ("check", 0.1),
+        ],
+    );
+    add("help", &[("you", 0.6), ("with", 0.4)]);
+    add(
+        "you",
+        &[
+            ("with", 0.4),
+            ("to", 0.2),
+            ("open", 0.15),
+            ("find", 0.15),
+            ("navigate", 0.1),
+        ],
+    );
+    add(
+        "with",
+        &[("the", 0.3), ("that", 0.3), ("this", 0.2), ("a", 0.2)],
+    );
+    add(
+        "that",
+        &[
+            ("and", 0.2),
+            ("is", 0.2),
+            ("option", 0.15),
+            ("button", 0.15),
+            ("screen", 0.15),
+            ("</s>", 0.15),
+        ],
+    );
+    add(
+        "sure",
+        &[("I", 0.4), ("let", 0.3), ("here", 0.15), ("</s>", 0.15)],
+    );
+    add(
+        "here",
+        &[("is", 0.4), ("go", 0.2), ("</s>", 0.2), ("and", 0.2)],
+    );
+    add(
+        "go",
+        &[("to", 0.5), ("back", 0.2), ("home", 0.15), ("and", 0.15)],
+    );
+    add(
+        "check",
+        &[
+            ("the", 0.3),
+            ("settings", 0.2),
+            ("wifi", 0.15),
+            ("bluetooth", 0.1),
+            ("if", 0.25),
+        ],
+    );
+    add(
+        "ok",
+        &[("I", 0.3), ("let", 0.3), ("sure", 0.2), ("first", 0.2)],
+    );
+    add(
+        "yes",
+        &[("I", 0.4), ("the", 0.2), ("sure", 0.2), ("that", 0.2)],
+    );
+    add(
+        "no",
+        &[("I", 0.2), ("the", 0.2), ("that", 0.3), ("this", 0.3)],
+    );
+
+    (vocab, word_to_token, bigrams)
+}
+
 impl StubBackend {
     /// Create a new stub backend with a built-in mini vocabulary.
     pub fn new(seed: u64) -> Self {
-        let words = vec![
-            "<unk>",     // 0 — unknown/pad
-            "<s>",       // 1 — BOS
-            "</s>",      // 2 — EOS
-            "the",       // 3
-            "I",         // 4
-            "will",      // 5
-            "open",      // 6
-            "settings",  // 7
-            "app",       // 8
-            "and",       // 9
-            "tap",       // 10
-            "on",        // 11
-            "button",    // 12
-            "navigate",  // 13
-            "to",        // 14
-            "screen",    // 15
-            "then",      // 16
-            "click",     // 17
-            "scroll",    // 18
-            "down",      // 19
-            "find",      // 20
-            "select",    // 21
-            "option",    // 22
-            "enable",    // 23
-            "disable",   // 24
-            "toggle",    // 25
-            "menu",      // 26
-            "search",    // 27
-            "for",       // 28
-            "type",      // 29
-            "text",      // 30
-            "in",        // 31
-            "field",     // 32
-            "wait",      // 33
-            "until",     // 34
-            "appears",   // 35
-            "confirm",   // 36
-            "action",    // 37
-            "done",      // 38
-            "next",      // 39
-            "back",      // 40
-            "home",      // 41
-            "wifi",      // 42
-            "bluetooth", // 43
-            "display",   // 44
-            "a",         // 45
-            "this",      // 46
-            "is",        // 47
-            "plan",      // 48
-            "step",      // 49
-            "first",     // 50
-            "second",    // 51
-            "ok",        // 52
-            "yes",       // 53
-            "no",        // 54
-            "let",       // 55
-            "me",        // 56
-            "help",      // 57
-            "you",       // 58
-            "with",      // 59
-            "that",      // 60
-            "sure",      // 61
-            "here",      // 62
-            "go",        // 63
-            "check",     // 64
-        ];
-
-        let vocab: Vec<String> = words.iter().map(|w| w.to_string()).collect();
-        let mut word_to_token = HashMap::new();
-        for (i, w) in words.iter().enumerate() {
-            word_to_token.insert(w.to_string(), i as LlamaToken);
-        }
-
-        // Build bigram transitions (word flows that make sense for AURA's domain)
-        let mut bigrams: HashMap<LlamaToken, Vec<(LlamaToken, f32)>> = HashMap::new();
-
-        // Helper closure to add transitions
-        let mut add = |from: &str, transitions: &[(&str, f32)]| {
-            if let Some(&from_id) = word_to_token.get(from) {
-                let entries: Vec<(LlamaToken, f32)> = transitions
-                    .iter()
-                    .filter_map(|(to, prob)| word_to_token.get(*to).map(|&to_id| (to_id, *prob)))
-                    .collect();
-                bigrams.insert(from_id, entries);
-            }
-        };
-
-        // Domain-specific bigram transitions
-        add(
-            "<s>",
-            &[
-                ("I", 0.3),
-                ("the", 0.1),
-                ("first", 0.15),
-                ("let", 0.15),
-                ("sure", 0.1),
-                ("ok", 0.05),
-                ("open", 0.15),
-            ],
-        );
-        add("I", &[("will", 0.7), ("can", 0.1), ("open", 0.2)]); // "can" not in vocab, will be filtered
-        add(
-            "will",
-            &[
-                ("open", 0.3),
-                ("navigate", 0.2),
-                ("tap", 0.15),
-                ("scroll", 0.1),
-                ("find", 0.1),
-                ("select", 0.1),
-                ("check", 0.05),
-            ],
-        );
-        add(
-            "open",
-            &[("the", 0.4), ("settings", 0.3), ("app", 0.2), ("menu", 0.1)],
-        );
-        add(
-            "the",
-            &[
-                ("settings", 0.2),
-                ("app", 0.15),
-                ("button", 0.1),
-                ("screen", 0.1),
-                ("menu", 0.1),
-                ("option", 0.1),
-                ("text", 0.1),
-                ("home", 0.05),
-                ("display", 0.05),
-                ("search", 0.05),
-            ],
-        );
-        add(
-            "settings",
-            &[
-                ("app", 0.3),
-                ("screen", 0.2),
-                ("menu", 0.2),
-                ("and", 0.15),
-                ("</s>", 0.15),
-            ],
-        );
-        add(
-            "app",
-            &[
-                ("and", 0.3),
-                ("settings", 0.2),
-                ("</s>", 0.2),
-                ("then", 0.15),
-                ("screen", 0.15),
-            ],
-        );
-        add(
-            "and",
-            &[
-                ("tap", 0.2),
-                ("click", 0.15),
-                ("select", 0.15),
-                ("scroll", 0.1),
-                ("navigate", 0.1),
-                ("find", 0.1),
-                ("enable", 0.1),
-                ("confirm", 0.1),
-            ],
-        );
-        add("tap", &[("on", 0.5), ("the", 0.3), ("button", 0.2)]);
-        add(
-            "on",
-            &[
-                ("the", 0.4),
-                ("button", 0.2),
-                ("screen", 0.15),
-                ("wifi", 0.1),
-                ("bluetooth", 0.05),
-                ("display", 0.05),
-                ("a", 0.05),
-            ],
-        );
-        add(
-            "button",
-            &[
-                ("and", 0.2),
-                ("to", 0.2),
-                ("then", 0.2),
-                ("</s>", 0.2),
-                ("on", 0.1),
-                ("in", 0.1),
-            ],
-        );
-        add("navigate", &[("to", 0.7), ("back", 0.2), ("home", 0.1)]);
-        add(
-            "to",
-            &[
-                ("the", 0.3),
-                ("settings", 0.15),
-                ("home", 0.1),
-                ("find", 0.1),
-                ("open", 0.1),
-                ("confirm", 0.1),
-                ("a", 0.05),
-                ("navigate", 0.05),
-                ("select", 0.05),
-            ],
-        );
-        add(
-            "screen",
-            &[
-                ("and", 0.3),
-                ("then", 0.2),
-                ("</s>", 0.2),
-                ("to", 0.15),
-                ("with", 0.15),
-            ],
-        );
-        add(
-            "then",
-            &[
-                ("tap", 0.2),
-                ("click", 0.15),
-                ("select", 0.15),
-                ("scroll", 0.1),
-                ("navigate", 0.1),
-                ("find", 0.1),
-                ("wait", 0.1),
-                ("confirm", 0.1),
-            ],
-        );
-        add("click", &[("on", 0.5), ("the", 0.3), ("button", 0.2)]);
-        add("scroll", &[("down", 0.6), ("to", 0.2), ("until", 0.2)]);
-        add(
-            "down",
-            &[("to", 0.3), ("and", 0.3), ("until", 0.2), ("</s>", 0.2)],
-        );
-        add(
-            "find",
-            &[
-                ("the", 0.4),
-                ("a", 0.2),
-                ("settings", 0.15),
-                ("wifi", 0.1),
-                ("bluetooth", 0.05),
-                ("option", 0.1),
-            ],
-        );
-        add(
-            "select",
-            &[
-                ("the", 0.3),
-                ("a", 0.2),
-                ("option", 0.2),
-                ("wifi", 0.1),
-                ("bluetooth", 0.1),
-                ("it", 0.1),
-            ],
-        );
-        add(
-            "option",
-            &[
-                ("and", 0.3),
-                ("then", 0.2),
-                ("to", 0.15),
-                ("</s>", 0.2),
-                ("in", 0.15),
-            ],
-        );
-        add(
-            "enable",
-            &[
-                ("wifi", 0.2),
-                ("bluetooth", 0.2),
-                ("the", 0.2),
-                ("it", 0.2),
-                ("toggle", 0.2),
-            ],
-        );
-        add(
-            "disable",
-            &[
-                ("wifi", 0.2),
-                ("bluetooth", 0.2),
-                ("the", 0.2),
-                ("it", 0.2),
-                ("toggle", 0.2),
-            ],
-        );
-        add(
-            "toggle",
-            &[
-                ("wifi", 0.2),
-                ("bluetooth", 0.2),
-                ("the", 0.2),
-                ("on", 0.2),
-                ("off", 0.2),
-            ],
-        );
-        add(
-            "menu",
-            &[
-                ("and", 0.3),
-                ("button", 0.2),
-                ("option", 0.2),
-                ("</s>", 0.15),
-                ("screen", 0.15),
-            ],
-        );
-        add("search", &[("for", 0.6), ("the", 0.2), ("in", 0.2)]);
-        add(
-            "for",
-            &[
-                ("the", 0.3),
-                ("a", 0.2),
-                ("wifi", 0.1),
-                ("settings", 0.15),
-                ("bluetooth", 0.1),
-                ("it", 0.15),
-            ],
-        );
-        add(
-            "type",
-            &[("text", 0.3), ("in", 0.3), ("the", 0.2), ("a", 0.2)],
-        );
-        add(
-            "text",
-            &[("in", 0.3), ("field", 0.3), ("and", 0.2), ("</s>", 0.2)],
-        );
-        add(
-            "in",
-            &[
-                ("the", 0.4),
-                ("a", 0.2),
-                ("settings", 0.15),
-                ("field", 0.15),
-                ("search", 0.1),
-            ],
-        );
-        add(
-            "field",
-            &[("and", 0.3), ("then", 0.2), ("</s>", 0.3), ("to", 0.2)],
-        );
-        add("wait", &[("until", 0.5), ("for", 0.3), ("a", 0.2)]);
-        add(
-            "until",
-            &[("the", 0.3), ("it", 0.3), ("a", 0.2), ("done", 0.2)],
-        );
-        add(
-            "appears",
-            &[("and", 0.3), ("then", 0.3), ("on", 0.2), ("</s>", 0.2)],
-        );
-        add(
-            "confirm",
-            &[("the", 0.3), ("action", 0.3), ("and", 0.2), ("</s>", 0.2)],
-        );
-        add(
-            "action",
-            &[
-                ("and", 0.3),
-                ("then", 0.2),
-                ("is", 0.2),
-                ("done", 0.15),
-                ("</s>", 0.15),
-            ],
-        );
-        add(
-            "done",
-            &[("</s>", 0.5), ("and", 0.2), ("then", 0.15), ("next", 0.15)],
-        );
-        add(
-            "next",
-            &[
-                ("step", 0.3),
-                ("screen", 0.2),
-                ("button", 0.2),
-                ("option", 0.15),
-                ("is", 0.15),
-            ],
-        );
-        add(
-            "back",
-            &[("to", 0.4), ("and", 0.2), ("button", 0.2), ("home", 0.2)],
-        );
-        add(
-            "home",
-            &[
-                ("screen", 0.4),
-                ("button", 0.2),
-                ("and", 0.2),
-                ("</s>", 0.2),
-            ],
-        );
-        add(
-            "wifi",
-            &[
-                ("settings", 0.2),
-                ("option", 0.2),
-                ("toggle", 0.15),
-                ("and", 0.15),
-                ("</s>", 0.15),
-                ("on", 0.15),
-            ],
-        );
-        add(
-            "bluetooth",
-            &[
-                ("settings", 0.2),
-                ("option", 0.2),
-                ("toggle", 0.15),
-                ("and", 0.15),
-                ("</s>", 0.15),
-                ("on", 0.15),
-            ],
-        );
-        add(
-            "display",
-            &[
-                ("settings", 0.3),
-                ("screen", 0.3),
-                ("option", 0.2),
-                ("</s>", 0.2),
-            ],
-        );
-        add(
-            "a",
-            &[
-                ("button", 0.15),
-                ("screen", 0.1),
-                ("menu", 0.1),
-                ("text", 0.1),
-                ("field", 0.1),
-                ("search", 0.1),
-                ("plan", 0.1),
-                ("step", 0.1),
-                ("option", 0.15),
-            ],
-        );
-        add(
-            "this",
-            &[
-                ("is", 0.5),
-                ("screen", 0.2),
-                ("option", 0.15),
-                ("step", 0.15),
-            ],
-        );
-        add(
-            "is",
-            &[
-                ("the", 0.2),
-                ("a", 0.2),
-                ("done", 0.15),
-                ("here", 0.15),
-                ("to", 0.15),
-                ("on", 0.15),
-            ],
-        );
-        add(
-            "plan",
-            &[("is", 0.3), ("to", 0.3), ("step", 0.2), ("</s>", 0.2)],
-        );
-        add(
-            "step",
-            &[
-                ("is", 0.2),
-                ("to", 0.2),
-                ("open", 0.15),
-                ("navigate", 0.15),
-                ("tap", 0.15),
-                ("find", 0.15),
-            ],
-        );
-        add(
-            "first",
-            &[
-                ("open", 0.2),
-                ("navigate", 0.2),
-                ("I", 0.15),
-                ("tap", 0.1),
-                ("find", 0.1),
-                ("scroll", 0.1),
-                ("step", 0.15),
-            ],
-        );
-        add(
-            "second",
-            &[
-                ("step", 0.3),
-                ("tap", 0.2),
-                ("navigate", 0.2),
-                ("open", 0.15),
-                ("find", 0.15),
-            ],
-        );
-        add("let", &[("me", 0.9), ("the", 0.1)]);
-        add(
-            "me",
-            &[
-                ("help", 0.4),
-                ("open", 0.2),
-                ("navigate", 0.15),
-                ("find", 0.15),
-                ("check", 0.1),
-            ],
-        );
-        add("help", &[("you", 0.6), ("with", 0.4)]);
-        add(
-            "you",
-            &[
-                ("with", 0.4),
-                ("to", 0.2),
-                ("open", 0.15),
-                ("find", 0.15),
-                ("navigate", 0.1),
-            ],
-        );
-        add(
-            "with",
-            &[("the", 0.3), ("that", 0.3), ("this", 0.2), ("a", 0.2)],
-        );
-        add(
-            "that",
-            &[
-                ("and", 0.2),
-                ("is", 0.2),
-                ("option", 0.15),
-                ("button", 0.15),
-                ("screen", 0.15),
-                ("</s>", 0.15),
-            ],
-        );
-        add(
-            "sure",
-            &[("I", 0.4), ("let", 0.3), ("here", 0.15), ("</s>", 0.15)],
-        );
-        add(
-            "here",
-            &[("is", 0.4), ("go", 0.2), ("</s>", 0.2), ("and", 0.2)],
-        );
-        add(
-            "go",
-            &[("to", 0.5), ("back", 0.2), ("home", 0.15), ("and", 0.15)],
-        );
-        add(
-            "check",
-            &[
-                ("the", 0.3),
-                ("settings", 0.2),
-                ("wifi", 0.15),
-                ("bluetooth", 0.1),
-                ("if", 0.25),
-            ],
-        );
-        add(
-            "ok",
-            &[("I", 0.3), ("let", 0.3), ("sure", 0.2), ("first", 0.2)],
-        );
-        add(
-            "yes",
-            &[("I", 0.4), ("the", 0.2), ("sure", 0.2), ("that", 0.2)],
-        );
-        add(
-            "no",
-            &[("I", 0.2), ("the", 0.2), ("that", 0.3), ("this", 0.3)],
-        );
+        let (vocab, word_to_token, bigrams) = build_stub_bigrams();
 
         Self {
             bigrams,
@@ -1256,6 +1276,7 @@ impl FfiBackend {
             .map_err(|e| BackendError::Generation(format!("root rule CString failed: {}", e)))?;
 
         let sampler =
+            // SAFETY: model is valid, grammar_cstr/root_cstr are valid CStrings.
             unsafe { llama_sampler_init_grammar(model, grammar_cstr.as_ptr(), root_cstr.as_ptr()) };
 
         if sampler.is_null() {
@@ -1270,6 +1291,7 @@ impl FfiBackend {
             .unwrap_or_else(|e| e.into_inner());
         // Free any existing grammar sampler before replacing
         if let Some(old) = grammar_guard.take() {
+            // SAFETY: old was allocated by llama_sampler_init_grammar.
             unsafe { llama_sampler_free(old) };
         }
         *grammar_guard = Some(sampler);
@@ -1288,6 +1310,7 @@ impl FfiBackend {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(sampler) = grammar_guard.take() {
+            // SAFETY: sampler was allocated by llama_sampler_init_grammar.
             unsafe { llama_sampler_free(sampler) };
             debug!("GBNF grammar sampler cleared");
         }
@@ -1306,6 +1329,7 @@ impl Drop for FfiBackend {
         let mut ctx_guard = self.ctx_ptr.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctx) = ctx_guard.take() {
             if !ctx.is_null() {
+                // SAFETY: ctx was allocated by llama_new_context_with_model, null-checked.
                 unsafe { llama_free(ctx) };
                 debug!("FfiBackend::drop freed context pointer");
             }
@@ -1314,6 +1338,7 @@ impl Drop for FfiBackend {
         let mut guard = self.model_ptr.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(model) = guard.take() {
             if !model.is_null() {
+                // SAFETY: model was allocated by llama_load_model_from_file, null-checked.
                 unsafe { llama_free_model(model) };
                 debug!("FfiBackend::drop freed model pointer");
             }
@@ -1338,6 +1363,7 @@ impl LlamaBackend for FfiBackend {
         let c_path = CString::new(path)
             .map_err(|e| BackendError::ModelLoad(format!("invalid path: {}", e)))?;
 
+        // SAFETY: c_path is a valid CString. llama_load_model_from_file allocates a model.
         let model = unsafe { llama_load_model_from_file(c_path.as_ptr(), model_params.clone()) };
         if model.is_null() {
             return Err(BackendError::ModelLoad(format!(
@@ -1346,9 +1372,10 @@ impl LlamaBackend for FfiBackend {
             )));
         }
 
+        // SAFETY: model is non-null from llama_load_model_from_file.
         let ctx = unsafe { llama_new_context_with_model(model, ctx_params.clone()) };
         if ctx.is_null() {
-            // Clean up the model we just loaded
+            // SAFETY: model was just loaded, must be freed on ctx creation failure.
             unsafe { llama_free_model(model) };
             return Err(BackendError::ContextCreation(
                 "llama_new_context_with_model returned null".into(),
@@ -1364,9 +1391,11 @@ impl LlamaBackend for FfiBackend {
 
     fn free_model(&self, model: *mut LlamaModel, ctx: *mut LlamaContext) {
         if !ctx.is_null() {
+            // SAFETY: ctx is non-null, allocated by llama_new_context_with_model.
             unsafe { llama_free(ctx) };
         }
         if !model.is_null() {
+            // SAFETY: model is non-null, allocated by llama_load_model_from_file.
             unsafe { llama_free_model(model) };
         }
         *self.model_ptr.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1382,6 +1411,7 @@ impl LlamaBackend for FfiBackend {
             .map_err(|e| BackendError::Tokenization(format!("invalid text: {}", e)))?;
 
         // First call to get required buffer size
+        // SAFETY: ctx is valid, c_text is valid CString, null_mut() for size query.
         let n_tokens =
             unsafe { llama_tokenize(ctx, c_text.as_ptr(), std::ptr::null_mut(), 0, true) };
         if n_tokens < 0 {
@@ -1392,6 +1422,7 @@ impl LlamaBackend for FfiBackend {
         }
 
         let mut tokens = vec![0i32; n_tokens as usize];
+        // SAFETY: ctx is valid, tokens has n_tokens capacity, n_tokens from prior query.
         let result =
             unsafe { llama_tokenize(ctx, c_text.as_ptr(), tokens.as_mut_ptr(), n_tokens, true) };
         if result < 0 {
@@ -1415,6 +1446,7 @@ impl LlamaBackend for FfiBackend {
         let mut buf = vec![0u8; 256];
 
         for &token in tokens {
+            // SAFETY: model is valid, buf has 256 bytes capacity.
             let n = unsafe {
                 llama_token_to_piece(
                     model,
@@ -1445,8 +1477,10 @@ impl LlamaBackend for FfiBackend {
 
         let n_vocab = unsafe { llama_n_vocab(model) } as usize;
         let logits_ptr = unsafe { llama_get_logits(ctx) };
-        if logits_ptr.is_null() {
-            return Err(BackendError::Generation("logits pointer is null".into()));
+        if logits_ptr.is_null() || n_vocab == 0 {
+            return Err(BackendError::Generation(
+                "logits pointer is null or vocab size is 0".into(),
+            ));
         }
 
         // ── Layer 0: Grammar-constrained logit masking ──────────────────
@@ -1833,6 +1867,61 @@ pub fn init_ffi_backend(lib_path: &str) -> BackendResult<()> {
             };
             error!(panic_message = %message, "FFI backend initialization panicked");
             Err(BackendError::LibraryLoad(format!(
+                "initialization panicked: {}",
+                message
+            )))
+        }
+    }
+}
+
+/// Initialize the HTTP backend for connecting to llama-server.
+///
+/// This backend connects to a running llama-server instance via HTTP,
+/// using the OpenAI-compatible /v1/chat/completions endpoint.
+///
+/// # Arguments
+/// * `base_url` - Base URL of llama-server (e.g., "http://localhost:8080")
+/// * `model_name` - Model name as recognized by the server
+///
+/// # Errors
+/// Returns an error if the backend is already initialized.
+pub fn init_server_backend(base_url: &str, model_name: &str) -> BackendResult<()> {
+    // Check if already initialized
+    if BACKEND.get().is_some() {
+        return Err(BackendError::StubMode("backend already initialized".into()));
+    }
+
+    // Wrap initialization in catch_unwind to prevent panics from crashing the binary
+    let result = std::panic::catch_unwind(|| {
+        Box::new(server_http_backend::ServerHttpBackend::new(
+            base_url, model_name,
+        )) as Box<dyn LlamaBackend>
+    });
+
+    match result {
+        Ok(backend) => {
+            // LazyLock::set returns Err if already set, Ok(()) if successful
+            if BACKEND.set(Ok(backend)).is_err() {
+                // Race condition: another thread initialized first
+                error!("backend initialized concurrently");
+                return Err(BackendError::StubMode("backend already initialized".into()));
+            }
+            info!(
+                "HTTP backend initialized (base_url={}, model={})",
+                base_url, model_name
+            );
+            Ok(())
+        }
+        Err(panic_info) => {
+            let message = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            error!(panic_message = %message, "HTTP backend initialization panicked");
+            Err(BackendError::StubMode(format!(
                 "initialization panicked: {}",
                 message
             )))

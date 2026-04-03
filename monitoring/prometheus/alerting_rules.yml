@@ -1,0 +1,544 @@
+# =============================================================================
+# AURA v4 Prometheus Alerting Rules
+# =============================================================================
+# Covers the three critical failure modes identified in the AURA audit:
+#   1. Memory pressure (working memory overflow, RSS ceiling)
+#   2. Thermal throttling (SoC temperature exceeding safe limits)
+#   3. IPC failures (neocortex process dead, connection lost, timeout)
+#
+# Additional alerts for: battery critical, error rate spikes, neocortex liveness,
+# checkpoint failures, and inference latency degradation.
+#
+# Severity levels:
+#   critical  — Immediate action required, system may be failing
+#   warning   — Degraded performance or approaching limits
+#   info      — Notable state change for observability
+# =============================================================================
+
+groups:
+
+  # =========================================================================
+  # Group 1: Memory Pressure Alerts
+  # =========================================================================
+  - name: aura_memory_pressure
+    interval: 15s
+    rules:
+
+      # --- Working memory approaching slot limit (1024 max) ---
+      - alert: AuraWorkingMemoryNearCapacity
+        expr: aura_working_memory_slots > 900
+        for: 2m
+        labels:
+          severity: warning
+          component: memory
+          tier: working
+        annotations:
+          summary: "Working memory at {{ $value }}/1024 slots"
+          description: >
+            Working memory has {{ $value }} active slots out of 1024 maximum.
+            Consolidation may not be keeping up with ingestion rate.
+            Consider running micro-consolidation more frequently.
+          runbook: "https://github.com/aura/aurav4/wiki/runbooks/memory-pressure"
+
+      # --- Working memory critical (>95% capacity) ---
+      - alert: AuraWorkingMemoryCritical
+        expr: aura_working_memory_slots > 975
+        for: 1m
+        labels:
+          severity: critical
+          component: memory
+          tier: working
+        annotations:
+          summary: "Working memory CRITICAL: {{ $value }}/1024 slots"
+          description: >
+            Working memory is nearly full. New items will be dropped.
+            Emergency consolidation triggered. Immediate investigation required.
+
+      # --- RSS exceeding warning threshold (28MB from config.toml) ---
+      - alert: AuraRssMemoryWarning
+        expr: process_resident_memory_bytes{job="aura-daemon"} > 28 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+          subsystem: daemon
+        annotations:
+          summary: "AURA daemon RSS {{ $value | humanize1024 }}B exceeds 28MB warning"
+          description: >
+            The daemon process is using more RSS than the configured warning
+            threshold (rss_warning_mb = 28). This may indicate a memory leak
+            or insufficient consolidation.
+
+      # --- RSS exceeding ceiling (30MB from config.toml) ---
+      - alert: AuraRssMemoryCeiling
+        expr: process_resident_memory_bytes{job="aura-daemon"} > 30 * 1024 * 1024
+        for: 2m
+        labels:
+          severity: critical
+          component: memory
+          subsystem: daemon
+        annotations:
+          summary: "AURA daemon RSS {{ $value | humanize1024 }}B exceeds 30MB CEILING"
+          description: >
+            The daemon process has exceeded the hard RSS ceiling (rss_ceiling_mb = 30).
+            The Android OOM killer may terminate the process. Investigate immediately.
+
+      # --- System memory pressure (from health monitor heartbeat) ---
+      - alert: AuraMemoryPressureWarning
+        expr: aura_memory_pressure_bytes > 300 * 1024 * 1024
+        for: 3m
+        labels:
+          severity: warning
+          component: memory
+          subsystem: health
+        annotations:
+          summary: "System memory pressure: {{ $value | humanize1024 }}B RSS"
+          description: >
+            The AURA daemon's RSS exceeds 300MB. The heartbeat health monitor
+            has detected elevated memory usage. Safe mode may activate at 400MB.
+
+      - alert: AuraMemoryPressureCritical
+        expr: aura_memory_pressure_bytes > 400 * 1024 * 1024
+        for: 1m
+        labels:
+          severity: critical
+          component: memory
+          subsystem: health
+        annotations:
+          summary: "CRITICAL memory pressure: {{ $value | humanize1024 }}B"
+          description: >
+            RSS exceeds 400MB — safe mode is being activated.
+            Proactive features suspended. Neocortex may be unloaded.
+
+      # --- Memory eviction rate too high ---
+      - alert: AuraMemoryEvictionSpike
+        expr: rate(aura_memory_evictions_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+          subsystem: consolidation
+        annotations:
+          summary: "Memory eviction rate {{ $value | humanize }}/s is elevated"
+          description: >
+            Memory evictions are happening at a rate of {{ $value }}/s.
+            This suggests working memory is under pressure from high ingestion.
+
+  # =========================================================================
+  # Group 2: Thermal Throttling Alerts
+  # =========================================================================
+  - name: aura_thermal_throttling
+    interval: 15s
+    rules:
+
+      # --- Thermal zone warm (45-54°C) ---
+      - alert: AuraThermalWarm
+        expr: node_thermal_zone_temp_celsius > 45
+        for: 3m
+        labels:
+          severity: info
+          component: thermal
+        annotations:
+          summary: "Thermal zone warm: {{ $value }}°C"
+          description: >
+            Device thermal zone temperature is {{ $value }}°C (warm threshold: 45°C).
+            Monitoring for escalation. Consider reducing inference frequency.
+
+      # --- Thermal zone hot (55-64°C) — throttling recommended ---
+      - alert: AuraThermalHot
+        expr: node_thermal_zone_temp_celsius > 55
+        for: 2m
+        labels:
+          severity: warning
+          component: thermal
+        annotations:
+          summary: "Thermal zone HOT: {{ $value }}°C — throttling recommended"
+          description: >
+            Device temperature {{ $value }}°C exceeds hot threshold (55°C).
+            Inference should be throttled. Proactive features may be suspended.
+
+      # --- Thermal critical (65-74°C) ---
+      - alert: AuraThermalCritical
+        expr: node_thermal_zone_temp_celsius > 65
+        for: 1m
+        labels:
+          severity: critical
+          component: thermal
+        annotations:
+          summary: "Thermal CRITICAL: {{ $value }}°C — immediate throttling"
+          description: >
+            Device temperature {{ $value }}°C exceeds critical threshold (65°C).
+            Inference must be paused immediately. The device may shut down at 75°C.
+
+      # --- Thermal emergency (>85°C from heartbeat loop) ---
+      - alert: AuraThermalEmergency
+        expr: aura_thermal_celsius > 85
+        for: 0m
+        labels:
+          severity: critical
+          component: thermal
+          urgency: emergency
+        annotations:
+          summary: "THERMAL EMERGENCY: {{ $value }}°C — device may halt"
+          description: >
+            Temperature exceeds 85°C — the hardware thermal emergency threshold.
+            All AURA workloads must be suspended. The OS may force shutdown.
+
+      # --- Thermal level from health monitor (0=Normal, 1=Warm, 2=Hot, 3=Critical, 4=Shutdown) ---
+      - alert: AuraThermalShutdownImminent
+        expr: aura_thermal_level >= 4
+        for: 0m
+        labels:
+          severity: critical
+          component: thermal
+          urgency: emergency
+        annotations:
+          summary: "Thermal shutdown state detected (level={{ $value }})"
+          description: >
+            The health monitor reports thermal_level={{ $value }} which corresponds
+            to Shutdown state. Device may halt imminently.
+
+  # =========================================================================
+  # Group 3: IPC & Neocortex Failure Alerts
+  # =========================================================================
+  - name: aura_ipc_failures
+    interval: 15s
+    rules:
+
+      # --- IPC error rate spike ---
+      - alert: AuraIpcErrorSpike
+        expr: rate(aura_ipc_errors_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          component: ipc
+          subsystem: neocortex
+        annotations:
+          summary: "IPC error rate: {{ $value | humanize }}/s"
+          description: >
+            The daemon-to-neocortex IPC channel is experiencing errors at
+            {{ $value }}/s. This may indicate connection issues, serialization
+            failures, or the neocortex process is unstable.
+
+      # --- Neocortex not responding (health check) ---
+      - alert: AuraNeocortexDown
+        expr: aura_neocortex_alive == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: ipc
+          subsystem: neocortex
+        annotations:
+          summary: "Neocortex inference engine is DOWN"
+          description: >
+            The health monitor reports neocortex_alive=0. The neocortex process
+            may have crashed or the IPC socket is not responding. Restart
+            attempts are limited to 3 per session.
+
+      # --- Neocortex restart limit reached ---
+      - alert: AuraNeocortexRestartLimit
+        expr: aura_neocortex_restart_attempts >= 3
+        for: 0m
+        labels:
+          severity: critical
+          component: ipc
+          subsystem: neocortex
+        annotations:
+          summary: "Neocortex restart limit reached ({{ $value }} attempts)"
+          description: >
+            The neocortex has been restarted {{ $value }} times this session.
+            The maximum is 3 to prevent restart storms. Manual intervention
+            may be required. The daemon will report Critical health status.
+
+      # --- IPC messages not flowing ---
+      - alert: AuraIpcChannelStalled
+        expr: rate(aura_ipc_messages_sent_total[5m]) == 0 and rate(aura_ipc_messages_received_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: ipc
+        annotations:
+          summary: "IPC channel appears stalled — no messages in 5 minutes"
+          description: >
+            No IPC messages have been sent or received in the last 5 minutes.
+            This may indicate the neocortex process is hung or the socket
+            connection has been lost.
+
+      # --- IPC message backlog (sent but no responses) ---
+      - alert: AuraIpcBackpressureHigh
+        expr: >
+          (aura_ipc_messages_sent_total - aura_ipc_messages_received_total) > 100
+        for: 3m
+        labels:
+          severity: warning
+          component: ipc
+          subsystem: neocortex
+        annotations:
+          summary: "IPC backpressure: {{ $value }} unacknowledged messages"
+          description: >
+            There are {{ $value }} more sent messages than received responses.
+            The neocortex may be overloaded or stuck processing a large inference.
+
+  # =========================================================================
+  # Group 4: Error Rate & Health Status
+  # =========================================================================
+  - name: aura_health_status
+    interval: 30s
+    rules:
+
+      # --- Error rate degraded (>30%) ---
+      - alert: AuraErrorRateDegraded
+        expr: aura_error_rate_last_hour > 0.30
+        for: 5m
+        labels:
+          severity: warning
+          component: health
+        annotations:
+          summary: "Error rate degraded: {{ $value | humanizePercentage }}"
+          description: >
+            The daemon's error rate over the last hour is {{ $value | humanizePercentage }},
+            exceeding the 30% degraded threshold. Something is wrong but the
+            system is still partially functional.
+
+      # --- Error rate critical (>50%) ---
+      - alert: AuraErrorRateCritical
+        expr: aura_error_rate_last_hour > 0.50
+        for: 2m
+        labels:
+          severity: critical
+          component: health
+        annotations:
+          summary: "Error rate CRITICAL: {{ $value | humanizePercentage }}"
+          description: >
+            The daemon's error rate exceeds 50%. The system is failing more
+            than it succeeds. Immediate investigation required.
+
+      # --- Battery low (<20%) ---
+      - alert: AuraBatteryLow
+        expr: aura_battery_pct < 20
+        for: 0m
+        labels:
+          severity: warning
+          component: power
+        annotations:
+          summary: "Battery low: {{ $value }}%"
+          description: >
+            Battery level is at {{ $value }}%. Proactive features may be
+            suspended to conserve power.
+
+      # --- Battery critical (<5%) ---
+      - alert: AuraBatteryCritical
+        expr: aura_battery_pct < 5
+        for: 0m
+        labels:
+          severity: critical
+          component: power
+          urgency: emergency
+        annotations:
+          summary: "Battery CRITICAL: {{ $value }}% — suspending proactive features"
+          description: >
+            Battery level is at {{ $value }}%. All proactive features suspended.
+            The daemon will enter low-power mode (60s check interval).
+
+      # --- Accessibility service disconnected ---
+      - alert: AuraA11yDisconnected
+        expr: aura_a11y_connected == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: platform
+        annotations:
+          summary: "Android accessibility service disconnected"
+          description: >
+            The AURA accessibility service is not connected. Screen reading
+            and UI automation features will not function.
+
+  # =========================================================================
+  # Group 5: Inference Performance
+  # =========================================================================
+  - name: aura_inference_performance
+    interval: 30s
+    rules:
+
+      # --- Inference latency p95 exceeding 60s timeout ---
+      - alert: AuraInferenceLatencyHigh
+        expr: >
+          histogram_quantile(0.95, rate(aura_inference_latency_us_bucket[5m])) > 60000000
+        for: 5m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "Inference p95 latency {{ $value | humanizeDuration }} exceeds timeout"
+          description: >
+            95th percentile inference latency exceeds the 60-second timeout
+            configured in neocortex.inference_timeout_ms. Inferences are
+            likely timing out.
+
+      # --- Inference call rate dropping (potential neocortex hang) ---
+      - alert: AuraInferenceRateDrop
+        expr: rate(aura_inference_calls_total[10m]) < 0.01
+        for: 10m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "Inference call rate near zero for 10 minutes"
+          description: >
+            The inference call rate has dropped below 0.01/s for 10 minutes.
+            This may indicate the neocortex is hung, the route classifier is
+            only using System1, or no user interactions are occurring.
+
+      # --- Checkpoint save failures ---
+      - alert: AuraCheckpointSaveFailed
+        expr: changes(aura_checkpoint_saves_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+          component: persistence
+        annotations:
+          summary: "No checkpoint saves in the last 10 minutes"
+          description: >
+            The checkpoint counter has not incremented in 10 minutes.
+            The checkpoint interval is 300s (5 min), so at least 2 saves
+            should have occurred. The persistence system may be failing.
+
+      # --- Safety violations ---
+      - alert: AuraSafetyViolation
+        expr: increase(aura_safety_violations_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: safety
+        annotations:
+          summary: "Safety violation detected: {{ $value }} in last 5 minutes"
+          description: >
+            The policy gate has recorded {{ $value }} safety violations in the
+            last 5 minutes. This indicates an action was attempted that
+            violated the Three Immutable Pillars. Investigate immediately.
+
+      # --- Cycle detection (runaway automation) ---
+      - alert: AuraCycleDetected
+        expr: increase(aura_cycle_detections_total[5m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          component: safety
+          subsystem: policy
+        annotations:
+          summary: "Cycle detection triggered {{ $value }} times in 5 minutes"
+          description: >
+            The policy gate detected {{ $value }} potential automation cycles.
+            The rate limiter should be preventing runaway loops, but
+            investigate if the count continues to grow.
+
+  # =========================================================================
+  # Group 6: Memory System Health
+  # =========================================================================
+  - name: aura_memory_system
+    interval: 30s
+    rules:
+
+      # --- SQLite WAL size exceeding limit (4MB from config) ---
+      - alert: AuraWalSizeExceeded
+        expr: aura_sqlite_wal_size_bytes > 4194304
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+          subsystem: sqlite
+        annotations:
+          summary: "SQLite WAL size {{ $value | humanize1024 }}B exceeds 4MB limit"
+          description: >
+            The write-ahead log has exceeded the configured wal_size_limit.
+            Checkpointing may not be running, or the database has heavy writes.
+
+      # --- Episodic memory approaching max (10000 from config) ---
+      - alert: AuraEpisodicMemoryNearMax
+        expr: aura_episodic_memory_count > 9000
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+          subsystem: episodic
+        annotations:
+          summary: "Episodic memory at {{ $value }}/10000 entries"
+          description: >
+            Episodic memory is approaching the configured maximum.
+            Consolidation should be archiving old episodes to the archive tier.
+
+      # --- Semantic memory approaching max (5000 from config) ---
+      - alert: AuraSemanticMemoryNearMax
+        expr: aura_semantic_memory_count > 4500
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+          subsystem: semantic
+        annotations:
+          summary: "Semantic memory at {{ $value }}/5000 entries"
+          description: >
+            Semantic memory is approaching the configured maximum.
+            Low-confidence entries should be pruned during consolidation.
+
+      # --- Memory query latency high (cross-tier queries) ---
+      - alert: AuraMemoryQuerySlow
+        expr: histogram_quantile(0.95, rate(aura_memory_query_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+        annotations:
+          summary: "Memory query p95 latency {{ $value }}s"
+          description: >
+            Cross-tier memory queries are taking longer than 500ms at p95.
+            This may impact LLM context building and real-time responsiveness.
+
+  # =========================================================================
+  # Group 7: Action Execution Health
+  # =========================================================================
+  - name: aura_execution
+    interval: 15s
+    rules:
+
+      # --- Action failure rate high ---
+      - alert: AuraActionFailureRateHigh
+        expr: >
+          rate(aura_actions_failed_total[5m]) /
+          (rate(aura_actions_succeeded_total[5m]) + rate(aura_actions_failed_total[5m]) + 0.001) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: execution
+        annotations:
+          summary: "Action failure rate {{ $value | humanizePercentage }}"
+          description: >
+            More than 50% of actions are failing. This may indicate UI changes,
+            permission issues, or the screen provider returning stale data.
+
+      # --- Actions dropped (event system) ---
+      - alert: AuraEventsDropped
+        expr: rate(aura_events_dropped_total[5m]) > 1
+        for: 3m
+        labels:
+          severity: warning
+          component: pipeline
+        annotations:
+          summary: "Event drop rate: {{ $value | humanize }}/s"
+          description: >
+            Events are being dropped at {{ $value }}/s. The amygdala storm
+            dedup or rate limiter may be too aggressive, or the event channel
+            is full.
+
+      # --- Goal failures ---
+      - alert: AuraGoalFailureSpike
+        expr: rate(aura_goals_failed_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: goals
+        annotations:
+          summary: "Goal failure rate: {{ $value | humanize }}/s"
+          description: >
+            Goals are failing at an elevated rate. The BDI scheduler or
+            goal decomposer may be producing goals that cannot be satisfied.

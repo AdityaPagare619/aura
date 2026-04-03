@@ -81,11 +81,16 @@ impl Args {
                     .map(|p| p.to_string_lossy().into_owned())
                     .ok(),
             ];
-            let home = candidates
-                .into_iter()
-                .flatten()
-                .next()
-                .unwrap_or_else(|| "/data/data/com.termux/files/home".to_string());
+            let home = candidates.into_iter().flatten().next().unwrap_or_else(|| {
+                #[cfg(target_os = "android")]
+                {
+                    "/data/data/com.termux/files/home".to_string()
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    ".".to_string()
+                }
+            });
             PathBuf::from(home)
                 .join(".config")
                 .join("aura")

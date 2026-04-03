@@ -1,0 +1,228 @@
+# ============================================================
+# AURA v4 — Cross-Platform CI Matrix
+# Build + test on Linux, macOS, Windows, and Android (cross-compile)
+#
+# Runs on: push, PR to main
+# ============================================================
+
+name: Cross-Platform CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: full
+
+jobs:
+  # ============================================================
+  # CARGO CHECK — Fast compilation check on all platforms
+  # ============================================================
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libopus-dev
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake pkg-config opus || true
+
+      - name: cargo check
+        run: cargo check --workspace --features "aura-llama-sys/stub,aura-daemon/reqwest"
+
+  # ============================================================
+  # CARGO TEST — Run test suite on all platforms
+  # ============================================================
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libopus-dev
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake pkg-config opus || true
+
+      - name: Run tests
+        run: cargo test --workspace --features "aura-llama-sys/stub,aura-daemon/reqwest"
+        env:
+          RUST_LOG: debug
+
+      - name: Run integration IPC tests
+        run: cargo test --test integration_ipc --features "aura-llama-sys/stub,aura-daemon/reqwest"
+        env:
+          RUST_LOG: debug
+
+      - name: Upload test results (${{ matrix.os }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            target/nextest/**/*.xml
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ============================================================
+  # CLIPPY — Lint on all platforms
+  # ============================================================
+  clippy:
+    name: Clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libopus-dev
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake pkg-config opus || true
+
+      - name: Run clippy
+        run: cargo clippy --workspace --features "aura-llama-sys/stub,aura-daemon/reqwest" -- -D warnings
+
+  # ============================================================
+  # RUSTFMT — Format check (single runner, platform-independent)
+  # ============================================================
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+  # ============================================================
+  # ANDROID CROSS-COMPILE — aarch64-linux-android (check only)
+  # ============================================================
+  android-cross-check:
+    name: Android Cross-Check (aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable + android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Download Android NDK r26b
+        run: |
+          NDK_VERSION="r26b"
+          NDK_SHA256="ad73c0370f0b0a87d1671ed2fd5a9ac9acfd1eb5c43a7fbfbd330f85d19dd632"
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          echo "${NDK_SHA256}  ndk.zip" | sha256sum -c || exit 1
+          unzip -q ndk.zip -d "$HOME"
+          rm -f ndk.zip
+          echo "NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set NDK toolchain env
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=${TOOLCHAIN}/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${TOOLCHAIN}/llvm-ar" >> "$GITHUB_ENV"
+          echo "$TOOLCHAIN" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: android-aarch64
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config
+
+      - name: cargo check (Android ARM64)
+        run: |
+          cargo check \
+            --workspace \
+            --features "aura-llama-sys/stub,aura-daemon/curl-backend" \
+            --target aarch64-linux-android
+
+      - name: Verify Android binary
+        run: |
+          echo "=== Android Build Artifacts ==="
+          ls -lh target/aarch64-linux-android/debug/aura-daemon 2>/dev/null && echo "aura-daemon: OK" || echo "aura-daemon: not built (check-only)"
+          file target/aarch64-linux-android/debug/aura-daemon 2>/dev/null || true

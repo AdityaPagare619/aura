@@ -1,0 +1,124 @@
+# =============================================================================
+# AURA v4 — Complete Config for Termux Testing
+# =============================================================================
+# Generated: March 31, 2026
+# Device: Moto G45 5G (Android 15, aarch64)
+# =============================================================================
+
+# ─── Daemon Process ─────────────────────────────────────────────────────────
+
+[daemon]
+checkpoint_interval_s = 300
+rss_warning_mb = 28
+rss_ceiling_mb = 30
+
+# ─── Amygdala (Event Scoring / Gating) ──────────────────────────────────────
+
+[amygdala]
+instant_threshold = 0.65
+weight_lex  = 0.40
+weight_src  = 0.25
+weight_time = 0.20
+weight_anom = 0.15
+storm_dedup_size    = 50
+storm_rate_limit_ms = 30000
+cold_start_events = 200
+cold_start_hours  = 72
+
+# ─── Neocortex (LLM) ────────────────────────────────────────────────────────
+
+[neocortex]
+default_n_ctx = 4096
+n_threads = 4
+max_memory_mb = 2048
+inference_timeout_ms = 60000
+model_dir = "/data/data/com.termux/files/home/.local/share/aura/models"
+
+# ─── Backend Selection ─────────────────────────────────────────────────────
+
+[neocortex.backend]
+backend_priority = ["http", "ffi", "stub"]
+
+[neocortex.backend.http]
+base_url = "http://localhost:8080"
+model_name = "tinyllama"
+timeout_secs = 60
+health_check = true
+
+[neocortex.backend.ffi]
+libllama_path = ""
+model_path = "/data/data/com.termux/files/home/.local/share/aura/models/tinyllama.gguf"
+
+[neocortex.backend.stub]
+seed = 41146
+
+# ─── Execution Engine ────────────────────────────────────────────────────────
+
+[execution]
+max_steps_normal = 200
+max_steps_safety = 50
+max_steps_power  = 500
+rate_limit_actions_per_min = 60
+delay_min_ms = 150
+delay_max_ms = 500
+
+# ─── Power Management ────────────────────────────────────────────────────────
+
+[power]
+daily_token_budget = 50000
+conservative_threshold = 50
+low_power_threshold = 30
+critical_threshold = 15
+emergency_threshold = 5
+
+# ─── Identity / Personality ──────────────────────────────────────────────────
+
+[identity]
+mood_cooldown_ms = 60000
+max_mood_delta = 0.2
+trust_hysteresis = 0.05
+
+# ─── SQLite Storage ──────────────────────────────────────────────────────────
+
+[sqlite]
+db_path = "/data/data/com.termux/files/home/.local/share/aura/db/aura.db"
+wal_size_limit = 4194304
+max_episodes = 10000
+max_semantic_entries = 5000
+
+# ─── Telegram Bot ────────────────────────────────────────────────────────────
+
+[telegram]
+enabled = true
+bot_token = "8764736044:AAEuSHrnfzvrEbp9txWFrgSeC6R_daT6304"
+allowed_chat_ids = [8407946567]
+poll_interval_ms = 2000
+
+# ─── Voice (Disabled for Testing) ────────────────────────────────────────────
+
+[voice]
+enabled = false
+
+# ─── Proactive Behavior ─────────────────────────────────────────────────────
+
+[proactive]
+enabled = true
+min_confidence = 0.70
+cooldown_ms = 300000
+max_per_hour = 10
+require_confirmation = true
+
+# ─── Policy Gate ─────────────────────────────────────────────────────────────
+
+[policy]
+default_effect = "allow"
+log_all_decisions = false
+max_rules_per_event = 100
+
+# ─── Screen Control ──────────────────────────────────────────────────────────
+
+[screen]
+max_tree_depth = 15
+snapshot_timeout_ms = 2000
+max_nodes = 500
+enable_hash_diff = true

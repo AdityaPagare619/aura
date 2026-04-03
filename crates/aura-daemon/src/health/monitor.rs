@@ -886,8 +886,8 @@ impl HealthMonitor {
 
     /// Query the current battery level from the sysfs power-supply node.
     ///
-    /// Reads `/sys/class/power_supply/battery/capacity` (an integer 0–100)
-    /// and converts it to a [0.0, 1.0] fraction.
+    /// Uses the battery path resolver to try multiple known path variants.
+    /// Converts the integer percentage to a [0.0, 1.0] fraction.
     ///
     /// Falls back to 1.0 (full) if the file is absent (desktop/CI) or
     /// unreadable, so the daemon does not needlessly enter low-power mode.
@@ -895,21 +895,15 @@ impl HealthMonitor {
     /// When JNI is wired this can be replaced with a BatteryManager call; the
     /// sysfs path works on all Linux-based Android targets without JNI.
     fn query_battery_level(&self) -> f32 {
-        // Primary path used on most Android SoCs.
-        const PATHS: &[&str] = &[
-            "/sys/class/power_supply/battery/capacity",
-            "/sys/class/power_supply/Battery/capacity",
-        ];
-        for path in PATHS {
-            if let Ok(raw) = std::fs::read_to_string(path) {
-                let trimmed = raw.trim();
-                if let Ok(pct) = trimmed.parse::<u8>() {
-                    let level = (pct as f32 / 100.0).clamp(0.0, 1.0);
-                    debug!(path, pct, "battery level read from sysfs");
-                    return level;
-                }
-            }
+        use crate::platform::battery::BatteryPaths;
+
+        let paths = BatteryPaths::detect();
+        if let Some(pct) = paths.read_capacity() {
+            let level = (pct as f32 / 100.0).clamp(0.0, 1.0);
+            debug!(pct, path = %paths.capacity.display(), "battery level read from sysfs");
+            return level;
         }
+
         // Fallback: sysfs not available (desktop build / unit tests).
         debug!("battery sysfs unavailable — defaulting to 1.0 (full)");
         1.0
@@ -1126,46 +1120,32 @@ impl HealthMonitor {
         None
     }
 
-    /// Read battery charge level from
-    /// `/sys/class/power_supply/battery/capacity`.
+    /// Read battery charge level from sysfs power-supply nodes.
     ///
+    /// Uses the battery path resolver to try multiple known path variants.
     /// Returns an integer percentage [0, 100] or `None` when the sysfs node
     /// is absent (desktop builds, CI, or emulators without battery nodes).
     #[must_use]
     pub fn read_battery_percent() -> Option<u8> {
-        const PATHS: &[&str] = &[
-            "/sys/class/power_supply/battery/capacity",
-            "/sys/class/power_supply/Battery/capacity",
-        ];
-        for path in PATHS {
-            if let Ok(raw) = std::fs::read_to_string(path) {
-                if let Ok(pct) = raw.trim().parse::<u8>() {
-                    return Some(pct);
-                }
-            }
-        }
-        None
+        use crate::platform::battery::BatteryPaths;
+
+        let paths = BatteryPaths::detect();
+        paths.read_capacity()
     }
 
-    /// Read charging status from
-    /// `/sys/class/power_supply/battery/status`.
+    /// Read charging status from sysfs power-supply nodes.
     ///
+    /// Uses the battery path resolver to try multiple known path variants.
     /// Returns `true` when the file contains `"Charging"` (case-sensitive,
     /// as per the Linux power-supply subsystem ABI).  Returns `false` on any
     /// read or parse failure so that callers do not misidentify a missing
     /// node as "charging".
     #[must_use]
     pub fn read_is_charging() -> bool {
-        const PATHS: &[&str] = &[
-            "/sys/class/power_supply/battery/status",
-            "/sys/class/power_supply/Battery/status",
-        ];
-        for path in PATHS {
-            if let Ok(raw) = std::fs::read_to_string(path) {
-                return raw.trim() == "Charging";
-            }
-        }
-        false
+        use crate::platform::battery::BatteryPaths;
+
+        let paths = BatteryPaths::detect();
+        paths.is_charging()
     }
 
     /// Read the primary thermal zone temperature in degrees Celsius from

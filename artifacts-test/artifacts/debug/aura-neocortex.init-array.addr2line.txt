@@ -1,0 +1,9 @@
+=== init_array constructor target symbolization ===
+--- 0x185d70 ---
+android_fdsan_close_with_tag at bionic/libc/bionic/fdsan.cpp:270
+--- 0x186020 ---
+fdsan_error(char const*, ...) at bionic/libc/bionic/fdsan.cpp:145
+--- 0x19b0a0 ---
+__pthread_start(void*) at bionic/libc/bionic/pthread_create.cpp:382
+--- 0x1a3afc ---
+je_free at external/jemalloc_new/src/jemalloc.c:2421

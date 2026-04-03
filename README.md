@@ -312,6 +312,7 @@ This pulls the latest code, rebuilds, and preserves your config, memories, and d
 | `aura-neocortex` | ~8,000 | LLM inference: 6-layer teacher stack, context management |
 | `aura-llama-sys` | ~500 | FFI bindings to llama.cpp (ARM64 batch API) |
 | `aura-types` | ~2,000 | Shared types, IPC protocol, config, events |
+| `aura-iron-laws` | ~300 | Immutable ethics layer — 7 Iron Laws, compile-time enforcement |
 
 ---
 
@@ -502,6 +503,17 @@ The CI runs 6 parallel jobs on every push and PR:
 ---
 
 ## Documentation
+
+### Quick Reference
+
+| Doc | Description |
+|---|---|
+| [Architecture](ARCHITECTURE.md) | 5-crate structure, IPC, memory, ethics, security |
+| [Deployment Guide](DEPLOYMENT-GUIDE.md) | Step-by-step build, install, configure, verify |
+| [Environment Variables](ENVIRONMENT-VARIABLES.md) | All `AURA_*` variables, defaults, platform behavior |
+| [Configuration](aura-config.example.toml) | All config options with comments and defaults |
+
+### Detailed Architecture Docs
 
 | Doc | Description |
 |---|---|

@@ -4,7 +4,7 @@ rss_warning_mb = 28
 rss_ceiling_mb = 30
 version = "4.0.0"
 log_level = "info"
-data_dir = "/data/local/tmp/aura"
+data_dir = "/data/local/tmp/aura"  # Override via AURA_DATA_DIR env var
 
 [amygdala]
 instant_threshold = 0.65
@@ -22,9 +22,9 @@ default_n_ctx = 4096
 n_threads = 4
 max_memory_mb = 2048
 inference_timeout_ms = 60000
-model_dir = "/data/local/tmp/aura/models"
+model_dir = "/data/local/tmp/aura/models"  # Override via AURA_MODELS_PATH env var
 default_model_name = "Qwen3-8B-Q4_K_M"
-default_model_path = "/data/local/tmp/aura/models/test.gguf"
+default_model_path = "models/test.gguf"  # Relative to data_dir; override via AURA_MODELS_PATH env var
 default_model_context_size = 32768
 
 [execution]
@@ -66,13 +66,13 @@ friend_max = 0.60
 close_friend_max = 0.85
 
 [sqlite]
-db_path = "/data/local/tmp/aura/db/aura.db"
+db_path = "/data/local/tmp/aura/db/aura.db"  # Override via AURA_DB_PATH env var
 wal_size_limit = 4194304
 max_episodes = 10000
 max_semantic_entries = 5000
 
 [telegram]
-bot_token = "8764736044:AAEuSHrnfzvrEbp9txWFrgSeC6R_daT6304"
+# bot_token = ""  # REQUIRED: Set via AURA_TELEGRAM_TOKEN env var — never hardcode tokens here
 allowed_chat_ids = [8407946567]
 trust_level = 0.5
 poll_interval_ms = 2000

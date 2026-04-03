@@ -61,6 +61,108 @@ use self::{
 };
 use crate::daemon_core::channels::UserCommandTx;
 
+// ─── Queue defaults (eliminate magic numbers) ───────────────────────────────
+
+/// Default message priority in the offline queue (0 = normal).
+const DEFAULT_QUEUE_PRIORITY: u8 = 0;
+
+/// Default message TTL in the offline queue (1 hour).
+const DEFAULT_QUEUE_TTL_SECS: u32 = 3600;
+
+/// Maximum retry count for queued messages.
+const DEFAULT_QUEUE_MAX_RETRIES: u8 = 3;
+
+/// Priority for voice-tagged messages (higher = sent first).
+/// Must be u8 to match MessageQueue::enqueue(priority: u8).
+const VOICE_QUEUE_PRIORITY: u8 = 1;
+
+// ─── Shared helpers ─────────────────────────────────────────────────────────
+
+/// Enqueue a plain text message with default queue parameters.
+fn enqueue_text(queue: &MessageQueue, chat_id: i64, text: String, parse_mode: Option<&str>) {
+    let _ = queue.enqueue(
+        chat_id,
+        &MessageContent::Text {
+            text,
+            parse_mode: parse_mode.map(Into::into),
+        },
+        DEFAULT_QUEUE_PRIORITY,
+        DEFAULT_QUEUE_TTL_SECS,
+        DEFAULT_QUEUE_MAX_RETRIES,
+        None,
+    );
+}
+
+/// Enqueue an HTML message with default queue parameters.
+fn enqueue_html(queue: &MessageQueue, chat_id: i64, text: String) {
+    enqueue_text(queue, chat_id, text, Some("HTML"));
+}
+
+/// Enqueue all messages produced by a [`dialogue::DialogueOutcome`].
+fn enqueue_dialogue_outcome(
+    queue: &MessageQueue,
+    chat_id: i64,
+    outcome: dialogue::DialogueOutcome,
+) {
+    use dialogue::DialogueOutcome;
+
+    match outcome {
+        DialogueOutcome::Continue(prompt) => {
+            enqueue_html(queue, chat_id, prompt);
+        }
+        DialogueOutcome::Completed { responses, .. } => {
+            for resp in responses {
+                enqueue_text(queue, chat_id, resp, None);
+            }
+        }
+        DialogueOutcome::InvalidInput(hint) => {
+            enqueue_text(queue, chat_id, hint, None);
+        }
+        DialogueOutcome::TimedOut => {
+            enqueue_text(queue, chat_id, "Dialogue timed out.".into(), None);
+        }
+        DialogueOutcome::Cancelled => {
+            enqueue_text(queue, chat_id, "Dialogue cancelled.".into(), None);
+        }
+    }
+}
+
+/// Enqueue a [`HandlerResponse`] using default queue parameters.
+fn enqueue_response(queue: &MessageQueue, chat_id: i64, response: HandlerResponse) {
+    match response {
+        HandlerResponse::Text(text) => {
+            enqueue_text(queue, chat_id, text, None);
+        }
+        HandlerResponse::Html(text) => {
+            enqueue_html(queue, chat_id, text);
+        }
+        HandlerResponse::Photo { data, caption } => {
+            let _ = queue.enqueue(
+                chat_id,
+                &MessageContent::Photo { data, caption },
+                DEFAULT_QUEUE_PRIORITY,
+                DEFAULT_QUEUE_TTL_SECS,
+                DEFAULT_QUEUE_MAX_RETRIES,
+                None,
+            );
+        }
+        HandlerResponse::Voice { text } => {
+            let _ = queue.enqueue(
+                chat_id,
+                &MessageContent::Text {
+                    text,
+                    parse_mode: None,
+                },
+                VOICE_QUEUE_PRIORITY,
+                DEFAULT_QUEUE_TTL_SECS,
+                DEFAULT_QUEUE_MAX_RETRIES,
+                Some("voice"),
+            );
+        }
+        HandlerResponse::Empty => {}
+    }
+}
+
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 /// Configuration for the Telegram bot module.
@@ -302,76 +404,8 @@ impl TelegramEngine {
 
                 // Check for active dialogue first.
                 if dialogue_mgr.has_active(chat_id) {
-                    use dialogue::DialogueOutcome;
-                    match dialogue_mgr.process_input(chat_id, &text) {
-                        DialogueOutcome::Continue(prompt) => {
-                            let _ = queue.enqueue(
-                                chat_id,
-                                &MessageContent::Text {
-                                    text: prompt,
-                                    parse_mode: Some("HTML".into()),
-                                },
-                                0,
-                                3600,
-                                3,
-                                None,
-                            );
-                        }
-                        DialogueOutcome::Completed { kind: _, responses } => {
-                            for resp in responses {
-                                let _ = queue.enqueue(
-                                    chat_id,
-                                    &MessageContent::Text {
-                                        text: resp,
-                                        parse_mode: None,
-                                    },
-                                    0,
-                                    3600,
-                                    3,
-                                    None,
-                                );
-                            }
-                        }
-                        DialogueOutcome::InvalidInput(hint) => {
-                            let _ = queue.enqueue(
-                                chat_id,
-                                &MessageContent::Text {
-                                    text: hint,
-                                    parse_mode: None,
-                                },
-                                0,
-                                3600,
-                                3,
-                                None,
-                            );
-                        }
-                        DialogueOutcome::TimedOut => {
-                            let _ = queue.enqueue(
-                                chat_id,
-                                &MessageContent::Text {
-                                    text: "Dialogue timed out.".into(),
-                                    parse_mode: None,
-                                },
-                                0,
-                                3600,
-                                3,
-                                None,
-                            );
-                        }
-                        DialogueOutcome::Cancelled => {
-                            let _ = queue.enqueue(
-                                chat_id,
-                                &MessageContent::Text {
-                                    text: "Dialogue cancelled.".into(),
-                                    parse_mode: None,
-                                },
-                                0,
-                                3600,
-                                3,
-                                None,
-                            );
-                        }
-                    }
+                    let outcome = dialogue_mgr.process_input(chat_id, &text);
+                    enqueue_dialogue_outcome(queue, chat_id, outcome);
                     continue;
                 }
 
@@ -400,99 +434,44 @@ impl TelegramEngine {
                         match result {
                             Ok(response) => {
                                 audit.record(chat_id, &audit_summary, AuditOutcome::Allowed);
-                                // Inline enqueue_response logic.
-                                match response {
-                                    HandlerResponse::Text(text) => {
-                                        // If this was a voice message, try to respond
-                                        // with voice too. Falls back to text if TTS
-                                        // is unavailable (alpha: always falls back).
-                                        #[cfg(feature = "voice")]
-                                        let voice_sent = if voice_processed.is_some() {
-                                            let tts_text = text.clone();
-                                            match voice_pipeline::synthesize_voice_response(
-                                                &tts_text,
-                                            ) {
-                                                Ok(ogg_bytes) => {
-                                                    let duration =
-                                                        voice_processed.unwrap_or(0.0) as u32;
-                                                    let _ = queue.enqueue(
-                                                        chat_id,
-                                                        &MessageContent::Voice {
-                                                            data: ogg_bytes,
-                                                            duration_secs: duration,
-                                                            caption: Some(text.clone()),
-                                                        },
-                                                        0,
-                                                        3600,
-                                                        3,
-                                                        None,
-                                                    );
-                                                    true
-                                                }
-                                                Err(_) => {
-                                                    // TTS unavailable (expected in alpha).
-                                                    // Fall back to text response.
-                                                    debug!("TTS unavailable — responding with text to voice message");
-                                                    false
-                                                }
+                                // Voice TTS fallback (alpha: always falls back to text).
+                                #[cfg(feature = "voice")]
+                                let voice_sent = if let HandlerResponse::Text(ref text) = response {
+                                    if voice_processed.is_some() {
+                                        match voice_pipeline::synthesize_voice_response(text) {
+                                            Ok(ogg_bytes) => {
+                                                let duration =
+                                                    voice_processed.unwrap_or(0.0) as u32;
+                                                let _ = queue.enqueue(
+                                                    chat_id,
+                                                    &MessageContent::Voice {
+                                                        data: ogg_bytes,
+                                                        duration_secs: duration,
+                                                        caption: Some(text.clone()),
+                                                    },
+                                                    DEFAULT_QUEUE_PRIORITY,
+                                                    DEFAULT_QUEUE_TTL_SECS,
+                                                    DEFAULT_QUEUE_MAX_RETRIES,
+                                                    None,
+                                                );
+                                                true
                                             }
-                                        } else {
-                                            false
-                                        };
-                                        #[cfg(not(feature = "voice"))]
-                                        let voice_sent = false;
-
-                                        if !voice_sent {
-                                            let _ = queue.enqueue(
-                                                chat_id,
-                                                &MessageContent::Text {
-                                                    text,
-                                                    parse_mode: None,
-                                                },
-                                                0,
-                                                3600,
-                                                3,
-                                                None,
-                                            );
+                                            Err(_) => {
+                                                debug!("TTS unavailable — responding with text to voice message");
+                                                false
+                                            }
                                         }
+                                    } else {
+                                        false
                                     }
-                                    HandlerResponse::Html(text) => {
-                                        let _ = queue.enqueue(
-                                            chat_id,
-                                            &MessageContent::Text {
-                                                text,
-                                                parse_mode: Some("HTML".into()),
-                                            },
-                                            0,
-                                            3600,
-                                            3,
-                                            None,
-                                        );
-                                    }
-                                    HandlerResponse::Photo { data, caption } => {
-                                        let _ = queue.enqueue(
-                                            chat_id,
-                                            &MessageContent::Photo { data, caption },
-                                            0,
-                                            3600,
-                                            3,
-                                            None,
-                                        );
-                                    }
-                                    HandlerResponse::Voice { text } => {
-                                        let _ = queue.enqueue(
-                                            chat_id,
-                                            &MessageContent::Text {
-                                                text,
-                                                parse_mode: None,
-                                            },
-                                            1,
-                                            3600,
-                                            3,
-                                            Some("voice"),
-                                        );
-                                    }
-                                    HandlerResponse::Empty => {}
+                                } else {
+                                    false
+                                };
+                                #[cfg(not(feature = "voice"))]
+                                let voice_sent = false;
+
+                                if !voice_sent {
+                                    enqueue_response(queue, chat_id, response);
                                 }
                             }
                             Err(e) => {
@@ -501,17 +480,7 @@ impl TelegramEngine {
                                     &audit_summary,
                                     AuditOutcome::Failed(e.to_string()),
                                 );
-                                let _ = queue.enqueue(
-                                    chat_id,
-                                    &MessageContent::Text {
-                                        text: format!("Command failed: {e}"),
-                                        parse_mode: None,
-                                    },
-                                    0,
-                                    3600,
-                                    3,
-                                    None,
-                                );
+                                enqueue_text(queue, chat_id, format!("Command failed: {e}"), None);
                             }
                         }
                     }
@@ -521,17 +490,7 @@ impl TelegramEngine {
                             &audit_summary,
                             AuditOutcome::Denied(sec_err.to_string()),
                         );
-                        let _ = queue.enqueue(
-                            chat_id,
-                            &MessageContent::Text {
-                                text: format!("Access denied: {sec_err}"),
-                                parse_mode: None,
-                            },
-                            0,
-                            3600,
-                            3,
-                            None,
-                        );
+                        enqueue_text(queue, chat_id, format!("Access denied: {sec_err}"), None);
                     }
                 }
             }
@@ -621,17 +580,7 @@ impl TelegramEngine {
                             &audit_summary,
                             AuditOutcome::Failed(e.to_string()),
                         );
-                        let _ = self.queue.enqueue(
-                            chat_id,
-                            &MessageContent::Text {
-                                text: format!("Command failed: {e}"),
-                                parse_mode: None,
-                            },
-                            0,
-                            3600,
-                            3,
-                            None,
-                        );
+                        enqueue_text(&self.queue, chat_id, format!("Command failed: {e}"), None);
                     }
                 }
             }
@@ -642,15 +591,10 @@ impl TelegramEngine {
                     &audit_summary,
                     AuditOutcome::Denied(sec_err.to_string()),
                 );
-                let _ = self.queue.enqueue(
+                enqueue_text(
+                    &self.queue,
                     chat_id,
-                    &MessageContent::Text {
-                        text: format!("Access denied: {sec_err}"),
-                        parse_mode: None,
-                    },
-                    0,
-                    3600,
-                    3,
+                    format!("Access denied: {sec_err}"),
                     None,
                 );
             }
@@ -661,135 +605,15 @@ impl TelegramEngine {
     // Phase 8 wire point: called by handle_update dialogue routing branch.
     #[allow(dead_code)]
     fn handle_dialogue_input(&mut self, chat_id: i64, text: &str) {
-        use dialogue::DialogueOutcome;
-
-        match self.dialogue_mgr.process_input(chat_id, text) {
-            DialogueOutcome::Continue(prompt) => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text: prompt,
-                        parse_mode: Some("HTML".into()),
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            DialogueOutcome::Completed { kind, responses } => {
-                let msg = format!("Dialogue completed: {:?}\nResponses: {:?}", kind, responses);
-                // TODO: Execute the action associated with the completed dialogue.
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text: msg,
-                        parse_mode: None,
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            DialogueOutcome::InvalidInput(hint) => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text: hint,
-                        parse_mode: Some("HTML".into()),
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            DialogueOutcome::TimedOut => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text: "Dialogue timed out. Start over if needed.".into(),
-                        parse_mode: None,
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            DialogueOutcome::Cancelled => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text: "Dialogue cancelled.".into(),
-                        parse_mode: None,
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-        }
+        let outcome = self.dialogue_mgr.process_input(chat_id, text);
+        enqueue_dialogue_outcome(&self.queue, chat_id, outcome);
     }
 
     /// Enqueue a handler response for sending.
     // Phase 8 wire point: called by handle_update command handler dispatch.
     #[allow(dead_code)]
     fn enqueue_response(&self, chat_id: i64, response: HandlerResponse) {
-        match response {
-            HandlerResponse::Text(text) => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text,
-                        parse_mode: None,
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            HandlerResponse::Html(html) => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text: html,
-                        parse_mode: Some("HTML".into()),
-                    },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            HandlerResponse::Photo { data, caption } => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Photo { data, caption },
-                    0,
-                    3600,
-                    3,
-                    None,
-                );
-            }
-            HandlerResponse::Voice { text } => {
-                let _ = self.queue.enqueue(
-                    chat_id,
-                    &MessageContent::Text {
-                        text,
-                        parse_mode: None,
-                    },
-                    1,
-                    3600,
-                    3,
-                    Some("voice"),
-                );
-            }
-            HandlerResponse::Empty => {}
-        }
+        enqueue_response(&self.queue, chat_id, response);
     }
 
     /// Generate a health dashboard snapshot.

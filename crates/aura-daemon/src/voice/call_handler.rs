@@ -131,6 +131,8 @@ mod a11y_actions {
                 text,
             ))
         })?;
+        // SAFETY: c_text is a valid null-terminated CString. a11y_click_by_text is a C FFI
+        // function that reads the string (does not take ownership).
         let result = unsafe { a11y_click_by_text(c_text.as_ptr()) };
         if result == 0 {
             Ok(())
@@ -149,6 +151,8 @@ mod a11y_actions {
                 resource_id,
             ))
         })?;
+        // SAFETY: c_id is a valid null-terminated CString. a11y_click_by_id is a C FFI
+        // function that reads the string (does not take ownership).
         let result = unsafe { a11y_click_by_id(c_id.as_ptr()) };
         if result == 0 {
             Ok(())

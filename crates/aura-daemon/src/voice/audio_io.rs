@@ -118,6 +118,8 @@ impl RingBuffer {
 
         for i in 0..to_read {
             let idx = (r + i) & (self.capacity - 1);
+            // SAFETY: idx is always < capacity because of the mask. The read
+            // position is behind the write position (avail > 0), so data is valid.
             unsafe {
                 let ptr = self.data.as_ptr();
                 out[i] = ptr.add(idx).read();

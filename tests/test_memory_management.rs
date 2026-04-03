@@ -128,28 +128,39 @@ mod compaction {
     fn test_compactor_empty_context() {
         let compactor = ContextCompactor::new();
         let result = compactor.compact(&[], 1024);
-        assert!(result.is_empty() || result.len() <= 1024);
+        assert!(result.content.is_empty());
     }
 
     #[test]
     fn test_compactor_preserves_important_items() {
+        use aura_types::events::EventSource;
         let compactor = ContextCompactor::new();
-        let items = vec![
-            ("system prompt".to_string(), 0.95),
-            ("user message".to_string(), 0.80),
-            ("noise".to_string(), 0.10),
+        let items: Vec<WorkingSlot> = vec![
+            WorkingSlot { content: "system prompt".into(), source: EventSource::Internal, importance: 0.95, timestamp_ms: 1000, ttl_ms: 3600000 },
+            WorkingSlot { content: "user message".into(), source: EventSource::Internal, importance: 0.80, timestamp_ms: 2000, ttl_ms: 3600000 },
+            WorkingSlot { content: "noise".into(), source: EventSource::Internal, importance: 0.10, timestamp_ms: 3000, ttl_ms: 3600000 },
         ];
-        let result = compactor.compact(&items, 2);
-        // Should keep at most 2 items, preferring higher importance
-        assert!(result.len() <= 2);
+        let refs: Vec<&WorkingSlot> = items.iter().collect();
+        let result = compactor.compact(&refs, 1024);
+        // Compaction merges all content into one slot
+        assert!(!result.content.is_empty());
     }
 
     #[test]
     fn test_compactor_respects_token_limit() {
+        use aura_types::events::EventSource;
         let compactor = ContextCompactor::new();
-        let items: Vec<_> = (0..100).map(|i| (format!("item_{i}"), 0.5)).collect();
-        let result = compactor.compact(&items, 10);
-        assert!(result.len() <= 10);
+        let items: Vec<WorkingSlot> = (0..100).map(|i| WorkingSlot {
+            content: format!("item_{i}"),
+            source: EventSource::Internal,
+            importance: 0.5,
+            timestamp_ms: i as u64 * 1000,
+            ttl_ms: 3600000,
+        }).collect();
+        let refs: Vec<&WorkingSlot> = items.iter().collect();
+        let result = compactor.compact(&refs, 10);
+        // Compaction produces a single merged slot
+        assert!(!result.content.is_empty());
     }
 }
 

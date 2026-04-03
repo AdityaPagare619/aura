@@ -17,6 +17,7 @@
 
 // TASK 2: Deny unsafe code at crate level — all unsafe must be explicitly allowed.
 #![deny(unsafe_code)]
+#![allow(unknown_lints)] // no_mangle_with_rust_abi not available on all Rust versions
 #![allow(no_mangle_with_rust_abi)] // JNI functions require #[no_mangle] with extern "system"
 #![allow(clippy::too_many_arguments)] // Complex internal APIs need many params
 #![allow(clippy::new_without_default)] // Many types have non-trivial constructors

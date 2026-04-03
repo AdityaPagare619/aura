@@ -247,6 +247,7 @@ mod inner {
     ///
     /// # Safety
     /// JNI call.
+    #[allow(unknown_lints, no_mangle_with_rust_abi)]
     #[no_mangle]
     pub unsafe extern "system" fn Java_dev_aura_v4_AuraDaemonBridge_nativeShutdown(
         _env: JNIEnv,

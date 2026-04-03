@@ -117,6 +117,8 @@ mod rss_thresholds {
 #[cfg(test)]
 mod compaction {
     use aura_daemon::memory::ContextCompactor;
+    use aura_types::events::EventSource;
+    use aura_types::memory::WorkingSlot;
 
     #[test]
     fn test_compactor_creation() {
@@ -133,7 +135,6 @@ mod compaction {
 
     #[test]
     fn test_compactor_preserves_important_items() {
-        use aura_types::events::EventSource;
         let compactor = ContextCompactor::new();
         let items: Vec<WorkingSlot> = vec![
             WorkingSlot { content: "system prompt".into(), source: EventSource::Internal, importance: 0.95, timestamp_ms: 1000, ttl_ms: 3600000 },
@@ -148,7 +149,6 @@ mod compaction {
 
     #[test]
     fn test_compactor_respects_token_limit() {
-        use aura_types::events::EventSource;
         let compactor = ContextCompactor::new();
         let items: Vec<WorkingSlot> = (0..100).map(|i| WorkingSlot {
             content: format!("item_{i}"),

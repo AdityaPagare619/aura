@@ -5,7 +5,7 @@ edition.workspace = true
 links = "llama"
 
 [dependencies]
-libloading = "0.8"
+libloading = "0.9"
 tracing = { workspace = true }
 rand = "0.8"
 serde = { workspace = true }
